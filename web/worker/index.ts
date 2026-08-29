@@ -25,6 +25,7 @@ import {
   type WorldPack,
 } from "./domain";
 import { openingFor, runCompact, runTurn } from "./engine";
+import { turnErrorStatus } from "./llm";
 import { importStFiles, type ImportFile } from "./st";
 import { listNmemSpaces, resolveSpaceId } from "./nmem";
 import { PromptLibrary } from "./prompts";
@@ -92,7 +93,8 @@ async function playState(env: Env, fs: ReturnType<typeof workspaceFs>, pack: Wor
   const memory = await loadMemory(fs);
   const cards = [];
   for (const member of pack.cast) {
-    if (!memberPresent(member, scene.present)) continue;
+    const isPrimary = Boolean(primaryCharacter && (member.id === primaryCharacter || member.name === primaryCharacter));
+    if (!isPrimary && !memberPresent(member, scene.present)) continue;
     try {
       cards.push(await loadCard(fs, member));
     } catch {
@@ -113,9 +115,9 @@ async function playState(env: Env, fs: ReturnType<typeof workspaceFs>, pack: Wor
     session_title: sessionInfoFrom(sessionId, loaded).title,
     primary_character: primaryCharacter,
     nmem_space: loaded.nmem_space,
-    nmem_available: extra.nmem_available != null ? Boolean(extra.nmem_available) : Boolean(env.NMEM_API_KEY),
+    nmem_available: extra.nmem_available != null ? Boolean(extra.nmem_available) : false,
     warnings: [] as string[],
-    opening: openingFor(cards, pack.player_name),
+    opening: openingFor(cards, pack.player_name, primaryCharacter),
     scene,
     memory: memory.world.join("\n§\n"),
     player: memory.userSetting,
@@ -525,7 +527,10 @@ app.post("/api/play/:id/:sid/turn", async (c) => {
       c.executionCtx.waitUntil(job),
     );
     return c.json({
-      ...(await playState(c.env, fs, pack, sid, { context_report: result.context_report })),
+      ...(await playState(c.env, fs, pack, sid, {
+        context_report: result.context_report,
+        nmem_available: result.nmem_available,
+      })),
       reply: result.text,
       spotlight: result.spotlight_ids,
       nmem_synced: result.nmem_synced,
@@ -533,7 +538,8 @@ app.post("/api/play/:id/:sid/turn", async (c) => {
       context_report: result.context_report,
     });
   } catch (err) {
-    throw new HTTPException(502, { message: err instanceof Error ? err.message : String(err) });
+    const message = err instanceof Error ? err.message : String(err);
+    throw new HTTPException(turnErrorStatus(err) as 502, { message });
   }
 });
 

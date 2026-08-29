@@ -38,7 +38,7 @@ import {
   type SceneState,
   type WorldPack,
 } from "./domain";
-import { chat, toolLoop } from "./llm";
+import { chat, toolLoop, LlmEmptyError } from "./llm";
 import {
   formatNmemRecall,
   listNmemSpaces,
@@ -63,6 +63,8 @@ export type TurnOut = {
   spotlight_ids: string[];
   warnings: string[];
   nmem_synced: boolean;
+  nmem_available: boolean;
+  truncated?: boolean;
   context_report?: ContextReport;
 };
 
@@ -95,8 +97,14 @@ async function triggered(
   return triggerLore(await loadAllLore(fs, cards), haystack, sceneLoreHaystack(pack, scene), budget);
 }
 
-export function openingFor(cards: CharacterCard[], playerName: string): string {
-  return cards
+export const TRUNCATION_NOTE = "（回复在 max_tokens 处被截断）";
+
+export function openingFor(cards: CharacterCard[], playerName: string, primaryId?: string | null): string {
+  const preferred = primaryId
+    ? cards.filter((card) => card.id === primaryId || card.name === primaryId)
+    : [];
+  const chosen = (preferred.length ? preferred : cards).slice(0, 1);
+  return chosen
     .map((card) => substituteCard(card, playerName).first_mes.trim())
     .filter(Boolean)
     .join("\n\n");
@@ -287,8 +295,14 @@ export async function runTurn(
     phi,
     settings.llm.temperature,
     settings.llm.max_tokens,
+    settings.llm.timeout,
   );
   const { visible, trailer } = parseTrailer(gm.text);
+  let truncated = gm.finish_reason === "length";
+  if (truncated) warnings.push("回复在 max_tokens 处被截断");
+  let replyText = visible;
+  if (truncated && replyText.trim()) replyText = `${replyText.trimEnd()}\n\n${TRUNCATION_NOTE}`;
+  if (!replyText.trim()) throw new LlmEmptyError();
   let nextScene = scene;
   const remembered: string[] = [];
   if (Object.keys(trailer).length) {
@@ -326,7 +340,7 @@ export async function runTurn(
   const nextMessages = [
     ...loaded.messages,
     { role: "user", content: userText, ts: nowIso() },
-    { role: "assistant", content: visible, ts: nowIso() },
+    { role: "assistant", content: replyText, ts: nowIso() },
   ];
   const turnNumber = nextMessages.filter((m) => m.role === "user").length;
   await appendTrace(fs, sessionId, {
@@ -352,7 +366,7 @@ export async function runTurn(
   if (spaceId && listed.available) {
     threadId = threadId || sessionThreadId(pack.id, sessionId);
     try {
-      await syncTurnBodyToNmem(env, spaceId, pack.id, sessionId, userText, visible);
+      await syncTurnBodyToNmem(env, spaceId, pack.id, sessionId, userText, replyText);
       nmemSynced = true;
     } catch (err) {
       warnings.push(`nmem 正文写入失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -365,7 +379,7 @@ export async function runTurn(
       `Light RP / ${pack.name} / ${sessionId}`,
       [
         { role: "user", content: userText },
-        { role: "assistant", content: visible },
+        { role: "assistant", content: replyText },
       ],
     ).catch((err) => {
       warnings.push(`nmem thread 同步失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -398,12 +412,14 @@ export async function runTurn(
     }
   }
   return {
-    text: visible,
+    text: replyText,
     scene: nextScene,
     messages: nextMessages,
     spotlight_ids: spotlightIds,
     warnings,
     nmem_synced: nmemSynced,
+    nmem_available: listed.available,
+    truncated,
     context_report: assembled.report,
   };
 }
@@ -491,6 +507,7 @@ export async function runCompact(
     phi,
     settings.llm.temperature,
     settings.llm.max_tokens,
+    settings.llm.timeout,
   );
   freezeMemory(memory);
   values.memory = memory.snapWorld;
@@ -509,6 +526,7 @@ export async function runCompact(
     null,
     0.3,
     settings.llm.max_tokens,
+    settings.llm.timeout,
   );
   const summary = result.text.trim();
   const keep = settings.transcript_keep_after_compact;

@@ -16,6 +16,10 @@ function formatError(err: unknown, fallback: string): string {
   if (message.includes("missing API base URL")) return "还没有配置 API 地址。打开设置填写你的兼容端点。";
   if (message.includes("missing API model")) return "还没有配置模型 id。打开设置填写。";
   if (message.includes("missing API key")) return "还没有配置 API 密钥。打开设置填写，或设置对应的环境变量。";
+  if (message.includes("LLM HTTP 429") || message.includes("Too Many Requests")) return "模型额度或速率限制（429）。稍后再试。";
+  if (message.includes("LLM HTTP 401")) return "模型接口认证失败（401）。检查 Worker 里的 API 密钥。";
+  if (message.includes("空回复")) return "模型返回了空回复，这一轮没有写入。请再发一次。";
+  if (message.includes("超时")) return message;
   return message || fallback;
 }
 

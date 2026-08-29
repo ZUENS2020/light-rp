@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+
+from lightrp.llm import turn_http_status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -201,7 +203,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         try:
             result = await asyncio.to_thread(engine.turn, body.text)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(502, str(exc)) from exc
+            raise HTTPException(turn_http_status(exc), str(exc)) from exc
         return {
             **_play_state(engine),
             "reply": result.text,
