@@ -52,6 +52,15 @@ export type WorldSummary = {
   player_text?: string;
 };
 
+export type ContextReport = {
+  max_tokens: number;
+  generation_reserve: number;
+  total: number;
+  sections: { name: string; tokens: number; budget: number; truncated: boolean; items?: string[] }[];
+  history: { tokens: number; messages: number; truncated: boolean };
+  input: { tokens: number };
+};
+
 export type AppSettings = {
   path: string;
   llm: {
@@ -73,6 +82,13 @@ export type AppSettings = {
   lore_token_budget: number;
   max_tool_rounds: number;
   transcript_keep_after_compact: number;
+  context: {
+    max_tokens: number;
+    generation_reserve: number;
+    budget: Record<string, number>;
+    history: { use_remaining: boolean; protect_recent_turns: number };
+  };
+  mini: { max_tokens: number; recent_turns: number; max_characters: number };
 };
 
 export type SettingsPut = {
@@ -96,6 +112,8 @@ export type SettingsPut = {
   lore_token_budget: number;
   max_tool_rounds: number;
   transcript_keep_after_compact: number;
+  context: AppSettings["context"];
+  mini: AppSettings["mini"];
 };
 
 export type PlayState = {
@@ -126,6 +144,7 @@ export type PlayState = {
   nmem_synced?: boolean;
   turn_warnings?: string[];
   summary?: string;
+  context_report?: ContextReport | null;
 };
 
 export type MiniCard = {

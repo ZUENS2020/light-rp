@@ -57,6 +57,37 @@ class MemorySettingsBody(BaseModel):
     character_char_limit: int = Field(default=1200, gt=0, le=100000)
 
 
+class ContextBudgetBody(BaseModel):
+    system: int = Field(default=1500, gt=0, le=100000)
+    world: int = Field(default=2500, gt=0, le=100000)
+    user_setting: int = Field(default=1500, gt=0, le=100000)
+    primary_card: int = Field(default=4000, gt=0, le=100000)
+    mini_cards: int = Field(default=1200, gt=0, le=100000)
+    lore: int = Field(default=3000, gt=0, le=100000)
+    state: int = Field(default=800, gt=0, le=100000)
+    memory: int = Field(default=2500, gt=0, le=100000)
+    nmem: int = Field(default=2500, gt=0, le=100000)
+    summary: int = Field(default=2500, gt=0, le=100000)
+
+
+class ContextHistoryBody(BaseModel):
+    use_remaining: bool = True
+    protect_recent_turns: int = Field(default=6, ge=0, le=200)
+
+
+class ContextSettingsBody(BaseModel):
+    max_tokens: int = Field(default=32768, gt=0, le=500000)
+    generation_reserve: int = Field(default=4096, gt=0, le=100000)
+    budget: ContextBudgetBody = Field(default_factory=ContextBudgetBody)
+    history: ContextHistoryBody = Field(default_factory=ContextHistoryBody)
+
+
+class MiniSettingsBody(BaseModel):
+    max_tokens: int = Field(default=1200, gt=0, le=100000)
+    recent_turns: int = Field(default=4, ge=0, le=200)
+    max_characters: int = Field(default=6, gt=0, le=64)
+
+
 class SettingsBody(BaseModel):
     llm: LLMSettingsBody
     nmem: NmemSettingsBody
@@ -68,6 +99,8 @@ class SettingsBody(BaseModel):
     lore_token_budget: int = Field(gt=0, le=1000000)
     max_tool_rounds: int = Field(gt=0, le=32)
     transcript_keep_after_compact: int = Field(ge=0, le=10000)
+    context: ContextSettingsBody = Field(default_factory=ContextSettingsBody)
+    mini: MiniSettingsBody = Field(default_factory=MiniSettingsBody)
 
 
 def create_app(config: AppConfig | None = None) -> FastAPI:

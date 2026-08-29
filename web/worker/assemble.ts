@@ -1,3 +1,17 @@
+import {
+  applySectionBudgets,
+  buildContextReport,
+  estimateTokens,
+  historyTokenBudget,
+  parseContextConfig,
+  parseMiniConfig,
+  trimHistory,
+  truncateToTokens,
+  type ContextConfig,
+  type ContextReport,
+  type MiniSelectConfig,
+  type SectionBlock,
+} from "./budget";
 import type { CastMember, CharacterCard, LoreEntry, MemoryStore, MiniCard, SceneState, WorldPack } from "./domain";
 import { ensembleActing, sceneYaml, substituteCard } from "./domain";
 import type { PromptLibrary } from "./prompts";
@@ -30,12 +44,25 @@ function keywordHit(member: CastMember, haystack: string): boolean {
   return [member.id, member.name, ...member.aliases].some((name) => name && hay.includes(name.toLowerCase()));
 }
 
+function recentMentionIds(pack: WorldPack, recentText: string): Set<string> {
+  const hay = recentText.toLowerCase();
+  const hits = new Set<string>();
+  for (const member of pack.cast) {
+    if ([member.id, member.name, ...member.aliases].some((name) => name && hay.includes(name.toLowerCase()))) {
+      hits.add(member.id);
+    }
+  }
+  return hits;
+}
+
 export function selectMiniMembers(
   pack: WorldPack,
   scene: SceneState,
   haystack: string,
   mentionIds: string[],
   primaryId: string | null,
+  miniCfg: MiniSelectConfig = parseMiniConfig(null),
+  recentHaystack = "",
 ): CastMember[] {
   const mentioned = new Set(mentionIds.map((id) => id.toLowerCase()));
   const present = new Set(
@@ -45,19 +72,23 @@ export function selectMiniMembers(
       )
       .map((m) => m.id),
   );
-  const out: CastMember[] = [];
-  const seen = new Set<string>();
+  const recent = recentMentionIds(pack, recentHaystack);
+  const ranked: { rank: number; member: CastMember }[] = [];
   for (const member of pack.cast) {
     if (primaryId && member.id === primaryId) continue;
-    const hit = keywordHit(member, haystack) || mentioned.has(member.id.toLowerCase());
-    if (present.has(member.id) || hit) {
-      if (!seen.has(member.id)) {
-        seen.add(member.id);
-        out.push(member);
-      }
-    }
+    const explicit = mentioned.has(member.id.toLowerCase());
+    const isPresent = present.has(member.id);
+    const isRecent = recent.has(member.id);
+    const keyword = keywordHit(member, haystack);
+    if (!(explicit || isPresent || isRecent || keyword)) continue;
+    let rank = 3;
+    if (explicit) rank = 0;
+    else if (isPresent) rank = 1;
+    else if (isRecent) rank = 2;
+    ranked.push({ rank, member });
   }
-  return out;
+  ranked.sort((a, b) => a.rank - b.rank || a.member.name.localeCompare(b.member.name));
+  return ranked.slice(0, Math.max(1, miniCfg.max_characters)).map((item) => item.member);
 }
 
 function renderCastIndex(pack: WorldPack, presentIds: string[]): string {
@@ -105,19 +136,176 @@ function renderMini(library: PromptLibrary, mini: MiniCard): string {
     .trim();
 }
 
-function renderLore(library: PromptLibrary, entries: LoreEntry[], userName: string, fallbackChar: string): string {
-  return entries
-    .map((entry) => {
-      const charName = entry.char_name || fallbackChar;
-      return library
-        .render("layers/lore.md", {
-          title: entry.comment || entry.keys.join(", ") || "lore",
-          content: entry.content.replaceAll("{{user}}", userName).replaceAll("{{char}}", charName),
-          source: entry.source,
-        })
-        .trim();
+function renderLoreEntry(library: PromptLibrary, entry: LoreEntry, userName: string, fallbackChar: string): string {
+  const charName = entry.char_name || fallbackChar;
+  return library
+    .render("layers/lore.md", {
+      title: entry.comment || entry.keys.join(", ") || "lore",
+      content: entry.content.replaceAll("{{user}}", userName).replaceAll("{{char}}", charName),
+      source: entry.source,
     })
-    .join("\n\n");
+    .trim();
+}
+
+export function selectMinisWithinBudget(minis: MiniCard[], library: PromptLibrary, miniCfg: MiniSelectConfig): MiniCard[] {
+  const kept: MiniCard[] = [];
+  let used = 0;
+  for (const mini of minis) {
+    const cost = estimateTokens(renderMini(library, mini));
+    if (kept.length && used + cost > miniCfg.max_tokens) break;
+    if (!kept.length && cost > miniCfg.max_tokens) {
+      kept.push(mini);
+      break;
+    }
+    kept.push(mini);
+    used += cost;
+  }
+  return kept;
+}
+
+export type AssembleResult = {
+  system: string;
+  report: ContextReport;
+  history: { role: string; content: string }[];
+  mini_ids: string[];
+  lore_titles: string[];
+};
+
+export function assembleBudgeted(
+  library: PromptLibrary,
+  pack: WorldPack,
+  memory: MemoryStore,
+  scene: SceneState,
+  presentCards: CharacterCard[],
+  loreEntries: LoreEntry[],
+  nmemRecall: string,
+  historyMessages: { role: string; content: string }[],
+  userInput: string,
+  extraSystem = "",
+  miniCards: MiniCard[] = [],
+  summary = "",
+  contextCfg: ContextConfig = parseContextConfig(null),
+  miniCfg: MiniSelectConfig = parseMiniConfig(null),
+  loreBudgetOverride: number | null = null,
+): AssembleResult {
+  const userName = pack.player_name;
+  const minis = selectMinisWithinBudget(miniCards, library, miniCfg);
+  const cast = renderCastIndex(pack, scene.present);
+  const worldText = pack.world_text;
+  const player = memory.userSetting || "";
+  const cardsText = presentCards.map((card) => renderCard(library, card, userName)).filter(Boolean).join("\n\n");
+  const miniEntries = minis.map((mini) => renderMini(library, mini));
+  const miniLabels = minis.map((mini) => mini.id);
+  const fallbackChar = presentCards[0]?.name || minis[0]?.name || "";
+  const loreTexts = loreEntries.map((entry) => renderLoreEntry(library, entry, userName, fallbackChar));
+  const loreLabels = loreEntries.map((entry) => entry.comment || entry.keys.join(", ") || entry.source || "lore");
+  const sceneText = sceneYaml(scene);
+  const memWorld = memory.snapWorld;
+  const memPlayer = memory.snapPlayer;
+  const memoryBlob = [memWorld, memPlayer].filter((part) => part.trim()).join("\n\n");
+  const memoryEntries = [memWorld, memPlayer].filter((part) => part.trim());
+  const memoryLabels = [
+    ...(memWorld.trim() ? ["world"] : []),
+    ...(memPlayer.trim() ? ["player"] : []),
+  ];
+
+  const valuesSeed: Record<string, string> = {
+    world: worldText,
+    cast,
+    player,
+    memory: memWorld,
+    player_memory: memPlayer,
+    scene: sceneText,
+    cards: cardsText,
+    minis: miniEntries.join("\n\n"),
+    lore: loreTexts.join("\n\n"),
+    nmem: nmemRecall,
+    summary,
+    player_name: userName,
+    world_id: pack.id,
+    world_name: pack.name,
+  };
+  const gm = library.render("gm.md", valuesSeed);
+  const loreBudget = loreBudgetOverride != null ? loreBudgetOverride : contextCfg.budget.lore;
+
+  const blocks: SectionBlock[] = [
+    { name: "system", text: gm.trim(), budget: contextCfg.budget.system, protected: true },
+    { name: "world", text: worldText, budget: contextCfg.budget.world },
+    { name: "user_setting", text: player, budget: contextCfg.budget.user_setting, protected: true },
+    { name: "primary_card", text: cardsText, budget: contextCfg.budget.primary_card, protected: true },
+    {
+      name: "mini_cards",
+      text: miniEntries.join("\n\n"),
+      budget: Math.min(contextCfg.budget.mini_cards, miniCfg.max_tokens),
+      entries: miniEntries,
+      entry_labels: miniLabels,
+      items: miniLabels,
+    },
+    {
+      name: "lore",
+      text: loreTexts.join("\n\n"),
+      budget: loreBudget,
+      entries: loreTexts,
+      entry_labels: loreLabels,
+      items: loreLabels,
+    },
+    { name: "state", text: sceneText, budget: contextCfg.budget.state, protected: true },
+    {
+      name: "memory",
+      text: memoryBlob,
+      budget: contextCfg.budget.memory,
+      entries: memoryEntries.length ? memoryEntries : memoryBlob ? [memoryBlob] : [],
+      entry_labels: memoryLabels.length ? memoryLabels : memoryBlob ? ["memory"] : [],
+      items: memoryLabels,
+    },
+    { name: "nmem", text: nmemRecall, budget: contextCfg.budget.nmem },
+    { name: "summary", text: summary, budget: contextCfg.budget.summary },
+  ];
+
+  const { texts, reports } = applySectionBudgets(blocks);
+  const memText = texts.memory || "";
+  let snapWorld = memWorld && memText.includes(memWorld) ? memWorld : memText;
+  let snapPlayer = memPlayer && memText.includes(memPlayer) ? memPlayer : "";
+  if (snapWorld && snapPlayer && estimateTokens(snapWorld) + estimateTokens(snapPlayer) > contextCfg.budget.memory) {
+    const remain = Math.max(0, contextCfg.budget.memory - estimateTokens(snapWorld));
+    snapPlayer = truncateToTokens(snapPlayer, remain).text;
+  }
+
+  const values: Record<string, string> = {
+    world: texts.world || "",
+    cast,
+    player: texts.user_setting || "",
+    memory: snapWorld,
+    player_memory: snapPlayer,
+    scene: texts.state || "",
+    cards: texts.primary_card || "",
+    minis: texts.mini_cards || "",
+    lore: texts.lore || "",
+    nmem: texts.nmem || "",
+    summary: texts.summary || "",
+    player_name: userName,
+    world_id: pack.id,
+    world_name: pack.name,
+    gm: texts.system || gm.trim(),
+  };
+  const stable = library.render("layers/stable.md", values).trim();
+  const contextLayer = library.render("layers/context.md", values).trim();
+  const volatile = library.render("layers/volatile.md", values).trim();
+  const system = [extraSystem.trim(), stable, contextLayer, volatile].filter(Boolean).join("\n\n");
+
+  const sectionTokens = reports.reduce((sum, item) => sum + item.tokens, 0);
+  const histBudget = historyTokenBudget(contextCfg, sectionTokens + estimateTokens(extraSystem), userInput);
+  const trimmed = trimHistory(historyMessages, histBudget, contextCfg.history.protect_recent_turns);
+  const report = buildContextReport(contextCfg, reports, trimmed.messages, trimmed.truncated, userInput);
+  const miniReport = reports.find((item) => item.name === "mini_cards");
+  const loreReport = reports.find((item) => item.name === "lore");
+  return {
+    system,
+    report,
+    history: trimmed.messages,
+    mini_ids: miniReport?.items || [],
+    lore_titles: loreReport?.items || [],
+  };
 }
 
 export function assembleSystem(
@@ -131,33 +319,25 @@ export function assembleSystem(
   extraSystem = "",
   miniCards: MiniCard[] = [],
   summary = "",
+  contextCfg?: ContextConfig,
+  miniCfg?: MiniSelectConfig,
 ): string {
-  const userName = pack.player_name;
-  const values: Record<string, string> = {
-    world: pack.world_text,
-    cast: renderCastIndex(pack, scene.present),
-    player: memory.userSetting || "",
-    memory: memory.snapWorld,
-    player_memory: memory.snapPlayer,
-    scene: sceneYaml(scene),
-    cards: presentCards.map((card) => renderCard(library, card, userName)).filter(Boolean).join("\n\n"),
-    minis: miniCards.map((mini) => renderMini(library, mini)).filter(Boolean).join("\n\n"),
-    lore: renderLore(library, loreEntries, userName, presentCards[0]?.name || miniCards[0]?.name || ""),
-    nmem: nmemRecall,
+  return assembleBudgeted(
+    library,
+    pack,
+    memory,
+    scene,
+    presentCards,
+    loreEntries,
+    nmemRecall,
+    [],
+    "",
+    extraSystem,
+    miniCards,
     summary,
-    player_name: userName,
-    world_id: pack.id,
-    world_name: pack.name,
-  };
-  const gm = library.render("gm.md", values);
-  values.gm = gm;
-  const parts = [
-    extraSystem.trim(),
-    library.render("layers/stable.md", values).trim(),
-    library.render("layers/context.md", values).trim(),
-    library.render("layers/volatile.md", values).trim(),
-  ];
-  return parts.filter(Boolean).join("\n\n");
+    contextCfg || parseContextConfig(null),
+    miniCfg || parseMiniConfig(null),
+  ).system;
 }
 
 export function breachSystem(library: PromptLibrary, enabled: boolean): string {

@@ -1,0 +1,18 @@
+name: long_session
+description: 重复轮次冒烟（默认 20，可设 turns=100）
+world: lamp-harbor
+turns: 20
+initial:
+  season: ""
+  time: 涨潮前的黄昏
+  location: 灯塔下的石堤
+  present: [anlan, xiaowu]
+checks:
+  - context_under_max
+  - session_state_file
+steps:
+  - user: 这里潮汐规律吗？
+  - user: 茶铺还有麦茶吗？
+  - user: 再跟我说说灯塔。
+  - user: 今晚会起雾吗？
+  - user: 我先在这里坐一会儿。

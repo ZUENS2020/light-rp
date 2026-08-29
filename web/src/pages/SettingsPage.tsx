@@ -32,6 +32,13 @@ function toForm(data: AppSettings): FormState {
     lore_token_budget: data.lore_token_budget,
     max_tool_rounds: data.max_tool_rounds,
     transcript_keep_after_compact: data.transcript_keep_after_compact,
+    context: data.context || {
+      max_tokens: 32768,
+      generation_reserve: 4096,
+      budget: {},
+      history: { use_remaining: true, protect_recent_turns: 6 },
+    },
+    mini: data.mini || { max_tokens: 1200, recent_turns: 4, max_characters: 6 },
   };
 }
 
@@ -302,6 +309,51 @@ export function SettingsPage() {
                   min={1}
                   value={form.max_tool_rounds}
                   onChange={(event) => setForm({ ...form, max_tool_rounds: Number(event.target.value) })}
+                />
+              </Field>
+              <Field id="context_max_tokens" label="Context 总预算">
+                <Input
+                  id="context_max_tokens"
+                  type="number"
+                  min={1024}
+                  value={form.context.max_tokens}
+                  onChange={(event) =>
+                    setForm({ ...form, context: { ...form.context, max_tokens: Number(event.target.value) } })
+                  }
+                />
+              </Field>
+              <Field id="context_reserve" label="生成预留 tokens">
+                <Input
+                  id="context_reserve"
+                  type="number"
+                  min={256}
+                  value={form.context.generation_reserve}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      context: { ...form.context, generation_reserve: Number(event.target.value) },
+                    })
+                  }
+                />
+              </Field>
+              <Field id="mini_max_characters" label="Mini 角色上限">
+                <Input
+                  id="mini_max_characters"
+                  type="number"
+                  min={1}
+                  value={form.mini.max_characters}
+                  onChange={(event) =>
+                    setForm({ ...form, mini: { ...form.mini, max_characters: Number(event.target.value) } })
+                  }
+                />
+              </Field>
+              <Field id="mini_max_tokens" label="Mini token 预算">
+                <Input
+                  id="mini_max_tokens"
+                  type="number"
+                  min={100}
+                  value={form.mini.max_tokens}
+                  onChange={(event) => setForm({ ...form, mini: { ...form.mini, max_tokens: Number(event.target.value) } })}
                 />
               </Field>
             </div>

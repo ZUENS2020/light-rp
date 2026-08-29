@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from lightrp.assemble import (
-    assemble_system,
+    assemble_budgeted,
     breach_phi,
     breach_system,
     memory_tool_spec,
@@ -14,6 +14,7 @@ from lightrp.assemble import (
     select_mini_members,
     story_summary,
 )
+from lightrp.budget import memory_is_duplicate, route_memory_candidate
 from lightrp.cards import CharacterCard, ensemble_acting
 from lightrp.compact import compact_session, tool_loop
 from lightrp.config import AppConfig
@@ -47,6 +48,7 @@ class TurnResult:
     spotlight_ids: list[str] = field(default_factory=list)
     nmem_synced: bool = False
     warnings: list[str] = field(default_factory=list)
+    context_report: dict[str, Any] | None = None
 
 
 def resolve_nmem_space(
@@ -150,8 +152,18 @@ class Engine:
         primary_id = resolve_primary_id(self.pack, self.scene, self.session.primary_character)
         primary_member = self.pack.member(primary_id) if primary_id else None
         primary = self._load_cards([primary_member] if primary_member else [])
-        haystack = f"{user_text}\n{self.session.haystack(8)}\n{self.scene.haystack()}"
-        mini_members = select_mini_members(self.pack, self.scene, haystack, mention_ids, primary_id)
+        recent_turns = self.config.mini.recent_turns
+        recent = self.session.haystack(max(8, recent_turns * 2))
+        haystack = f"{user_text}\n{recent}\n{self.scene.haystack()}"
+        mini_members = select_mini_members(
+            self.pack,
+            self.scene,
+            haystack,
+            mention_ids,
+            primary_id,
+            mini_cfg=self.config.mini,
+            recent_haystack=recent,
+        )
         minis = []
         lore_cards = list(primary)
         for member in mini_members:
@@ -173,12 +185,41 @@ class Engine:
 
     def _triggered_lore(self, extra_text: str = "", cards: list[CharacterCard] | None = None) -> list[LoreEntry]:
         depth = self.pack.lore_scan_depth or self.config.lore_scan_depth
-        budget = self.pack.lore_token_budget or self.config.lore_token_budget
+        budget = self.pack.lore_token_budget or self.config.lore_token_budget or self.config.context.budget.lore
         haystack = self.session.haystack(depth)
         if extra_text:
             haystack = f"{haystack}\n{extra_text}"
         scene_text = scene_lore_haystack(self.scene, self.pack.cast)
         return trigger_lore(self._all_lore(cards or self._present_cards()), haystack, scene_text, budget)
+
+    def _write_trace(self, row: dict[str, Any]) -> None:
+        path = self.session.root / "trace.jsonl"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def _save_context_report(self, report: dict[str, Any]) -> None:
+        (self.session.root / "context_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _ingest_memory_candidate(self, candidate: dict[str, Any]) -> str:
+        enriched = enrich_record(candidate, self.scene)
+        text = format_memory_entry(enriched)
+        try:
+            importance = float(candidate.get("importance", 0.75))
+        except (TypeError, ValueError):
+            importance = 0.75
+        route = route_memory_candidate(importance)
+        if route == "drop":
+            return "drop"
+        if route == "event":
+            append_events(self.session.root, [{**enriched, "kind": "memory_candidate", "importance": importance}])
+            return "event"
+        if memory_is_duplicate(text, self.memory.world_entries):
+            return "dup"
+        self.run_memory_tool("memory", {"action": "add", "target": "world", "content": text})
+        return "long"
 
     def _nmem_recall(self, query: str) -> str:
         if not self.nmem.can_write:
@@ -223,24 +264,6 @@ class Engine:
         lore = self._triggered_lore(user_text, lore_cards)
         recall = self._nmem_recall(user_text)
         breach = self.config.llm.breach
-        system = assemble_system(
-            self.prompts,
-            self.pack,
-            self.memory,
-            self.scene,
-            primary_cards,
-            lore,
-            recall,
-            extra_system=breach_system(self.prompts, breach),
-            mini_cards=mini_cards,
-            summary=story_summary(self.session.messages),
-        )
-        phi_bits = [breach_phi(self.prompts, breach)]
-        for card in primary_cards:
-            filled = card.substitute(self.pack.player_name)
-            if filled.post_history_instructions.strip():
-                phi_bits.append(ensemble_acting(filled.post_history_instructions, filled.name))
-        phi = "\n\n".join(part for part in phi_bits if part)
         prompt_user = user_text
         if mention_ids:
             names = []
@@ -248,8 +271,34 @@ class Engine:
                 member = self.pack.member(sid)
                 names.append(member.name if member else sid)
             prompt_user = f"{user_text}\n\n（请给{'、'.join(names)}更多台词。只回复一次。）"
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system}, *self.session.chat_messages()]
+        lore_budget = self.pack.lore_token_budget or self.config.lore_token_budget or self.config.context.budget.lore
+        assembled = assemble_budgeted(
+            self.prompts,
+            self.pack,
+            self.memory,
+            self.scene,
+            primary_cards,
+            lore,
+            recall,
+            history_messages=self.session.chat_messages(),
+            user_input=prompt_user,
+            extra_system=breach_system(self.prompts, breach),
+            mini_cards=mini_cards,
+            summary=story_summary(self.session.messages),
+            context_cfg=self.config.context,
+            mini_cfg=self.config.mini,
+            lore_budget_override=lore_budget,
+        )
+        self._save_context_report(assembled.report.to_dict())
+        phi_bits = [breach_phi(self.prompts, breach)]
+        for card in primary_cards:
+            filled = card.substitute(self.pack.player_name)
+            if filled.post_history_instructions.strip():
+                phi_bits.append(ensemble_acting(filled.post_history_instructions, filled.name))
+        phi = "\n\n".join(part for part in phi_bits if part)
+        messages: list[dict[str, Any]] = [{"role": "system", "content": assembled.system}, *assembled.history]
         messages.append({"role": "user", "content": prompt_user})
+        state_before = self.scene
         gm = tool_loop(
             self.llm,
             messages,
@@ -259,29 +308,65 @@ class Engine:
             phi=phi,
         )
         visible, trailer = parse_trailer(gm.text)
+        remembered: list[str] = []
         if trailer:
             self.scene = apply_scene_patch(self.scene, trailer)
             save_scene(self.session.state_path, self.scene)
             append_events(self.session.root, [enrich_record(item, self.scene) for item in trailer_events(trailer)])
             for candidate in trailer_memory_candidates(trailer):
-                self.run_memory_tool(
-                    "memory",
-                    {"action": "add", "target": "world", "content": format_memory_entry(enrich_record(candidate, self.scene))},
-                )
+                route = self._ingest_memory_candidate(candidate)
+                if route == "long":
+                    remembered.append(str(candidate.get("text") or candidate.get("content") or "")[:80])
         for raw in trailer.get("memory") or []:
             if isinstance(raw, dict):
+                content = str(raw.get("content") or "")
+                if str(raw.get("action") or "") == "add" and content and memory_is_duplicate(
+                    content, self.memory.world_entries + self.memory.player_entries
+                ):
+                    continue
                 self.run_memory_tool("memory", raw)
         spotlight_ids = _unique(_as_id_list(trailer.get("spotlight")) + mention_ids)
         text = visible
         self.session.append("user", user_text)
         self.session.append("assistant", text)
+        turn_number = sum(1 for item in self.session.messages if (item.get("role") if isinstance(item, dict) else getattr(item, "role", "")) == "user")
+        self._write_trace(
+            {
+                "turn": turn_number,
+                "primary": resolve_primary_id(self.pack, self.scene, self.session.primary_character),
+                "minis": assembled.mini_ids,
+                "lore": assembled.lore_titles,
+                "memories": remembered,
+                "state_before": state_before.as_dict() if hasattr(state_before, "as_dict") else {
+                    "location": state_before.location,
+                    "time": state_before.time,
+                    "season": state_before.season,
+                    "present": state_before.present,
+                },
+                "state_after": {
+                    "location": self.scene.location,
+                    "time": self.scene.time,
+                    "season": self.scene.season,
+                    "present": self.scene.present,
+                },
+                "token_usage": {"total": assembled.report.total, "max": assembled.report.max_tokens},
+                "warnings": warnings,
+            }
+        )
         synced = self._sync_turn(user_text, text)
         if len(self.session.messages) >= self.config.compact_after_turns:
             try:
                 self.compact()
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"compact failed: {exc}")
-        return TurnResult(text=text, scene=self.scene, spotlight_ids=spotlight_ids, nmem_synced=synced, warnings=warnings)
+        return TurnResult(
+            text=text,
+            scene=self.scene,
+            spotlight_ids=spotlight_ids,
+            nmem_synced=synced,
+            warnings=warnings,
+            context_report=assembled.report.to_dict(),
+        )
 
     def compact(self) -> str:
         summary = compact_session(

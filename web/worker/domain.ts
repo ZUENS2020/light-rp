@@ -973,6 +973,8 @@ export async function deleteSession(fs: R2Fs, sessionId: string): Promise<void> 
   await fs.del(`sessions/${sessionId}/events.jsonl`);
   await fs.del(`sessions/${sessionId}/state.yaml`);
   await fs.del(`sessions/${sessionId}/summary.md`);
+  await fs.del(`sessions/${sessionId}/context_report.json`);
+  await fs.del(`sessions/${sessionId}/trace.jsonl`);
 }
 
 export async function deleteWorkspace(fs: R2Fs): Promise<void> {

@@ -25,3 +25,26 @@ lore_scan_depth: 4
 lore_token_budget: 2048
 max_tool_rounds: 4
 transcript_keep_after_compact: 8
+
+context:
+  max_tokens: 32768
+  generation_reserve: 4096
+  budget:
+    system: 1500
+    world: 2500
+    user_setting: 1500
+    primary_card: 4000
+    mini_cards: 1200
+    lore: 3000
+    state: 800
+    memory: 2500
+    nmem: 2500
+    summary: 2500
+  history:
+    use_remaining: true
+    protect_recent_turns: 6
+
+mini:
+  max_tokens: 1200
+  recent_turns: 4
+  max_characters: 6

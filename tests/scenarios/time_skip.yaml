@@ -1,0 +1,13 @@
+name: time_skip
+description: 时间跳跃应伴随叙述提示
+world: uma
+initial:
+  season: 初秋
+  time: 傍晚
+  location: 训练场
+  present: [无声铃鹿]
+checks:
+  - flag_suspicious_season_without_transition
+steps:
+  - user: 今天到此为止吧。
+  - user: 几个月后，盛夏的训练场又热起来了，我们重新开始吧。

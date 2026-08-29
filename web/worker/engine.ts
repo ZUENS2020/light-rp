@@ -1,4 +1,11 @@
-import { assembleSystem, breachPhi, breachSystem, resolvePrimaryId, selectMiniMembers, storySummary, type LlmMessage } from "./assemble";
+import { assembleBudgeted, breachPhi, breachSystem, resolvePrimaryId, selectMiniMembers, storySummary, type LlmMessage } from "./assemble";
+import {
+  memoryIsDuplicate,
+  parseContextConfig,
+  parseMiniConfig,
+  routeMemoryCandidate,
+  type ContextReport,
+} from "./budget";
 import {
   aliasMap,
   appendEvents,
@@ -56,6 +63,7 @@ export type TurnOut = {
   spotlight_ids: string[];
   warnings: string[];
   nmem_synced: boolean;
+  context_report?: ContextReport;
 };
 
 async function loadMemberCards(fs: R2Fs, members: WorldPack["cast"]): Promise<CharacterCard[]> {
@@ -80,7 +88,8 @@ async function triggered(
   cards: CharacterCard[],
 ) {
   const depth = pack.lore_scan_depth || settings.lore_scan_depth;
-  const budget = pack.lore_token_budget || settings.lore_token_budget;
+  const context = parseContextConfig(settings.context);
+  const budget = pack.lore_token_budget || settings.lore_token_budget || context.budget.lore;
   const recent = messages.slice(-depth);
   const haystack = `${recent.map((m) => `${m.role}: ${m.content}`).join("\n")}\n${extra}`;
   return triggerLore(await loadAllLore(fs, cards), haystack, sceneLoreHaystack(pack, scene), budget);
@@ -100,8 +109,11 @@ async function loadMinisForTurn(
   haystack: string,
   mentionIds: string[],
   primaryId: string | null,
+  settings: AppSettings,
+  recentHaystack: string,
 ): Promise<{ minis: MiniCard[]; loreCards: CharacterCard[] }> {
-  const members = selectMiniMembers(pack, scene, haystack, mentionIds, primaryId);
+  const miniCfg = parseMiniConfig(settings.mini);
+  const members = selectMiniMembers(pack, scene, haystack, mentionIds, primaryId, miniCfg, recentHaystack);
   const minis: MiniCard[] = [];
   const loreCards: CharacterCard[] = [];
   for (const member of members) {
@@ -114,6 +126,44 @@ async function loadMinisForTurn(
     }
   }
   return { minis, loreCards };
+}
+
+async function appendTrace(fs: R2Fs, sessionId: string, row: Record<string, unknown>): Promise<void> {
+  const path = `sessions/${sessionId}/trace.jsonl`;
+  const prev = (await fs.get(path)) || "";
+  await fs.put(path, `${prev}${JSON.stringify(row)}\n`);
+}
+
+async function saveContextReport(fs: R2Fs, sessionId: string, report: ContextReport): Promise<void> {
+  await fs.put(`sessions/${sessionId}/context_report.json`, JSON.stringify(report, null, 2));
+}
+
+function candidateImportance(item: Record<string, unknown>): number {
+  const raw = item.importance;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() && !Number.isNaN(Number(raw))) return Number(raw);
+  return 0.75;
+}
+
+async function ingestMemoryCandidate(
+  fs: R2Fs,
+  memory: MemoryStore,
+  settings: AppSettings,
+  sessionId: string,
+  scene: SceneState,
+  candidate: Record<string, unknown>,
+): Promise<"long" | "event" | "drop" | "dup"> {
+  const enriched = enrichRecord(candidate, scene);
+  const text = formatMemoryEntry(enriched);
+  const route = routeMemoryCandidate(candidateImportance(candidate));
+  if (route === "drop") return "drop";
+  if (route === "event") {
+    await appendEvents(fs, sessionId, [{ ...enriched, kind: "memory_candidate", importance: candidateImportance(candidate) }]);
+    return "event";
+  }
+  if (memoryIsDuplicate(text, memory.world)) return "dup";
+  await runMemoryTool(fs, memory, settings, "memory", { action: "add", target: "world", content: text });
+  return "long";
 }
 
 export async function runTurn(
@@ -155,15 +205,26 @@ export async function runTurn(
   const primaryId = resolvePrimaryId(pack, scene, primaryCharacter);
   const primaryMember = primaryId ? pack.cast.find((item) => item.id === primaryId) : undefined;
   const primaryCards = primaryMember ? await loadMemberCards(fs, [primaryMember]) : [];
-  const haystack = `${userText}\n${loaded.messages
-    .slice(-8)
-    .map((m) => m.content)
-    .join("\n")}\n${scene.location} ${scene.time} ${scene.scene || scene.notes} ${scene.present.join(" ")}`;
-  const { minis, loreCards } = await loadMinisForTurn(fs, pack, scene, haystack, mentionIds, primaryId);
+  const miniCfg = parseMiniConfig(settings.mini);
+  const contextCfg = parseContextConfig(settings.context);
+  const recentSlice = loaded.messages.slice(-Math.max(8, miniCfg.recent_turns * 2));
+  const recentHaystack = recentSlice.map((m) => m.content).join("\n");
+  const haystack = `${userText}\n${recentHaystack}\n${scene.location} ${scene.time} ${scene.scene || scene.notes} ${scene.present.join(" ")}`;
+  const { minis, loreCards } = await loadMinisForTurn(
+    fs,
+    pack,
+    scene,
+    haystack,
+    mentionIds,
+    primaryId,
+    settings,
+    recentHaystack,
+  );
   const lore = await triggered(fs, pack, scene, loaded.messages, userText, settings, [...primaryCards, ...loreCards]);
   const promptUser = mentionPrompt(pack, userText, mentionIds);
   const breach = settings.llm.breach;
-  const system = assembleSystem(
+  const loreBudget = pack.lore_token_budget || settings.lore_token_budget || contextCfg.budget.lore;
+  const assembled = assembleBudgeted(
     library,
     pack,
     memory,
@@ -171,10 +232,18 @@ export async function runTurn(
     primaryCards,
     lore,
     recall,
+    loaded.messages
+      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
+      .map((m) => ({ role: m.role, content: m.content })),
+    promptUser,
     breachSystem(library, breach),
     minis,
     storySummary(loaded.messages),
+    contextCfg,
+    miniCfg,
+    loreBudget,
   );
+  await saveContextReport(fs, sessionId, assembled.report);
   const cardPhi = primaryCards
     .map((card) => {
       const filled = substituteCard(card, pack.player_name);
@@ -184,10 +253,8 @@ export async function runTurn(
     .join("\n\n");
   const phi = [breachPhi(library, breach), cardPhi].filter(Boolean).join("\n\n");
   const messages: LlmMessage[] = [
-    { role: "system", content: system },
-    ...loaded.messages
-      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
-      .map((m) => ({ role: m.role, content: m.content })),
+    { role: "system", content: assembled.system },
+    ...assembled.history.map((m) => ({ role: m.role, content: m.content })),
     { role: "user", content: promptUser },
   ];
   let nmemIndex = await loadNmemIndex((path) => fs.get(path));
@@ -212,6 +279,7 @@ export async function runTurn(
   );
   const { visible, trailer } = parseTrailer(gm.text);
   let nextScene = scene;
+  const remembered: string[] = [];
   if (Object.keys(trailer).length) {
     nextScene = applyScenePatch(scene, trailer);
     await fs.put(`sessions/${sessionId}/state.yaml`, sceneYaml(nextScene));
@@ -221,17 +289,18 @@ export async function runTurn(
       trailerEvents(trailer).map((item) => enrichRecord(item, nextScene)),
     );
     for (const candidate of trailerMemoryCandidates(trailer)) {
-      await runMemoryTool(fs, memory, settings, "memory", {
-        action: "add",
-        target: "world",
-        content: formatMemoryEntry(enrichRecord(candidate, nextScene)),
-      });
+      const route = await ingestMemoryCandidate(fs, memory, settings, sessionId, nextScene, candidate);
+      if (route === "long") remembered.push(String(candidate.text || candidate.content || "").slice(0, 80));
     }
   }
   const memoryOps = Array.isArray(trailer.memory) ? trailer.memory : [];
   for (const raw of memoryOps) {
     if (!raw || typeof raw !== "object") continue;
     const op = raw as Record<string, unknown>;
+    const content = String(op.content || "");
+    if (String(op.action || "") === "add" && content && memoryIsDuplicate(content, memory.world.concat(memory.player))) {
+      continue;
+    }
     await runMemoryTool(fs, memory, settings, "memory", op, async (target, characterId, live) => {
       if (!spaceId) return;
       try {
@@ -248,6 +317,19 @@ export async function runTurn(
     { role: "user", content: userText, ts: nowIso() },
     { role: "assistant", content: visible, ts: nowIso() },
   ];
+  const turnNumber = nextMessages.filter((m) => m.role === "user").length;
+  await appendTrace(fs, sessionId, {
+    turn: turnNumber,
+    primary: primaryId,
+    minis: assembled.mini_ids,
+    lore: assembled.lore_titles,
+    memories: remembered,
+    state_before: scene,
+    state_after: nextScene,
+    token_usage: { total: assembled.report.total, max: assembled.report.max_tokens },
+    warnings,
+    ts: nowIso(),
+  });
   let threadId = loaded.thread_id;
   let nmemSynced = false;
   if (spaceId && listed.available) {
@@ -298,7 +380,15 @@ export async function runTurn(
       warnings.push(`compact failed: ${String(err)}`);
     }
   }
-  return { text: visible, scene: nextScene, messages: nextMessages, spotlight_ids: spotlightIds, warnings, nmem_synced: nmemSynced };
+  return {
+    text: visible,
+    scene: nextScene,
+    messages: nextMessages,
+    spotlight_ids: spotlightIds,
+    warnings,
+    nmem_synced: nmemSynced,
+    context_report: assembled.report,
+  };
 }
 
 function mentionPrompt(pack: WorldPack, userText: string, mentionIds: string[]): string {
