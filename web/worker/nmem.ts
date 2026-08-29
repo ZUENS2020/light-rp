@@ -21,9 +21,10 @@ function headers(key: string, json = false): Record<string, string> {
   return out;
 }
 
-async function fetchRetry(url: string, init: RequestInit, timeoutMs = 12000): Promise<Response> {
+async function fetchRetry(url: string, init: RequestInit, timeoutMs = 8000): Promise<Response> {
   let response: Response | null = null;
-  for (let i = 0; i < 3; i += 1) {
+  const attempts = 2;
+  for (let i = 0; i < attempts; i += 1) {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
@@ -31,7 +32,9 @@ async function fetchRetry(url: string, init: RequestInit, timeoutMs = 12000): Pr
     } catch (err) {
       clearTimeout(timer);
       const aborted = err instanceof Error && (err.name === "AbortError" || /aborted/i.test(err.message));
-      if (aborted || i === 2) throw err;
+      const wrapped = aborted ? new Error(`nmem 超时（${Math.round(timeoutMs / 1000)}s）`) : err;
+      if (aborted && i === attempts - 1) throw wrapped;
+      if (!aborted && i === attempts - 1) throw err;
       await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
       continue;
     }

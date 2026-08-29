@@ -132,7 +132,8 @@ export function SettingsPage() {
       <main className="mx-auto max-w-2xl px-6 pb-24">
         <h1 className="font-display text-3xl font-semibold">设置</h1>
         <p className="mt-2 font-body text-secondary">
-          模型走 NVIDIA NIM 的 Kimi K3，密钥在 Worker 里。对局参数写到 <span className="break-all font-ui text-sm">{path}</span>。
+          模型与 API 地址由 Worker 绑定（LLM_MODEL / LLM_BASE_URL），网页里改不了。密钥绑定名是 NVIDIA_API_KEY，内容可以是 OpenRouter 等兼容密钥。对局参数写到{" "}
+          <span className="break-all font-ui text-sm">{path}</span>。
         </p>
         {error ? (
           <p className="mt-4 font-ui text-sm text-destructive" role="alert">
@@ -159,10 +160,10 @@ export function SettingsPage() {
             <Field id="base_url" label="API 地址" hint="由 Worker 绑定，不能在网页里改。">
               <Input id="base_url" name="base_url" value={form.llm.base_url} readOnly />
             </Field>
-            <Field id="model" label="模型" hint="moonshotai/kimi-k3。">
+            <Field id="model" label="模型" hint="当前值来自 Worker 绑定，不是网页保存的。">
               <Input id="model" name="model" value={form.llm.model} readOnly />
             </Field>
-            <p className="font-ui text-sm text-secondary">{keySet ? "NVIDIA 密钥已配置。" : "还没有 NVIDIA 密钥。部署时用 wrangler secret put NVIDIA_API_KEY。"}</p>
+            <p className="font-ui text-sm text-secondary">{keySet ? "API 密钥已配置（绑定名 NVIDIA_API_KEY）。" : "还没有密钥。部署时 wrangler secret put NVIDIA_API_KEY。"}</p>
             <div className="grid gap-5 sm:grid-cols-3">
               <Field id="temperature" label="温度">
                 <Input

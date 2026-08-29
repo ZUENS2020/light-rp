@@ -32,6 +32,9 @@ def test_list_worlds_and_open_session(tmp_path: Path) -> None:
     assert body["world"]["id"] == "lamp-harbor"
     assert "opening" in body
     assert body["opening"]
+    assert "涨潮还有半个时辰" in body["opening"]
+    assert "麦茶是热的" not in body["opening"]
+    assert body.get("nmem_available") in (True, False)
 
     state = client.get(f"/api/play/lamp-harbor/{body['session_id']}")
     assert state.status_code == 200

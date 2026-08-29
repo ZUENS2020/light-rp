@@ -1,6 +1,47 @@
 import type { LlmMessage, ToolCall } from "./assemble";
 
-export type ChatResult = { text: string; tool_calls: ToolCall[]; reasoning?: string };
+export type ChatResult = { text: string; tool_calls: ToolCall[]; reasoning?: string; finish_reason?: string };
+
+export class LlmHttpError extends Error {
+  status: number;
+  constructor(status: number, body: string) {
+    super(`LLM HTTP ${status}: ${body}`);
+    this.name = "LlmHttpError";
+    this.status = status;
+  }
+}
+
+export class LlmTimeoutError extends Error {
+  constructor(seconds: number) {
+    super(`LLM 超时（${seconds}s）`);
+    this.name = "LlmTimeoutError";
+  }
+}
+
+export class LlmEmptyError extends Error {
+  constructor() {
+    super("LLM 返回空回复");
+    this.name = "LlmEmptyError";
+  }
+}
+
+export function turnErrorStatus(err: unknown): number {
+  if (err instanceof LlmHttpError) {
+    if (err.status === 401 || err.status === 403 || err.status === 429) return err.status;
+    if (err.status >= 500 && err.status <= 599) return err.status;
+    return 502;
+  }
+  if (err instanceof LlmTimeoutError) return 504;
+  const message = err instanceof Error ? err.message : String(err);
+  const match = message.match(/LLM HTTP (\d+)/);
+  if (match) {
+    const status = Number(match[1]);
+    if (status === 401 || status === 403 || status === 429) return status;
+    if (status >= 500 && status <= 599) return status;
+  }
+  if (message.includes("超时")) return 504;
+  return 502;
+}
 
 export async function chat(
   env: { LLM_BASE_URL: string; LLM_MODEL: string; NVIDIA_API_KEY: string },
@@ -8,6 +49,7 @@ export async function chat(
   tools: unknown[] | null,
   temperature: number,
   maxTokens: number,
+  timeoutSec = 120,
 ): Promise<ChatResult> {
   if (!env.LLM_BASE_URL) throw new Error("missing API base URL");
   if (!env.LLM_MODEL) throw new Error("missing API model");
@@ -22,20 +64,34 @@ export async function chat(
     payload.tools = tools;
     payload.tool_choice = "auto";
   }
-  const response = await fetch(`${env.LLM_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.NVIDIA_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  const seconds = Math.max(1, timeoutSec || 120);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), seconds * 1000);
+  let response: Response;
+  try {
+    response = await fetch(`${env.LLM_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.NVIDIA_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: ac.signal,
+    });
+  } catch (err) {
+    const aborted = err instanceof Error && (err.name === "AbortError" || /aborted/i.test(err.message));
+    if (aborted) throw new LlmTimeoutError(seconds);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   const rawText = await response.text();
-  if (!response.ok) throw new Error(`LLM HTTP ${response.status}: ${rawText.slice(0, 800)}`);
+  if (!response.ok) throw new LlmHttpError(response.status, rawText.slice(0, 800));
   const data = JSON.parse(rawText) as {
-    choices?: { message?: Record<string, unknown> }[];
+    choices?: { message?: Record<string, unknown>; finish_reason?: string }[];
   };
-  const message = data.choices?.[0]?.message || {};
+  const choice = data.choices?.[0] || {};
+  const message = choice.message || {};
   const toolCalls: ToolCall[] = [];
   for (const raw of (message.tool_calls as Record<string, unknown>[] | undefined) || []) {
     const fn = (raw.function as Record<string, unknown>) || {};
@@ -51,6 +107,7 @@ export async function chat(
     text: String(message.content || ""),
     tool_calls: toolCalls,
     reasoning: message.reasoning_content ? String(message.reasoning_content) : undefined,
+    finish_reason: choice.finish_reason ? String(choice.finish_reason) : undefined,
   };
 }
 
@@ -77,11 +134,12 @@ export async function toolLoop(
   phi: string,
   temperature: number,
   maxTokens: number,
+  timeoutSec = 120,
 ): Promise<ChatResult> {
   let last: ChatResult = { text: "", tool_calls: [] };
   const outgoingPhi = (list: LlmMessage[]) => (phi ? [...list, { role: "system", content: phi }] : list);
   for (let i = 0; i < Math.max(1, maxRounds); i += 1) {
-    last = await chat(env, outgoingPhi(messages), tools, temperature, maxTokens);
+    last = await chat(env, outgoingPhi(messages), tools, temperature, maxTokens, timeoutSec);
     if (!last.tool_calls.length) return last;
     messages.push({
       role: "assistant",
@@ -94,5 +152,5 @@ export async function toolLoop(
       messages.push({ role: "tool", content: output, tool_call_id: call.id });
     }
   }
-  return chat(env, outgoingPhi(messages), null, temperature, maxTokens);
+  return chat(env, outgoingPhi(messages), null, temperature, maxTokens, timeoutSec);
 }

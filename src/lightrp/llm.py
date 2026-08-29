@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,6 +20,7 @@ class ChatResult:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    finish_reason: str = ""
 
 
 class LLMClient:
@@ -90,4 +92,21 @@ class LLMClient:
                     arguments=args if isinstance(args, dict) else {},
                 )
             )
-        return ChatResult(text=str(message.get("content") or ""), tool_calls=tool_calls, raw=data)
+        return ChatResult(
+            text=str(message.get("content") or ""),
+            tool_calls=tool_calls,
+            raw=data,
+            finish_reason=str(choice.get("finish_reason") or ""),
+        )
+
+
+def turn_http_status(exc: BaseException) -> int:
+    msg = str(exc)
+    match = re.search(r"LLM HTTP (\d+)", msg)
+    if match:
+        code = int(match.group(1))
+        if code in {401, 403, 429} or 500 <= code <= 599:
+            return code
+    if "超时" in msg:
+        return 504
+    return 502

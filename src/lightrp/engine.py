@@ -132,8 +132,12 @@ class Engine:
             self.warnings.append("找不到 nmem CLI，本局不会同步到 Mem")
 
     def opening(self) -> str:
-        cards = self._present_cards()
-        greetings = [card.substitute(self.pack.player_name).first_mes.strip() for card in cards]
+        primary_id = resolve_primary_id(self.pack, self.scene, self.session.primary_character)
+        member = self.pack.member(primary_id) if primary_id else None
+        cards = self._load_cards([member] if member else [])
+        if not cards:
+            cards = self._present_cards()[:1]
+        greetings = [card.substitute(self.pack.player_name).first_mes.strip() for card in cards[:1]]
         return "\n\n".join(text for text in greetings if text)
 
     def _load_cards(self, members) -> list[CharacterCard]:
@@ -326,6 +330,14 @@ class Engine:
             phi=phi,
         )
         visible, trailer = parse_trailer(gm.text)
+        truncated = (gm.finish_reason or "") == "length"
+        if truncated:
+            warnings.append("回复在 max_tokens 处被截断")
+        text = visible
+        if truncated and text.strip():
+            text = text.rstrip() + "\n\n（回复在 max_tokens 处被截断）"
+        if not text.strip():
+            raise RuntimeError("LLM 返回空回复")
         remembered: list[str] = []
         if trailer:
             self.scene = apply_scene_patch(self.scene, trailer)
@@ -344,7 +356,6 @@ class Engine:
                     continue
                 self.run_memory_tool("memory", raw)
         spotlight_ids = _unique(_as_id_list(trailer.get("spotlight")) + mention_ids)
-        text = visible
         self.session.append("user", user_text)
         self.session.append("assistant", text)
         turn_number = sum(1 for item in self.session.messages if (item.get("role") if isinstance(item, dict) else getattr(item, "role", "")) == "user")
