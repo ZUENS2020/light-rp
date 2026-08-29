@@ -16,6 +16,7 @@ export function WorldPane({
   const folderRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(world.name);
   const [playerName, setPlayerName] = useState(world.player_name);
+  const [primary, setPrimary] = useState(world.primary || "");
   const [nmemSpace, setNmemSpace] = useState(world.nmem_space || "");
   const [worldText, setWorldText] = useState(world.world_text || "");
   const [playerText, setPlayerText] = useState(world.player_text || "");
@@ -27,6 +28,7 @@ export function WorldPane({
   useEffect(() => {
     setName(world.name);
     setPlayerName(world.player_name);
+    setPrimary(world.primary || "");
     setNmemSpace(world.nmem_space || "");
     setWorldText(world.world_text || "");
     setPlayerText(world.player_text || "");
@@ -47,6 +49,7 @@ export function WorldPane({
       const next = await api.saveWorld(world.id, {
         name,
         player_name: playerName,
+        primary: primary.trim() || null,
         nmem_space: nmemSpace.trim() || null,
         world_text: worldText,
         player_text: playerText,
@@ -148,6 +151,23 @@ export function WorldPane({
           <Label htmlFor="player-name">玩家称呼</Label>
           <Input id="player-name" value={playerName} onChange={(event) => setPlayerName(event.target.value)} />
         </div>
+        <div className="space-y-2 sm:col-span-2">
+          <Label htmlFor="world-primary">主卡角色</Label>
+          <select
+            id="world-primary"
+            className="flex h-11 w-full rounded-md border border-border bg-background px-3 font-ui text-sm"
+            value={primary}
+            onChange={(event) => setPrimary(event.target.value)}
+          >
+            <option value="">默认：在场名单第一人</option>
+            {world.cast.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.name}（{member.id}）
+              </option>
+            ))}
+          </select>
+          <Hint>对局只注入这一张完整卡，其余角色用 Mini。</Hint>
+        </div>
       </div>
       <div className="space-y-2">
         <Label htmlFor="world-nmem">默认 nmem 工作区</Label>
@@ -165,7 +185,7 @@ export function WorldPane({
             </option>
           ))}
         </datalist>
-        <Hint>填 id，例如 rp-mem。未选不会写入 default。</Hint>
+        <Hint>填 id，例如 rp-mem。选中后对局正文会写入该空间。未选不会写入 default。</Hint>
       </div>
       <div className="space-y-2">
         <Label htmlFor="world-text">WORLD.md</Label>

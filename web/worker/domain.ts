@@ -56,7 +56,11 @@ export type LoreEntry = {
 export type SceneState = {
   location: string;
   time: string;
+  season: string;
+  weather: string;
   present: string[];
+  scene: string;
+  ongoing: string[];
   notes: string;
 };
 
@@ -80,12 +84,26 @@ export type WorldPack = {
   lore_token_budget: number | null;
   lore_scan_depth: number | null;
   world_text: string;
+  primary: string | null;
 };
 
 function asStr(value: unknown): string {
   if (value == null) return "";
   if (Array.isArray(value)) return value.map(String).join("\n");
   return String(value);
+}
+
+function fieldText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) return value.map(fieldText).filter(Boolean).join("\n");
+  if (typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    for (const key of ["description", "name", "text"]) {
+      if (rec[key]) return fieldText(rec[key]);
+    }
+  }
+  return String(value).trim();
 }
 
 function asList(value: unknown): string[] {
@@ -325,7 +343,7 @@ export function memberPresent(member: CastMember, present: string[]): boolean {
 }
 
 export function sceneLoreHaystack(pack: WorldPack, scene: SceneState): string {
-  const bits = [scene.location, scene.time, scene.notes, ...scene.present];
+  const bits = [scene.location, scene.time, scene.season, scene.weather, scene.scene || scene.notes, ...scene.present, ...scene.ongoing];
   for (const member of pack.cast) {
     if (!memberPresent(member, scene.present)) continue;
     bits.push(member.id, member.name, ...member.aliases);
@@ -333,30 +351,127 @@ export function sceneLoreHaystack(pack: WorldPack, scene: SceneState): string {
   return bits.filter(Boolean).join("\n");
 }
 
-export function parseScene(text: string | null): SceneState {
-  if (!text?.trim()) return { location: "", time: "", present: [], notes: "" };
-  const raw = parseYaml(text);
-  if (!raw || typeof raw !== "object") return { location: "", time: "", present: [], notes: text };
-  const rec = raw as Record<string, unknown>;
+function emptyScene(): SceneState {
+  return { location: "", time: "", season: "", weather: "", present: [], scene: "", ongoing: [], notes: "" };
+}
+
+export function extractStateFields(patch: Record<string, unknown>): {
+  location: string;
+  time: string;
+  season: string;
+  weather: string;
+  present: string[];
+  scene: string;
+  ongoing: string[];
+} {
+  const nested = patch.scene && typeof patch.scene === "object" && !Array.isArray(patch.scene) ? (patch.scene as Record<string, unknown>) : {};
+  const oldShape = Boolean(nested.location || nested.time || nested.present || nested.notes);
+  const src = oldShape ? nested : patch;
+  const sceneText = oldShape
+    ? fieldText(nested.notes || nested.scene)
+    : fieldText(src.scene) || fieldText(patch.notes);
   return {
-    location: asStr(rec.location),
-    time: asStr(rec.time),
-    present: asList(rec.present),
-    notes: asStr(rec.notes),
+    location: fieldText(src.location),
+    time: fieldText(src.time),
+    season: fieldText(src.season),
+    weather: fieldText(src.weather),
+    present: asList(src.present || src.characters_present || patch.characters_present),
+    scene: sceneText,
+    ongoing: asList(src.ongoing || patch.ongoing),
+  };
+}
+
+export function parseScene(text: string | null): SceneState {
+  if (!text?.trim()) return emptyScene();
+  const raw = parseYaml(text);
+  if (!raw || typeof raw !== "object") {
+    const scene = text.trim();
+    return { ...emptyScene(), scene, notes: scene };
+  }
+  const rec = raw as Record<string, unknown>;
+  const sceneText = fieldText(rec.scene) || asStr(rec.notes);
+  return {
+    location: fieldText(rec.location),
+    time: fieldText(rec.time),
+    season: fieldText(rec.season),
+    weather: fieldText(rec.weather),
+    present: asList(rec.present || rec.characters_present),
+    scene: sceneText,
+    ongoing: asList(rec.ongoing),
+    notes: sceneText,
   };
 }
 
 export function sceneYaml(scene: SceneState): string {
-  return stringifyYaml({ location: scene.location, time: scene.time, present: scene.present, notes: scene.notes });
+  return stringifyYaml({
+    time: scene.time,
+    season: scene.season,
+    weather: scene.weather,
+    location: scene.location,
+    present: scene.present,
+    scene: scene.scene || scene.notes,
+    ongoing: scene.ongoing,
+  });
+}
+
+function patchHasPresent(patch: Record<string, unknown>): boolean {
+  if ("present" in patch || "characters_present" in patch) return true;
+  const nested = patch.scene;
+  return Boolean(nested && typeof nested === "object" && "present" in (nested as object));
 }
 
 export function applyScenePatch(scene: SceneState, patch: Record<string, unknown>): SceneState {
+  if (!patch || !Object.keys(patch).length) return scene;
+  const fields = extractStateFields(patch);
+  const sceneText = fields.scene || scene.scene || scene.notes;
   return {
-    location: patch.location != null ? asStr(patch.location) : scene.location,
-    time: patch.time != null ? asStr(patch.time) : scene.time,
-    notes: patch.notes != null ? asStr(patch.notes) : scene.notes,
-    present: patch.present != null ? asList(patch.present) : scene.present,
+    location: fields.location || scene.location,
+    time: fields.time || scene.time,
+    season: fields.season || scene.season,
+    weather: fields.weather || scene.weather,
+    present: patchHasPresent(patch) ? fields.present : scene.present,
+    scene: sceneText,
+    ongoing: "ongoing" in patch ? fields.ongoing : scene.ongoing,
+    notes: sceneText,
   };
+}
+
+export function trailerEvents(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const raw = payload.events;
+  const list = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
+  return list
+    .map((item) => {
+      if (item && typeof item === "object") return item as Record<string, unknown>;
+      if (String(item).trim()) return { summary: String(item).trim() };
+      return null;
+    })
+    .filter((item): item is Record<string, unknown> => Boolean(item));
+}
+
+export function trailerMemoryCandidates(payload: Record<string, unknown>): string[] {
+  const raw = payload.memory_candidates;
+  const list = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
+  return list
+    .map((item) => {
+      if (item && typeof item === "object") {
+        const rec = item as Record<string, unknown>;
+        return fieldText(rec.text || rec.content);
+      }
+      return String(item).trim();
+    })
+    .filter(Boolean);
+}
+
+export async function appendEvents(fs: R2Fs, sessionId: string, events: Record<string, unknown>[]): Promise<void> {
+  if (!events.length) return;
+  const path = `sessions/${sessionId}/events.jsonl`;
+  const prev = (await fs.get(path)) || "";
+  const lines = prev.split("\n").filter((line) => line.trim());
+  const ts = new Date().toISOString();
+  for (const item of events) {
+    lines.push(JSON.stringify({ ...item, ts: item.ts || ts }));
+  }
+  await fs.put(path, lines.length ? lines.join("\n") + "\n" : "");
 }
 
 const ENTRY = "\n§\n";
@@ -454,6 +569,7 @@ export async function loadPack(fs: R2Fs, id: string): Promise<WorldPack> {
     });
   }
   const space = merged.nmem_space;
+  const primary = merged.primary;
   return {
     id: asStr(merged.id || id),
     name: asStr(merged.name || id),
@@ -463,6 +579,7 @@ export async function loadPack(fs: R2Fs, id: string): Promise<WorldPack> {
     lore_token_budget: merged.lore_token_budget != null ? Number(merged.lore_token_budget) : null,
     lore_scan_depth: merged.lore_scan_depth != null ? Number(merged.lore_scan_depth) : null,
     world_text: ((await fs.get("WORLD.md")) || "").trim(),
+    primary: primary ? asStr(primary) : null,
   };
 }
 
@@ -491,6 +608,7 @@ export async function saveWorldMeta(fs: R2Fs, pack: WorldPack): Promise<void> {
       nmem_space: pack.nmem_space,
       lore_token_budget: pack.lore_token_budget,
       lore_scan_depth: pack.lore_scan_depth,
+      primary: pack.primary,
     }),
   );
 }
@@ -501,7 +619,8 @@ export function findMember(pack: WorldPack, ident: string): CastMember | undefin
 }
 
 export const MENTION_RE = /@([^\s@]+)/g;
-export const FENCE_RE = /```lightrp\s*\n([\s\S]*?)```/i;
+export const FENCE_RE = /```lightrp\s*\n([\s\S]*?)```/gi;
+export const RP_STATE_RE = /<rp_state>\s*([\s\S]*?)<\/rp_state>/gi;
 
 export function aliasMap(cast: CastMember[]): Record<string, string> {
   const mapping: Record<string, string> = {};
@@ -539,13 +658,30 @@ function parseTrailerPayload(raw: string): Record<string, unknown> {
 }
 
 export function parseTrailer(text: string): { visible: string; trailer: Record<string, unknown> } {
-  const specific = FENCE_RE.exec(text);
-  const blocks = [...text.matchAll(/```(?:yaml|yml)?\s*\n([\s\S]*?)```/gi)];
-  const yamlBlock = [...blocks].reverse().find((item) => /^(scene|spotlight|memory)\s*:/m.test(item[1] || ""));
-  const match = specific || yamlBlock;
-  if (!match) return { visible: text.trim(), trailer: {} };
-  const visible = (text.slice(0, match.index) + text.slice(match.index + match[0].length)).trim();
-  return { visible, trailer: parseTrailerPayload(match[1] || "") };
+  type Block = { start: number; end: number; body: string };
+  const blocks: Block[] = [];
+  for (const pattern of [RP_STATE_RE, FENCE_RE]) {
+    for (const match of text.matchAll(pattern)) {
+      const start = match.index ?? 0;
+      blocks.push({ start, end: start + match[0].length, body: match[1] || "" });
+    }
+  }
+  if (!blocks.length) {
+    const yamlBlocks = [...text.matchAll(/```(?:yaml|yml)?\s*\n([\s\S]*?)```/gi)];
+    const yamlBlock = [...yamlBlocks].reverse().find((item) => /^(scene|spotlight|memory)\s*:/m.test(item[1] || ""));
+    if (yamlBlock) {
+      const start = yamlBlock.index ?? 0;
+      blocks.push({ start, end: start + yamlBlock[0].length, body: yamlBlock[1] || "" });
+    }
+  }
+  blocks.sort((a, b) => a.start - b.start);
+  const trailer: Record<string, unknown> = {};
+  for (const block of blocks) Object.assign(trailer, parseTrailerPayload(block.body));
+  let visible = text;
+  for (const block of [...blocks].reverse()) {
+    visible = visible.slice(0, block.start) + visible.slice(block.end);
+  }
+  return { visible: visible.trim(), trailer };
 }
 
 export async function loadCard(fs: R2Fs, member: CastMember): Promise<CharacterCard> {
@@ -734,6 +870,7 @@ export async function listSessions(fs: R2Fs): Promise<SessionInfo[]> {
 export async function deleteSession(fs: R2Fs, sessionId: string): Promise<void> {
   await fs.del(`sessions/${sessionId}/transcript.jsonl`);
   await fs.del(`sessions/${sessionId}/meta.json`);
+  await fs.del(`sessions/${sessionId}/events.jsonl`);
 }
 
 export async function deleteWorkspace(fs: R2Fs): Promise<void> {

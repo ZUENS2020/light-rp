@@ -19,6 +19,7 @@ PROMPT_FILES = (
     "layers/context.md",
     "layers/volatile.md",
     "layers/card.md",
+    "layers/mini.md",
     "layers/lore.md",
     "layers/breach.md",
     "layers/breach_user.md",

@@ -1,6 +1,64 @@
-import type { CharacterCard, LoreEntry, MemoryStore, SceneState, WorldPack } from "./domain";
+import type { CastMember, CharacterCard, LoreEntry, MemoryStore, SceneState, WorldPack } from "./domain";
 import { ensembleActing, sceneYaml, substituteCard } from "./domain";
 import type { PromptLibrary } from "./prompts";
+
+function clipText(text: string, limit = 450): string {
+  const trimmed = text.trim();
+  return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit - 1)}…`;
+}
+
+export function storySummary(messages: { role: string; content: string }[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const item = messages[i];
+    if (item.role === "system" && item.content.trim()) return item.content.trim();
+  }
+  return "";
+}
+
+export function resolvePrimaryId(pack: WorldPack, scene: SceneState): string | null {
+  if (pack.primary) {
+    const member = pack.cast.find((item) => item.id === pack.primary || item.name === pack.primary);
+    return member?.id || pack.primary;
+  }
+  for (const ident of scene.present) {
+    const needle = ident.toLowerCase();
+    const member = pack.cast.find((item) => [item.id, item.name, ...item.aliases].some((name) => name.toLowerCase() === needle));
+    if (member) return member.id;
+  }
+  const present = pack.cast.find((item) => item.present);
+  return present?.id || pack.cast[0]?.id || null;
+}
+
+function keywordHit(member: CastMember, haystack: string): boolean {
+  const hay = haystack.toLowerCase();
+  return [member.id, member.name, ...member.aliases].some((name) => name && hay.includes(name.toLowerCase()));
+}
+
+export function selectMiniMembers(
+  pack: WorldPack,
+  scene: SceneState,
+  haystack: string,
+  mentionIds: string[],
+  primaryId: string | null,
+): CastMember[] {
+  const mentioned = new Set(mentionIds.map((id) => id.toLowerCase()));
+  const present = new Set(
+    pack.cast.filter((member) => scene.present.some((id) => [member.id, member.name, ...member.aliases].some((name) => name.toLowerCase() === id.toLowerCase()))).map((m) => m.id),
+  );
+  const out: CastMember[] = [];
+  const seen = new Set<string>();
+  for (const member of pack.cast) {
+    if (primaryId && member.id === primaryId) continue;
+    const hit = keywordHit(member, haystack) || mentioned.has(member.id.toLowerCase());
+    if (present.has(member.id) || hit) {
+      if (!seen.has(member.id)) {
+        seen.add(member.id);
+        out.push(member);
+      }
+    }
+  }
+  return out;
+}
 
 function renderCastIndex(pack: WorldPack, presentIds: string[]): string {
   const present = new Set(presentIds.map((id) => id.toLowerCase()));
@@ -35,6 +93,20 @@ export function renderCard(library: PromptLibrary, card: CharacterCard, userName
     .trim();
 }
 
+function renderMini(library: PromptLibrary, pack: WorldPack, card: CharacterCard, userName: string): string {
+  const filled = substituteCard(card, userName);
+  const member = pack.cast.find((item) => item.id === filled.id);
+  return library
+    .render("layers/mini.md", {
+      id: filled.id,
+      name: filled.name,
+      summary: clipText((member?.blurb || "") || filled.personality),
+      behavior_notes: clipText(filled.behavior),
+      relations: clipText(filled.speech),
+    })
+    .trim();
+}
+
 function renderLore(library: PromptLibrary, entries: LoreEntry[], userName: string, fallbackChar: string): string {
   return entries
     .map((entry) => {
@@ -59,6 +131,8 @@ export function assembleSystem(
   loreEntries: LoreEntry[],
   nmemRecall: string,
   extraSystem = "",
+  miniCards: CharacterCard[] = [],
+  summary = "",
 ): string {
   const userName = pack.player_name;
   const values: Record<string, string> = {
@@ -68,8 +142,10 @@ export function assembleSystem(
     memory: memory.snapWorld,
     scene: sceneYaml(scene),
     cards: presentCards.map((card) => renderCard(library, card, userName)).filter(Boolean).join("\n\n"),
-    lore: renderLore(library, loreEntries, userName, presentCards[0]?.name || ""),
+    minis: miniCards.map((card) => renderMini(library, pack, card, userName)).filter(Boolean).join("\n\n"),
+    lore: renderLore(library, loreEntries, userName, presentCards[0]?.name || miniCards[0]?.name || ""),
     nmem: nmemRecall,
+    summary,
     player_name: userName,
     world_id: pack.id,
     world_name: pack.name,

@@ -30,6 +30,7 @@ class WorldPack:
     cast: list[CastMember]
     lore_token_budget: int | None = None
     lore_scan_depth: int | None = None
+    primary: str | None = None
 
     @property
     def world_md(self) -> Path:
@@ -170,6 +171,7 @@ def load_world(root: Path) -> WorldPack:
         )
     world_id = str(merged.get("id") or root.name)
     space = merged.get("nmem_space")
+    primary = merged.get("primary")
     return WorldPack(
         root=root,
         world_id=world_id,
@@ -179,6 +181,7 @@ def load_world(root: Path) -> WorldPack:
         cast=cast,
         lore_token_budget=merged.get("lore_token_budget"),
         lore_scan_depth=merged.get("lore_scan_depth"),
+        primary=str(primary).strip() if primary else None,
     )
 
 

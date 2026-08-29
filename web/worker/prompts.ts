@@ -11,6 +11,7 @@ import stable from "../../src/lightrp/prompts/layers/stable.md?raw";
 import context from "../../src/lightrp/prompts/layers/context.md?raw";
 import volatile from "../../src/lightrp/prompts/layers/volatile.md?raw";
 import card from "../../src/lightrp/prompts/layers/card.md?raw";
+import mini from "../../src/lightrp/prompts/layers/mini.md?raw";
 import lore from "../../src/lightrp/prompts/layers/lore.md?raw";
 import breach from "../../src/lightrp/prompts/layers/breach.md?raw";
 import breachUser from "../../src/lightrp/prompts/layers/breach_user.md?raw";
@@ -30,6 +31,7 @@ const FILES: Record<string, string> = {
   "layers/context.md": context,
   "layers/volatile.md": volatile,
   "layers/card.md": card,
+  "layers/mini.md": mini,
   "layers/lore.md": lore,
   "layers/breach.md": breach,
   "layers/breach_user.md": breachUser,

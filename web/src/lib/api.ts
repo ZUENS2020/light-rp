@@ -42,6 +42,7 @@ export type WorldSummary = {
   path: string;
   nmem_space: string | null;
   player_name: string;
+  primary?: string | null;
   latest_session: string | null;
   latest_nmem_space?: string | null;
   session_count?: number;
@@ -105,7 +106,16 @@ export type PlayState = {
   nmem_available: boolean;
   warnings: string[];
   opening: string;
-  scene: { location: string; time: string; present: string[]; notes: string };
+  scene: {
+    location: string;
+    time: string;
+    season?: string;
+    weather?: string;
+    present: string[];
+    scene?: string;
+    ongoing?: string[];
+    notes: string;
+  };
   memory: string;
   player: string;
   messages: { role: string; content: string; ts: string }[];
@@ -169,6 +179,7 @@ export const api = {
       nmem_space?: string | null;
       world_text?: string;
       player_text?: string;
+      primary?: string | null;
     },
   ) => request<WorldSummary>(`/api/worlds/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   sessions: (id: string) => request<{ sessions: SessionInfo[] }>(`/api/worlds/${id}/sessions`),

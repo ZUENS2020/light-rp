@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from lightrp.assemble import assemble_system, render_cast_index, render_lore, with_breach_phi
+from lightrp.assemble import assemble_system, render_cast_index, render_lore, select_mini_members, with_breach_phi
 from lightrp.lorebook import LoreEntry, load_lorebook, trigger_lore
 from lightrp.memory import MemoryStore
 from lightrp.paths import find_example_world, package_prompts_dir
@@ -51,3 +51,34 @@ def test_lore_uses_entry_char_name() -> None:
     text = render_lore(lib, entries, "玩家", "阿澜")
     assert "铃鹿 的秘密" in text
     assert "阿澜" not in text
+
+
+def test_old_scene_notes_become_scene() -> None:
+    pack = load_world(find_example_world())
+    scene = load_scene(pack.scene_md)
+    assert "海风很大" in (scene.scene or scene.notes)
+    assert scene.location
+
+
+def test_mini_activation_keeps_present_and_mentions() -> None:
+    pack = load_world(find_example_world())
+    scene = load_scene(pack.scene_md)
+    scene.present = ["anlan", "xiaowu"]
+    minis = select_mini_members(pack, scene, haystack="去茶铺", mention_ids=[], primary_id="anlan")
+    assert {item.id for item in minis} == {"xiaowu"}
+    mentioned = select_mini_members(pack, scene, haystack="", mention_ids=["xiaowu"], primary_id="anlan")
+    assert {item.id for item in mentioned} == {"xiaowu"}
+
+
+def test_full_and_mini_in_prompt() -> None:
+    pack = load_world(find_example_world())
+    scene = load_scene(pack.scene_md)
+    memory = MemoryStore(pack.root)
+    memory.load_from_disk()
+    lib = PromptLibrary(package_dir=package_prompts_dir())
+    primary = [pack.load_member_card(pack.member("anlan"))]  # type: ignore[arg-type]
+    mini = [pack.load_member_card(pack.member("xiaowu"))]  # type: ignore[arg-type]
+    prompt = assemble_system(lib, pack, memory, scene, primary, [], nmem_recall="", mini_cards=mini)
+    assert "多人场角色卡" in prompt
+    assert "小雾" in prompt and "· Mini" in prompt
+    assert prompt.index("阿澜") < prompt.index("· Mini")

@@ -1,6 +1,7 @@
-import { assembleSystem, breachPhi, breachSystem, type LlmMessage } from "./assemble";
+import { assembleSystem, breachPhi, breachSystem, resolvePrimaryId, selectMiniMembers, storySummary, type LlmMessage } from "./assemble";
 import {
   aliasMap,
+  appendEvents,
   applyMemory,
   applyScenePatch,
   ensembleActing,
@@ -9,7 +10,6 @@ import {
   loadCard,
   loadMemory,
   loadSession,
-  memberPresent,
   parseMentions,
   parseScene,
   parseTrailer,
@@ -18,6 +18,8 @@ import {
   sceneLoreHaystack,
   sceneYaml,
   substituteCard,
+  trailerEvents,
+  trailerMemoryCandidates,
   triggerLore,
   type CharacterCard,
   type ChatMessage,
@@ -33,7 +35,10 @@ import {
   resolveSpaceId,
   saveNmemIndex,
   searchNmem,
+  sessionThreadId,
   syncFactToNmem,
+  syncThreadTurn,
+  syncTurnBodyToNmem,
 } from "./nmem";
 import { memoryToolSpec, PromptLibrary } from "./prompts";
 import type { R2Fs } from "./r2";
@@ -49,10 +54,9 @@ export type TurnOut = {
   nmem_synced: boolean;
 };
 
-async function presentCards(fs: R2Fs, pack: WorldPack, scene: SceneState): Promise<CharacterCard[]> {
+async function loadMemberCards(fs: R2Fs, members: WorldPack["cast"]): Promise<CharacterCard[]> {
   const cards: CharacterCard[] = [];
-  for (const member of pack.cast) {
-    if (!memberPresent(member, scene.present)) continue;
+  for (const member of members) {
     try {
       cards.push(await loadCard(fs, member));
     } catch {
@@ -62,14 +66,21 @@ async function presentCards(fs: R2Fs, pack: WorldPack, scene: SceneState): Promi
   return cards;
 }
 
-async function triggered(fs: R2Fs, pack: WorldPack, scene: SceneState, messages: ChatMessage[], extra: string, settings: AppSettings) {
-  const cards = await presentCards(fs, pack, scene);
+async function triggered(
+  fs: R2Fs,
+  pack: WorldPack,
+  scene: SceneState,
+  messages: ChatMessage[],
+  extra: string,
+  settings: AppSettings,
+  cards: CharacterCard[],
+) {
   const depth = pack.lore_scan_depth || settings.lore_scan_depth;
   const budget = pack.lore_token_budget || settings.lore_token_budget;
   const recent = messages.slice(-depth);
   const haystack = `${recent.map((m) => `${m.role}: ${m.content}`).join("\n")}\n${extra}`;
   const lore = triggerLore(await loadAllLore(fs, cards), haystack, sceneLoreHaystack(pack, scene), budget);
-  return { cards, lore };
+  return lore;
 }
 
 export function openingFor(cards: CharacterCard[], playerName: string): string {
@@ -87,6 +98,7 @@ export async function runTurn(
   userText: string,
   settings: AppSettings,
   overlays: Record<string, string>,
+  waitUntil?: (job: Promise<unknown>) => void,
 ): Promise<TurnOut> {
   const warnings: string[] = [];
   const loaded = await loadSession(fs, sessionId);
@@ -107,12 +119,28 @@ export async function runTurn(
       warnings.push(`nmem 召回失败: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  const { cards, lore } = await triggered(fs, pack, scene, loaded.messages, userText, settings);
   const mentionIds = parseMentions(userText, aliasMap(pack.cast));
+  const primaryId = resolvePrimaryId(pack, scene);
+  const primaryMember = primaryId ? pack.cast.find((item) => item.id === primaryId) : undefined;
+  const primaryCards = primaryMember ? await loadMemberCards(fs, [primaryMember]) : [];
+  const haystack = `${userText}\n${loaded.messages.slice(-8).map((m) => m.content).join("\n")}\n${scene.location} ${scene.time} ${scene.scene || scene.notes} ${scene.present.join(" ")}`;
+  const miniCards = await loadMemberCards(fs, selectMiniMembers(pack, scene, haystack, mentionIds, primaryId));
+  const lore = await triggered(fs, pack, scene, loaded.messages, userText, settings, [...primaryCards, ...miniCards]);
   const promptUser = mentionPrompt(pack, userText, mentionIds);
   const breach = settings.llm.breach;
-  const system = assembleSystem(library, pack, memory, scene, cards, lore, recall, breachSystem(library, breach));
-  const cardPhi = cards
+  const system = assembleSystem(
+    library,
+    pack,
+    memory,
+    scene,
+    primaryCards,
+    lore,
+    recall,
+    breachSystem(library, breach),
+    miniCards,
+    storySummary(loaded.messages),
+  );
+  const cardPhi = primaryCards
     .map((card) => {
       const filled = substituteCard(card, pack.player_name);
       return filled.post_history_instructions.trim() ? ensembleActing(filled.post_history_instructions, filled.name) : "";
@@ -147,9 +175,13 @@ export async function runTurn(
   );
   const { visible, trailer } = parseTrailer(gm.text);
   let nextScene = scene;
-  if (trailer.scene && typeof trailer.scene === "object") {
-    nextScene = applyScenePatch(scene, trailer.scene as Record<string, unknown>);
+  if (Object.keys(trailer).length) {
+    nextScene = applyScenePatch(scene, trailer);
     await fs.put("SCENE.md", sceneYaml(nextScene));
+    await appendEvents(fs, sessionId, trailerEvents(trailer));
+    for (const candidate of trailerMemoryCandidates(trailer)) {
+      await runMemoryTool(fs, memory, settings, "memory", { action: "add", target: "world", content: candidate });
+    }
   }
   const memoryOps = Array.isArray(trailer.memory) ? trailer.memory : [];
   for (const raw of memoryOps) {
@@ -178,15 +210,42 @@ export async function runTurn(
     { role: "user", content: userText, ts: nowIso() },
     { role: "assistant", content: visible, ts: nowIso() },
   ];
-  await saveSession(fs, sessionId, nextMessages, { thread_id: loaded.thread_id, nmem_space: loaded.nmem_space });
+  let threadId = loaded.thread_id;
+  let nmemSynced = false;
+  if (spaceId && listed.available) {
+    threadId = threadId || sessionThreadId(pack.id, sessionId);
+    try {
+      await syncTurnBodyToNmem(env, spaceId, pack.id, sessionId, userText, visible);
+      nmemSynced = true;
+    } catch (err) {
+      warnings.push(`nmem 正文写入失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const threadJob = syncThreadTurn(
+      env,
+      spaceId,
+      loaded.thread_id,
+      threadId,
+      `Light RP / ${pack.name} / ${sessionId}`,
+      [
+        { role: "user", content: userText },
+        { role: "assistant", content: visible },
+      ],
+    ).catch((err) => {
+      warnings.push(`nmem thread 同步失败: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    const willCompact = nextMessages.length >= settings.compact_after_turns;
+    if (waitUntil && !willCompact) waitUntil(threadJob);
+    else await threadJob;
+  }
+  await saveSession(fs, sessionId, nextMessages, { thread_id: threadId, nmem_space: loaded.nmem_space });
   if (nextMessages.length >= settings.compact_after_turns) {
     try {
-      await runCompact(env, fs, memory, nextMessages, sessionId, loaded, library, settings, pack.id);
+      await runCompact(env, fs, memory, nextMessages, sessionId, { ...loaded, thread_id: threadId }, library, settings, pack.id, waitUntil);
     } catch (err) {
       warnings.push(`compact failed: ${String(err)}`);
     }
   }
-  return { text: visible, scene: nextScene, messages: nextMessages, spotlight_ids: spotlightIds, warnings, nmem_synced: Boolean(spaceId && listed.available) };
+  return { text: visible, scene: nextScene, messages: nextMessages, spotlight_ids: spotlightIds, warnings, nmem_synced: nmemSynced };
 }
 
 function mentionPrompt(pack: WorldPack, userText: string, mentionIds: string[]): string {
@@ -240,6 +299,7 @@ export async function runCompact(
   library: PromptLibrary,
   settings: AppSettings,
   worldId = "",
+  waitUntil?: (job: Promise<unknown>) => void,
 ): Promise<string> {
   const transcript = messages.map((m) => `${m.role}: ${m.content}`).join("\n");
   const values: Record<string, string> = {
@@ -295,7 +355,29 @@ export async function runCompact(
   const kept = keep ? messages.slice(-keep) : [];
   const next = [{ role: "system", content: summary, ts: nowIso() }, ...kept];
   await saveSession(fs, sessionId, next, loaded);
+  if (spaceId && listed.available && summary) {
+    const job = addSummaryToNmem(env, spaceId, worldId || "world", sessionId, summary, loaded.thread_id).catch(
+      () => undefined,
+    );
+    if (waitUntil) waitUntil(job);
+    else await job;
+  }
   return summary;
+}
+
+async function addSummaryToNmem(
+  env: Env,
+  spaceId: string,
+  worldId: string,
+  sessionId: string,
+  summary: string,
+  threadId: string | null,
+): Promise<void> {
+  await syncTurnBodyToNmem(env, spaceId, worldId, sessionId, "（压缩摘要）", summary);
+  if (!threadId) return;
+  await syncThreadTurn(env, spaceId, threadId, threadId, `Light RP / ${worldId} / ${sessionId}`, [
+    { role: "system", content: summary },
+  ]);
 }
 
 function asIdList(value: unknown): string[] {

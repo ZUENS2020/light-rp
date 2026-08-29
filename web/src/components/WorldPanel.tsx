@@ -1,59 +1,51 @@
 import type { PlayState } from "../lib/api";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "./ui/accordion";
 
 export function WorldPanel({ state }: { state: PlayState }) {
-  const present = new Set(state.scene.present);
+  const scene = state.scene;
+  const present = new Set(scene.present);
+  const body = scene.scene || scene.notes;
   return (
-    <Accordion type="multiple" defaultValue={["scene", "cast", "memory"]} className="w-full">
-      <AccordionItem value="scene">
-        <AccordionTrigger>场景</AccordionTrigger>
-        <AccordionContent>
-          <dl className="space-y-3 font-ui text-sm">
+    <div className="space-y-6 font-ui text-sm">
+      <section className="space-y-3">
+        <h2 className="font-display text-base font-semibold">当前场面</h2>
+        <dl className="space-y-3">
+          <div>
+            <dt className="text-secondary">时间</dt>
+            <dd>{[scene.time, scene.season].filter(Boolean).join(" · ") || "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-secondary">天气</dt>
+            <dd>{scene.weather || "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-secondary">地点</dt>
+            <dd>{scene.location || "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-secondary">场面</dt>
+            <dd className="whitespace-pre-wrap font-body">{body || "—"}</dd>
+          </div>
+          {scene.ongoing && scene.ongoing.length ? (
             <div>
-              <dt className="text-secondary">地点</dt>
-              <dd>{state.scene.location || "—"}</dd>
+              <dt className="text-secondary">进行中</dt>
+              <dd>{scene.ongoing.join("；")}</dd>
             </div>
-            <div>
-              <dt className="text-secondary">时间</dt>
-              <dd>{state.scene.time || "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-secondary">备注</dt>
-              <dd className="whitespace-pre-wrap">{state.scene.notes || "—"}</dd>
-            </div>
-          </dl>
-        </AccordionContent>
-      </AccordionItem>
-      <AccordionItem value="cast">
-        <AccordionTrigger>演员表</AccordionTrigger>
-        <AccordionContent>
-          <ul className="space-y-3">
-            {state.world.cast.map((member) => (
-              <li key={member.id}>
-                <p className="font-ui text-sm font-medium">
-                  {member.name}{" "}
-                  <span className="text-secondary">{present.has(member.id) ? "· 在场" : "· 不在场"}</span>
-                </p>
-                {member.blurb ? <p className="text-sm text-secondary">{member.blurb}</p> : null}
-              </li>
-            ))}
-          </ul>
-        </AccordionContent>
-      </AccordionItem>
-      <AccordionItem value="memory">
-        <AccordionTrigger>记忆</AccordionTrigger>
-        <AccordionContent>
-          <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-foreground">
-            {state.memory || "（空）"}
-          </pre>
-        </AccordionContent>
-      </AccordionItem>
-      <AccordionItem value="player">
-        <AccordionTrigger>玩家</AccordionTrigger>
-        <AccordionContent>
-          <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed">{state.player || "（空）"}</pre>
-        </AccordionContent>
-      </AccordionItem>
-    </Accordion>
+          ) : null}
+        </dl>
+      </section>
+      <section className="space-y-3">
+        <h2 className="font-display text-base font-semibold">在场</h2>
+        <ul className="space-y-2">
+          {state.world.cast.map((member) => (
+            <li key={member.id} className={present.has(member.id) ? "" : "text-secondary"}>
+              <p className="font-medium">
+                {member.name}
+                <span className="font-normal text-secondary">{present.has(member.id) ? " · 在场" : " · 不在场"}</span>
+              </p>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
   );
 }

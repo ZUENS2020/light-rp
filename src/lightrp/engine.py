@@ -5,7 +5,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lightrp.assemble import assemble_system, breach_phi, breach_system, memory_tool_spec
+from lightrp.assemble import (
+    assemble_system,
+    breach_phi,
+    breach_system,
+    memory_tool_spec,
+    resolve_primary_id,
+    select_mini_members,
+    story_summary,
+)
 from lightrp.cards import CharacterCard, ensemble_acting
 from lightrp.compact import compact_session, tool_loop
 from lightrp.config import AppConfig
@@ -15,8 +23,8 @@ from lightrp.memory import MemoryStore
 from lightrp.nmem import NmemClient, NmemError
 from lightrp.paths import default_user_prompts_dir, package_prompts_dir
 from lightrp.promptlib import PromptLibrary
-from lightrp.scene import SceneState, apply_scene_patch, load_scene, save_scene, scene_lore_haystack
-from lightrp.session import Session, alias_map, parse_mentions, parse_trailer
+from lightrp.scene import SceneState, apply_scene_patch, load_scene, save_scene, scene_lore_haystack, trailer_events, trailer_memory_candidates
+from lightrp.session import Session, alias_map, append_events, parse_mentions, parse_trailer
 from lightrp.world import WorldPack
 
 
@@ -110,8 +118,7 @@ class Engine:
         greetings = [card.substitute(self.pack.player_name).first_mes.strip() for card in cards]
         return "\n\n".join(text for text in greetings if text)
 
-    def _present_cards(self) -> list[CharacterCard]:
-        members = self.pack.present_members(self.scene.present)
+    def _load_cards(self, members) -> list[CharacterCard]:
         cards: list[CharacterCard] = []
         for member in members:
             try:
@@ -119,6 +126,17 @@ class Engine:
             except FileNotFoundError:
                 continue
         return cards
+
+    def _present_cards(self) -> list[CharacterCard]:
+        return self._load_cards(self.pack.present_members(self.scene.present))
+
+    def _cast_for_turn(self, user_text: str, mention_ids: list[str]) -> tuple[list[CharacterCard], list[CharacterCard]]:
+        primary_id = resolve_primary_id(self.pack, self.scene)
+        primary_member = self.pack.member(primary_id) if primary_id else None
+        primary = self._load_cards([primary_member] if primary_member else [])
+        haystack = f"{user_text}\n{self.session.haystack(8)}\n{self.scene.haystack()}"
+        minis = self._load_cards(select_mini_members(self.pack, self.scene, haystack, mention_ids, primary_id))
+        return primary, minis
 
     def _all_lore(self, cards: list[CharacterCard]) -> list[LoreEntry]:
         entries: list[LoreEntry] = []
@@ -128,16 +146,14 @@ class Engine:
             entries.extend(load_lorebook(path, source=path.stem))
         return entries
 
-    def _triggered_lore(self, extra_text: str = "") -> tuple[list[CharacterCard], list[LoreEntry]]:
-        cards = self._present_cards()
+    def _triggered_lore(self, extra_text: str = "", cards: list[CharacterCard] | None = None) -> list[LoreEntry]:
         depth = self.pack.lore_scan_depth or self.config.lore_scan_depth
         budget = self.pack.lore_token_budget or self.config.lore_token_budget
         haystack = self.session.haystack(depth)
         if extra_text:
             haystack = f"{haystack}\n{extra_text}"
         scene_text = scene_lore_haystack(self.scene, self.pack.cast)
-        entries = trigger_lore(self._all_lore(cards), haystack, scene_text, budget)
-        return cards, entries
+        return trigger_lore(self._all_lore(cards or self._present_cards()), haystack, scene_text, budget)
 
     def _nmem_recall(self, query: str) -> str:
         if not self.nmem.can_write:
@@ -178,7 +194,8 @@ class Engine:
         self.warnings = []
         aliases = alias_map(self.pack.cast)
         mention_ids = parse_mentions(user_text, aliases)
-        cards, lore = self._triggered_lore(user_text)
+        primary_cards, mini_cards = self._cast_for_turn(user_text, mention_ids)
+        lore = self._triggered_lore(user_text, primary_cards + mini_cards)
         recall = self._nmem_recall(user_text)
         breach = self.config.llm.breach
         system = assemble_system(
@@ -186,13 +203,15 @@ class Engine:
             self.pack,
             self.memory,
             self.scene,
-            cards,
+            primary_cards,
             lore,
             recall,
             extra_system=breach_system(self.prompts, breach),
+            mini_cards=mini_cards,
+            summary=story_summary(self.session.messages),
         )
         phi_bits = [breach_phi(self.prompts, breach)]
-        for card in cards:
+        for card in primary_cards:
             filled = card.substitute(self.pack.player_name)
             if filled.post_history_instructions.strip():
                 phi_bits.append(ensemble_acting(filled.post_history_instructions, filled.name))
@@ -215,9 +234,12 @@ class Engine:
             phi=phi,
         )
         visible, trailer = parse_trailer(gm.text)
-        if isinstance(trailer.get("scene"), dict):
-            self.scene = apply_scene_patch(self.scene, trailer["scene"])
+        if trailer:
+            self.scene = apply_scene_patch(self.scene, trailer)
             save_scene(self.pack.scene_md, self.scene)
+            append_events(self.session.root, trailer_events(trailer))
+            for candidate in trailer_memory_candidates(trailer):
+                self.run_memory_tool("memory", {"action": "add", "target": "world", "content": candidate})
         for raw in trailer.get("memory") or []:
             if isinstance(raw, dict):
                 self.run_memory_tool("memory", raw)

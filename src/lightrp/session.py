@@ -142,6 +142,7 @@ def list_sessions(world_sessions: Path) -> list[Session]:
 
 MENTION_RE = re.compile(r"@([^\s@]+)")
 FENCE_RE = re.compile(r"```lightrp\s*\n(.*?)```", re.S | re.I)
+RP_STATE_RE = re.compile(r"<rp_state>\s*(.*?)</rp_state>", re.S | re.I)
 
 
 def parse_mentions(text: str, aliases: dict[str, str]) -> list[str]:
@@ -163,21 +164,42 @@ def alias_map(members) -> dict[str, str]:
     return mapping
 
 
-def parse_trailer(text: str) -> tuple[str, dict[str, Any]]:
+def _load_trailer_payload(raw: str) -> dict[str, Any]:
     import yaml
 
-    match = FENCE_RE.search(text)
-    if not match:
-        return text.strip(), {}
-    raw = match.group(1).strip()
-    visible = (text[: match.start()] + text[match.end() :]).strip()
     try:
-        payload = yaml.safe_load(raw) or {}
+        payload = yaml.safe_load(raw.strip()) or {}
     except yaml.YAMLError:
         try:
-            payload = json.loads(raw)
+            payload = json.loads(raw.strip())
         except json.JSONDecodeError:
             payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
-    return visible, payload
+    return payload if isinstance(payload, dict) else {}
+
+
+def parse_trailer(text: str) -> tuple[str, dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    visible = text
+    for pattern in (RP_STATE_RE, FENCE_RE):
+        matches = list(pattern.finditer(visible))
+        for match in reversed(matches):
+            payloads.append(_load_trailer_payload(match.group(1)))
+            visible = visible[: match.start()] + visible[match.end() :]
+    merged: dict[str, Any] = {}
+    for payload in reversed(payloads):
+        merged.update(payload)
+    return visible.strip(), merged
+
+
+def append_events(session_root: Path, events: list[dict[str, Any]]) -> None:
+    if not events:
+        return
+    path = Path(session_root) / "events.jsonl"
+    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    lines = [line for line in existing.splitlines() if line.strip()]
+    ts = _now()
+    for item in events:
+        rec = dict(item)
+        rec.setdefault("ts", ts)
+        lines.append(json.dumps(rec, ensure_ascii=False))
+    path.write_text(("\n".join(lines) + "\n") if lines else "", encoding="utf-8")
