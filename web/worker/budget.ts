@@ -16,11 +16,17 @@ export type HistoryBudget = {
   protect_recent_turns: number;
 };
 
+export type MemorySplitConfig = {
+  world: number;
+  player: number;
+};
+
 export type ContextConfig = {
   max_tokens: number;
   generation_reserve: number;
   tool_reserve: number;
   budget: SectionBudget;
+  memory_split: MemorySplitConfig;
   history: HistoryBudget;
 };
 
@@ -75,11 +81,17 @@ export const DEFAULT_SECTION_BUDGET: SectionBudget = {
   summary: 2500,
 };
 
+export const DEFAULT_MEMORY_SPLIT: MemorySplitConfig = {
+  world: 0.6,
+  player: 0.4,
+};
+
 export const DEFAULT_CONTEXT: ContextConfig = {
   max_tokens: 32768,
   generation_reserve: 4096,
   tool_reserve: 1500,
   budget: { ...DEFAULT_SECTION_BUDGET },
+  memory_split: { ...DEFAULT_MEMORY_SPLIT },
   history: { use_remaining: true, protect_recent_turns: 6 },
 };
 
@@ -141,6 +153,77 @@ export function effectiveGenerationReserve(cfg: ContextConfig, llmMaxTokens = 0)
   return Math.max(cfg.generation_reserve, llmMaxTokens || 0);
 }
 
+export function parseMemorySplit(raw: Partial<MemorySplitConfig> | null | undefined): MemorySplitConfig {
+  const data = raw || {};
+  const world = Number(data.world);
+  const player = Number(data.player);
+  if (!Number.isFinite(world) || !Number.isFinite(player) || world <= 0 || player <= 0) {
+    return { ...DEFAULT_MEMORY_SPLIT };
+  }
+  const sum = world + player;
+  return { world: world / sum, player: player / sum };
+}
+
+export function splitMemoryBudget(total: number, split: MemorySplitConfig): { world: number; player: number } {
+  const normalized = parseMemorySplit(split);
+  const world = Math.max(0, Math.floor(Math.max(0, total) * normalized.world));
+  return { world, player: Math.max(0, Math.max(0, total) - world) };
+}
+
+export function fitMemorySections(
+  worldText: string,
+  playerText: string,
+  totalBudget: number,
+  split: MemorySplitConfig = DEFAULT_MEMORY_SPLIT,
+): {
+  world: string;
+  player: string;
+  world_tokens: number;
+  player_tokens: number;
+  truncated_world: boolean;
+  truncated_player: boolean;
+} {
+  const caps = splitMemoryBudget(totalBudget, split);
+  let worldCut = truncateToTokens(worldText || "", caps.world);
+  let playerCut = truncateToTokens(playerText || "", caps.player);
+  let worldTokens = estimateTokens(worldCut.text);
+  let playerTokens = estimateTokens(playerCut.text);
+
+  const worldUnused = Math.max(0, caps.world - worldTokens);
+  const playerUnused = Math.max(0, caps.player - playerTokens);
+
+  if (worldUnused > 0 && estimateTokens(playerText || "") > playerTokens) {
+    playerCut = truncateToTokens(playerText || "", caps.player + worldUnused);
+    playerTokens = estimateTokens(playerCut.text);
+  } else if (playerUnused > 0 && estimateTokens(worldText || "") > worldTokens) {
+    worldCut = truncateToTokens(worldText || "", caps.world + playerUnused);
+    worldTokens = estimateTokens(worldCut.text);
+  }
+
+  // Safety: never exceed total memory budget
+  if (worldTokens + playerTokens > totalBudget) {
+    const remainForPlayer = Math.max(0, totalBudget - worldTokens);
+    if (playerTokens > remainForPlayer) {
+      playerCut = truncateToTokens(playerCut.text, remainForPlayer);
+      playerTokens = estimateTokens(playerCut.text);
+    }
+    if (worldTokens + playerTokens > totalBudget) {
+      const remainForWorld = Math.max(0, totalBudget - playerTokens);
+      worldCut = truncateToTokens(worldCut.text, remainForWorld);
+      worldTokens = estimateTokens(worldCut.text);
+    }
+  }
+
+  return {
+    world: worldCut.text,
+    player: playerCut.text,
+    world_tokens: worldTokens,
+    player_tokens: playerTokens,
+    truncated_world: worldCut.truncated || estimateTokens(worldText || "") > worldTokens,
+    truncated_player: playerCut.truncated || estimateTokens(playerText || "") > playerTokens,
+  };
+}
+
 export function parseContextConfig(raw: Partial<ContextConfig> | null | undefined): ContextConfig {
   const data = raw || {};
   const budget = { ...DEFAULT_SECTION_BUDGET, ...(data.budget || {}) };
@@ -150,6 +233,7 @@ export function parseContextConfig(raw: Partial<ContextConfig> | null | undefine
     generation_reserve: Number(data.generation_reserve ?? DEFAULT_CONTEXT.generation_reserve),
     tool_reserve: Number(data.tool_reserve ?? DEFAULT_CONTEXT.tool_reserve),
     budget,
+    memory_split: parseMemorySplit(data.memory_split),
     history,
   };
 }

@@ -4,7 +4,6 @@ import {
   parseContextConfig,
   parseMiniConfig,
   routeMemoryCandidate,
-  buildContextReport,
   type ContextReport,
 } from "./budget";
 import {
@@ -233,6 +232,15 @@ export async function runTurn(
   const promptUser = mentionPrompt(pack, userText, mentionIds);
   const breach = settings.llm.breach;
   const loreBudget = pack.lore_token_budget || settings.lore_token_budget || contextCfg.budget.lore;
+  const cardPhi = primaryCards
+    .map((card) => {
+      const filled = substituteCard(card, pack.player_name);
+      return filled.post_history_instructions.trim() ? ensembleActing(filled.post_history_instructions, filled.name) : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  const extraSystem = breachSystem(library, breach);
+  const phi = [breachPhi(library, breach), cardPhi].filter(Boolean).join("\n\n");
   const assembled = assembleBudgeted(
     library,
     pack,
@@ -245,36 +253,16 @@ export async function runTurn(
       .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
       .map((m) => ({ role: m.role, content: m.content })),
     promptUser,
-    breachSystem(library, breach),
+    extraSystem,
     minis,
     storySummary(loaded.messages),
     contextCfg,
     miniCfg,
     loreBudget,
     settings.llm.max_tokens,
+    phi,
   );
-  const cardPhi = primaryCards
-    .map((card) => {
-      const filled = substituteCard(card, pack.player_name);
-      return filled.post_history_instructions.trim() ? ensembleActing(filled.post_history_instructions, filled.name) : "";
-    })
-    .filter(Boolean)
-    .join("\n\n");
-  const phi = [breachPhi(library, breach), cardPhi].filter(Boolean).join("\n\n");
-  const contextReport = buildContextReport(
-    contextCfg,
-    assembled.report.sections,
-    assembled.history,
-    assembled.report.history.truncated,
-    promptUser,
-    {
-      llmMaxTokens: settings.llm.max_tokens,
-      phiText: phi,
-      extraSystem: breachSystem(library, breach),
-    },
-  );
-  await saveContextReport(fs, sessionId, contextReport);
-  assembled.report = contextReport;
+  await saveContextReport(fs, sessionId, assembled.report);
   const messages: LlmMessage[] = [
     { role: "system", content: assembled.system },
     ...assembled.history.map((m) => ({ role: m.role, content: m.content })),
@@ -349,7 +337,13 @@ export async function runTurn(
     memories: remembered,
     state_before: scene,
     state_after: nextScene,
-    token_usage: { total: assembled.report.total, max: assembled.report.max_tokens },
+    token_usage: {
+      estimated_total: assembled.report.total,
+      max: assembled.report.max_tokens,
+      generation_reserve: assembled.report.generation_reserve,
+      tool_reserve: assembled.report.tool_reserve,
+      phi: assembled.report.phi_tokens,
+    },
     warnings,
     ts: nowIso(),
   });

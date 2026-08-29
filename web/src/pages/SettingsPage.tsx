@@ -36,6 +36,7 @@ function toForm(data: AppSettings): FormState {
       max_tokens: 32768,
       generation_reserve: 4096,
       tool_reserve: 1500,
+      memory_split: { world: 0.6, player: 0.4 },
       budget: {},
       history: { use_remaining: true, protect_recent_turns: 6 },
     },

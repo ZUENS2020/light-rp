@@ -174,6 +174,81 @@ def test_context_config_defaults() -> None:
     assert cfg.max_tokens == 32768
     assert cfg.budget.lore == 3000
     assert cfg.tool_reserve == 1500
+    assert cfg.memory_split.world == 0.6
     assert isinstance(cfg.budget, SectionBudget)
     soft = section_soft_cap(cfg, "你好", llm_max_tokens=8192)
     assert soft == cfg.max_tokens - 8192 - cfg.tool_reserve - estimate_tokens("你好")
+
+
+def test_memory_split_preserves_player_memory() -> None:
+    from lightrp.budget import fit_memory_sections
+
+    world = "世界事实。" * 800  # huge
+    player = "玩家喜欢红茶。" * 40  # medium but would lose under world-first packing
+    fitted = fit_memory_sections(world, player, total_budget=1000)
+    assert fitted["world"]
+    assert fitted["player"]
+    assert fitted["world_tokens"] + fitted["player_tokens"] <= 1000
+    assert "红茶" in fitted["player"]
+
+
+def test_memory_split_reuses_unused_budget() -> None:
+    from lightrp.budget import fit_memory_sections
+
+    world = "世界设定很长很长。" * 600
+    player = "短"
+    fitted = fit_memory_sections(world, player, total_budget=1000)
+    # player tiny → unused player budget should expand world past 60%
+    assert fitted["player"]
+    assert fitted["world_tokens"] > 600  # more than base 60% of 1000
+    assert fitted["world_tokens"] + fitted["player_tokens"] <= 1000
+
+
+def test_memory_split_normalizes_weights() -> None:
+    from lightrp.budget import parse_memory_split, split_memory_budget
+
+    split = parse_memory_split({"world": 6, "player": 4})
+    assert abs(split.world - 0.6) < 1e-9
+    assert abs(split.player - 0.4) < 1e-9
+    world, player = split_memory_budget(1000, split)
+    assert world == 600
+    assert player == 400
+    fallback = parse_memory_split({"world": -1, "player": 0})
+    assert fallback.world == 0.6
+
+
+def test_phi_reduces_history_budget() -> None:
+    from lightrp.budget import history_token_budget
+
+    cfg = ContextConfig(max_tokens=10000, generation_reserve=1000, tool_reserve=1500)
+    without = history_token_budget(cfg, section_tokens=2000, user_input="hi", llm_max_tokens=1000, phi_tokens=0)
+    with_phi = history_token_budget(cfg, section_tokens=2000, user_input="hi", llm_max_tokens=1000, phi_tokens=3000)
+    assert with_phi < without
+
+
+def test_large_phi_uses_more_than_default_tool_reserve() -> None:
+    from lightrp.budget import build_context_report
+
+    cfg = ContextConfig(max_tokens=32768, generation_reserve=4096, tool_reserve=1500)
+    report = build_context_report(
+        cfg,
+        [],
+        [],
+        False,
+        "input",
+        llm_max_tokens=2048,
+        phi_text="破甲指令。" * 500,  # >> 1500 tokens
+    )
+    assert report.tool_reserve > 1500
+    assert report.phi_tokens == report.tool_reserve
+
+
+def test_llm_max_tokens_and_phi_both_reserved() -> None:
+    from lightrp.budget import history_token_budget, section_soft_cap
+
+    cfg = ContextConfig(max_tokens=32768, generation_reserve=4096, tool_reserve=1500)
+    soft = section_soft_cap(cfg, "你好", llm_max_tokens=8192, phi_tokens=2500, min_history_tokens=0)
+    hist = history_token_budget(cfg, section_tokens=0, user_input="你好", llm_max_tokens=8192, phi_tokens=2500)
+    ceiling = 32768 - 8192 - 2500 - estimate_tokens("你好")
+    assert soft == ceiling
+    assert hist == ceiling

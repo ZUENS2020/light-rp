@@ -75,10 +75,16 @@ class ContextHistoryBody(BaseModel):
     protect_recent_turns: int = Field(default=6, ge=0, le=200)
 
 
+class MemorySplitBody(BaseModel):
+    world: float = Field(default=0.6, gt=0)
+    player: float = Field(default=0.4, gt=0)
+
+
 class ContextSettingsBody(BaseModel):
     max_tokens: int = Field(default=32768, gt=0, le=500000)
     generation_reserve: int = Field(default=4096, gt=0, le=100000)
     tool_reserve: int = Field(default=1500, gt=0, le=100000)
+    memory_split: MemorySplitBody = Field(default_factory=MemorySplitBody)
     budget: ContextBudgetBody = Field(default_factory=ContextBudgetBody)
     history: ContextHistoryBody = Field(default_factory=ContextHistoryBody)
 

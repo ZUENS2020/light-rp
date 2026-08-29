@@ -14,11 +14,11 @@ from lightrp.budget import (
     default_context_config,
     default_mini_config,
     estimate_tokens,
+    fit_memory_sections,
     history_token_budget,
     section_soft_cap,
     trim_card_field_map,
     trim_history,
-    truncate_to_tokens,
 )
 from lightrp.cards import CharacterCard, ensemble_acting
 from lightrp.lorebook import LoreEntry
@@ -254,6 +254,7 @@ def assemble_budgeted(
     mini_cfg: MiniSelectConfig | None = None,
     lore_budget_override: int | None = None,
     llm_max_tokens: int = 0,
+    phi_text: str = "",
 ) -> AssembleResult:
     cfg = context_cfg or default_context_config()
     mcfg = mini_cfg or default_mini_config()
@@ -272,16 +273,20 @@ def assemble_budgeted(
     scene_text = scene.as_yaml()
     mem_world = memory.snapshot_text("world")
     mem_player = memory.snapshot_text("player")
-    memory_blob = "\n\n".join(part for part in (mem_world, mem_player) if part.strip())
-    memory_entries = [part for part in (mem_world, mem_player) if part.strip()]
-    memory_labels = [label for label, part in (("world", mem_world), ("player", mem_player)) if part.strip()]
+    fitted = fit_memory_sections(mem_world, mem_player, cfg.budget.memory, cfg.memory_split)
+    memory_blob = "\n\n".join(part for part in (fitted["world"], fitted["player"]) if part.strip())
+    memory_items = []
+    if fitted["world"].strip():
+        memory_items.append(f"world:{fitted['world_tokens']}")
+    if fitted["player"].strip():
+        memory_items.append(f"player:{fitted['player_tokens']}")
 
     values_seed = {
         "world": world_text,
         "cast": cast,
         "player": player,
-        "memory": mem_world,
-        "player_memory": mem_player,
+        "memory": fitted["world"],
+        "player_memory": fitted["player"],
         "scene": scene_text,
         "cards": cards_text,
         "minis": "\n\n".join(mini_entries),
@@ -324,28 +329,36 @@ def assemble_budgeted(
             name="memory",
             text=memory_blob,
             budget=cfg.budget.memory,
-            entries=memory_entries or ([memory_blob] if memory_blob else []),
-            entry_labels=memory_labels or (["memory"] if memory_blob else []),
-            items=memory_labels,
+            items=memory_items,
         ),
         SectionBlock(name="nmem", text=nmem_recall, budget=cfg.budget.nmem),
         SectionBlock(name="summary", text=summary, budget=cfg.budget.summary),
     ]
-    soft_cap = section_soft_cap(cfg, user_input, llm_max_tokens=llm_max_tokens, min_history_tokens=200)
+    phi_tokens = estimate_tokens(phi_text)
+    soft_cap = section_soft_cap(
+        cfg,
+        user_input,
+        llm_max_tokens=llm_max_tokens,
+        phi_tokens=phi_tokens,
+        min_history_tokens=200,
+    )
     texts, section_reports = apply_section_budgets(blocks, soft_cap=soft_cap)
 
-    # Split memory back into world / player snapshots when possible
     mem_text = texts.get("memory", "")
-    if mem_world and mem_world in mem_text:
-        snap_world = mem_world if estimate_tokens(mem_world) <= cfg.budget.memory else mem_text
-        snap_player = mem_player if mem_player and mem_player in mem_text else ""
-        if snap_world and snap_player and estimate_tokens(snap_world) + estimate_tokens(snap_player) > cfg.budget.memory:
-            # prefer keeping world; trim player
-            remain = max(0, cfg.budget.memory - estimate_tokens(snap_world))
-            snap_player, _ = truncate_to_tokens(snap_player, remain)
+    if mem_text:
+        snap_world = fitted["world"]
+        snap_player = fitted["player"]
     else:
-        snap_world = mem_text
+        snap_world = ""
         snap_player = ""
+    for report in section_reports:
+        if report.name == "memory":
+            if not mem_text:
+                report.items = []
+                report.tokens = 0
+            else:
+                report.items = list(memory_items)
+                report.truncated = report.truncated or fitted["truncated_world"] or fitted["truncated_player"]
 
     values = {
         "world": texts.get("world", ""),
@@ -382,6 +395,7 @@ def assemble_budgeted(
         section_tokens + estimate_tokens(extra),
         user_input,
         llm_max_tokens=llm_max_tokens,
+        phi_tokens=phi_tokens,
     )
     trimmed, hist_truncated = trim_history(history_messages, hist_budget, cfg.history.protect_recent_turns)
     report = build_context_report(
@@ -391,6 +405,7 @@ def assemble_budgeted(
         hist_truncated,
         user_input,
         llm_max_tokens=llm_max_tokens,
+        phi_text=phi_text,
         extra_system=extra,
     )
     mini_ids = list(next((r.items for r in section_reports if r.name == "mini_cards"), []) or [])

@@ -90,6 +90,7 @@ export type AppSettings = {
     max_tokens: number;
     generation_reserve: number;
     tool_reserve?: number;
+    memory_split?: { world: number; player: number };
     budget: Record<string, number>;
     history: { use_remaining: boolean; protect_recent_turns: number };
   };

@@ -2,13 +2,13 @@ import {
   applySectionBudgets,
   buildContextReport,
   estimateTokens,
+  fitMemorySections,
   historyTokenBudget,
   parseContextConfig,
   parseMiniConfig,
   sectionSoftCap,
   trimCardFieldMap,
   trimHistory,
-  truncateToTokens,
   type ContextConfig,
   type ContextReport,
   type MiniSelectConfig,
@@ -195,6 +195,7 @@ export function assembleBudgeted(
   miniCfg: MiniSelectConfig = parseMiniConfig(null),
   loreBudgetOverride: number | null = null,
   llmMaxTokens = 0,
+  phiText = "",
 ): AssembleResult {
   const userName = pack.player_name;
   const minis = selectMinisWithinBudget(miniCards, library, miniCfg);
@@ -214,19 +215,19 @@ export function assembleBudgeted(
   const sceneText = sceneYaml(scene);
   const memWorld = memory.snapWorld;
   const memPlayer = memory.snapPlayer;
-  const memoryBlob = [memWorld, memPlayer].filter((part) => part.trim()).join("\n\n");
-  const memoryEntries = [memWorld, memPlayer].filter((part) => part.trim());
-  const memoryLabels = [
-    ...(memWorld.trim() ? ["world"] : []),
-    ...(memPlayer.trim() ? ["player"] : []),
+  const fittedMemory = fitMemorySections(memWorld, memPlayer, contextCfg.budget.memory, contextCfg.memory_split);
+  const memoryBlob = [fittedMemory.world, fittedMemory.player].filter((part) => part.trim()).join("\n\n");
+  const memoryItems = [
+    ...(fittedMemory.world.trim() ? [`world:${fittedMemory.world_tokens}`] : []),
+    ...(fittedMemory.player.trim() ? [`player:${fittedMemory.player_tokens}`] : []),
   ];
 
   const valuesSeed: Record<string, string> = {
     world: worldText,
     cast,
     player,
-    memory: memWorld,
-    player_memory: memPlayer,
+    memory: fittedMemory.world,
+    player_memory: fittedMemory.player,
     scene: sceneText,
     cards: cardsText,
     minis: miniEntries.join("\n\n"),
@@ -266,22 +267,32 @@ export function assembleBudgeted(
       name: "memory",
       text: memoryBlob,
       budget: contextCfg.budget.memory,
-      entries: memoryEntries.length ? memoryEntries : memoryBlob ? [memoryBlob] : [],
-      entry_labels: memoryLabels.length ? memoryLabels : memoryBlob ? ["memory"] : [],
-      items: memoryLabels,
+      items: memoryItems,
     },
     { name: "nmem", text: nmemRecall, budget: contextCfg.budget.nmem },
     { name: "summary", text: summary, budget: contextCfg.budget.summary },
   ];
 
-  const softCap = sectionSoftCap(contextCfg, userInput, llmMaxTokens, 0, 200);
+  const phiTokens = estimateTokens(phiText);
+  const softCap = sectionSoftCap(contextCfg, userInput, llmMaxTokens, phiTokens, 200);
   const { texts, reports } = applySectionBudgets(blocks, softCap);
   const memText = texts.memory || "";
-  let snapWorld = memWorld && memText.includes(memWorld) ? memWorld : memText;
-  let snapPlayer = memPlayer && memText.includes(memPlayer) ? memPlayer : "";
-  if (snapWorld && snapPlayer && estimateTokens(snapWorld) + estimateTokens(snapPlayer) > contextCfg.budget.memory) {
-    const remain = Math.max(0, contextCfg.budget.memory - estimateTokens(snapWorld));
-    snapPlayer = truncateToTokens(snapPlayer, remain).text;
+  let snapWorld = "";
+  let snapPlayer = "";
+  if (memText) {
+    snapWorld = fittedMemory.world;
+    snapPlayer = fittedMemory.player;
+  }
+  // Refresh memory report items after soft-cap may have cleared the section
+  const memoryReport = reports.find((item) => item.name === "memory");
+  if (memoryReport) {
+    if (!memText) {
+      memoryReport.items = [];
+      memoryReport.tokens = 0;
+    } else {
+      memoryReport.items = memoryItems;
+      memoryReport.truncated = memoryReport.truncated || fittedMemory.truncated_world || fittedMemory.truncated_player;
+    }
   }
 
   const values: Record<string, string> = {
@@ -312,10 +323,12 @@ export function assembleBudgeted(
     sectionTokens + estimateTokens(extraSystem),
     userInput,
     llmMaxTokens,
+    phiTokens,
   );
   const trimmed = trimHistory(historyMessages, histBudget, contextCfg.history.protect_recent_turns);
   const report = buildContextReport(contextCfg, reports, trimmed.messages, trimmed.truncated, userInput, {
     llmMaxTokens,
+    phiText,
     extraSystem,
   });
   const miniReport = reports.find((item) => item.name === "mini_cards");

@@ -74,11 +74,18 @@ class HistoryBudget:
 
 
 @dataclass
+class MemorySplitConfig:
+    world: float = 0.6
+    player: float = 0.4
+
+
+@dataclass
 class ContextConfig:
     max_tokens: int = 32768
     generation_reserve: int = 4096
     tool_reserve: int = 1500
     budget: SectionBudget = field(default_factory=SectionBudget)
+    memory_split: MemorySplitConfig = field(default_factory=MemorySplitConfig)
     history: HistoryBudget = field(default_factory=HistoryBudget)
 
 
@@ -165,10 +172,75 @@ def effective_generation_reserve(cfg: ContextConfig, llm_max_tokens: int = 0) ->
     return max(int(cfg.generation_reserve), int(llm_max_tokens or 0))
 
 
+def parse_memory_split(raw: dict[str, Any] | None) -> MemorySplitConfig:
+    data = raw if isinstance(raw, dict) else {}
+    try:
+        world = float(data.get("world", 0.6))
+        player = float(data.get("player", 0.4))
+    except (TypeError, ValueError):
+        return MemorySplitConfig()
+    if world <= 0 or player <= 0:
+        return MemorySplitConfig()
+    total = world + player
+    return MemorySplitConfig(world=world / total, player=player / total)
+
+
+def split_memory_budget(total: int, split: MemorySplitConfig | None = None) -> tuple[int, int]:
+    normalized = parse_memory_split(
+        {"world": (split or MemorySplitConfig()).world, "player": (split or MemorySplitConfig()).player}
+    )
+    total = max(0, int(total))
+    world = max(0, int(total * normalized.world))
+    return world, max(0, total - world)
+
+
+def fit_memory_sections(
+    world_text: str,
+    player_text: str,
+    total_budget: int,
+    split: MemorySplitConfig | None = None,
+) -> dict[str, Any]:
+    caps_world, caps_player = split_memory_budget(total_budget, split or MemorySplitConfig())
+    world_cut, world_trunc = truncate_to_tokens(world_text or "", caps_world)
+    player_cut, player_trunc = truncate_to_tokens(player_text or "", caps_player)
+    world_tokens = estimate_tokens(world_cut)
+    player_tokens = estimate_tokens(player_cut)
+
+    world_unused = max(0, caps_world - world_tokens)
+    player_unused = max(0, caps_player - player_tokens)
+
+    if world_unused > 0 and estimate_tokens(player_text or "") > player_tokens:
+        player_cut, player_trunc = truncate_to_tokens(player_text or "", caps_player + world_unused)
+        player_tokens = estimate_tokens(player_cut)
+    elif player_unused > 0 and estimate_tokens(world_text or "") > world_tokens:
+        world_cut, world_trunc = truncate_to_tokens(world_text or "", caps_world + player_unused)
+        world_tokens = estimate_tokens(world_cut)
+
+    if world_tokens + player_tokens > total_budget:
+        remain_for_player = max(0, total_budget - world_tokens)
+        if player_tokens > remain_for_player:
+            player_cut, player_trunc = truncate_to_tokens(player_cut, remain_for_player)
+            player_tokens = estimate_tokens(player_cut)
+        if world_tokens + player_tokens > total_budget:
+            remain_for_world = max(0, total_budget - player_tokens)
+            world_cut, world_trunc = truncate_to_tokens(world_cut, remain_for_world)
+            world_tokens = estimate_tokens(world_cut)
+
+    return {
+        "world": world_cut,
+        "player": player_cut,
+        "world_tokens": world_tokens,
+        "player_tokens": player_tokens,
+        "truncated_world": world_trunc or estimate_tokens(world_text or "") > world_tokens,
+        "truncated_player": player_trunc or estimate_tokens(player_text or "") > player_tokens,
+    }
+
+
 def parse_context_config(raw: dict[str, Any] | None) -> ContextConfig:
     data = raw if isinstance(raw, dict) else {}
     budget_raw = data.get("budget") if isinstance(data.get("budget"), dict) else {}
     hist_raw = data.get("history") if isinstance(data.get("history"), dict) else {}
+    split_raw = data.get("memory_split") if isinstance(data.get("memory_split"), dict) else {}
     base = SectionBudget()
     budget = SectionBudget(
         system=int(budget_raw.get("system", base.system)),
@@ -191,6 +263,7 @@ def parse_context_config(raw: dict[str, Any] | None) -> ContextConfig:
         generation_reserve=int(data.get("generation_reserve", 4096)),
         tool_reserve=int(data.get("tool_reserve", 1500)),
         budget=budget,
+        memory_split=parse_memory_split(split_raw),
         history=hist,
     )
 
@@ -211,6 +284,7 @@ def context_config_dict(cfg: ContextConfig) -> dict[str, Any]:
         "generation_reserve": cfg.generation_reserve,
         "tool_reserve": cfg.tool_reserve,
         "budget": asdict(cfg.budget),
+        "memory_split": asdict(cfg.memory_split),
         "history": asdict(cfg.history),
     }
 

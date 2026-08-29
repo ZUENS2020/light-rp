@@ -275,7 +275,7 @@ class Engine:
             prompt_user = f"{user_text}\n\n（请给{'、'.join(names)}更多台词。只回复一次。）"
         lore_budget = self.pack.lore_token_budget or self.config.lore_token_budget or self.config.context.budget.lore
         # Force generation_reserve >= llm.max_tokens at assemble time
-        from lightrp.budget import ContextConfig, build_context_report
+        from lightrp.budget import ContextConfig
 
         ctx = self.config.context
         if ctx.generation_reserve < self.config.llm.max_tokens:
@@ -284,8 +284,16 @@ class Engine:
                 generation_reserve=self.config.llm.max_tokens,
                 tool_reserve=ctx.tool_reserve,
                 budget=ctx.budget,
+                memory_split=ctx.memory_split,
                 history=ctx.history,
             )
+        phi_bits = [breach_phi(self.prompts, breach)]
+        for card in primary_cards:
+            filled = card.substitute(self.pack.player_name)
+            if filled.post_history_instructions.strip():
+                phi_bits.append(ensemble_acting(filled.post_history_instructions, filled.name))
+        phi = "\n\n".join(part for part in phi_bits if part)
+        extra = breach_system(self.prompts, breach)
         assembled = assemble_budgeted(
             self.prompts,
             self.pack,
@@ -296,31 +304,16 @@ class Engine:
             recall,
             history_messages=self.session.chat_messages(),
             user_input=prompt_user,
-            extra_system=breach_system(self.prompts, breach),
+            extra_system=extra,
             mini_cards=mini_cards,
             summary=story_summary(self.session.messages),
             context_cfg=ctx,
             mini_cfg=self.config.mini,
             lore_budget_override=lore_budget,
             llm_max_tokens=self.config.llm.max_tokens,
-        )
-        phi_bits = [breach_phi(self.prompts, breach)]
-        for card in primary_cards:
-            filled = card.substitute(self.pack.player_name)
-            if filled.post_history_instructions.strip():
-                phi_bits.append(ensemble_acting(filled.post_history_instructions, filled.name))
-        phi = "\n\n".join(part for part in phi_bits if part)
-        report = build_context_report(
-            ctx,
-            assembled.report.sections,
-            assembled.history,
-            assembled.report.history_truncated,
-            prompt_user,
-            llm_max_tokens=self.config.llm.max_tokens,
             phi_text=phi,
-            extra_system=breach_system(self.prompts, breach),
         )
-        self._save_context_report(report.to_dict())
+        self._save_context_report(assembled.report.to_dict())
         messages: list[dict[str, Any]] = [{"role": "system", "content": assembled.system}, *assembled.history]
         messages.append({"role": "user", "content": prompt_user})
         state_before = self.scene
@@ -374,7 +367,13 @@ class Engine:
                     "season": self.scene.season,
                     "present": self.scene.present,
                 },
-                "token_usage": {"total": assembled.report.total, "max": assembled.report.max_tokens},
+                "token_usage": {
+                    "estimated_total": assembled.report.total,
+                    "max": assembled.report.max_tokens,
+                    "generation_reserve": assembled.report.generation_reserve,
+                    "tool_reserve": assembled.report.tool_reserve,
+                    "phi": assembled.report.phi_tokens,
+                },
                 "warnings": warnings,
             }
         )
