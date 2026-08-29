@@ -4,6 +4,7 @@ import {
   parseContextConfig,
   parseMiniConfig,
   routeMemoryCandidate,
+  buildContextReport,
   type ContextReport,
 } from "./budget";
 import {
@@ -111,9 +112,10 @@ async function loadMinisForTurn(
   primaryId: string | null,
   settings: AppSettings,
   recentHaystack: string,
+  userText = "",
 ): Promise<{ minis: MiniCard[]; loreCards: CharacterCard[] }> {
   const miniCfg = parseMiniConfig(settings.mini);
-  const members = selectMiniMembers(pack, scene, haystack, mentionIds, primaryId, miniCfg, recentHaystack);
+  const members = selectMiniMembers(pack, scene, haystack, mentionIds, primaryId, miniCfg, recentHaystack, userText);
   const minis: MiniCard[] = [];
   const loreCards: CharacterCard[] = [];
   for (const member of members) {
@@ -142,7 +144,8 @@ function candidateImportance(item: Record<string, unknown>): number {
   const raw = item.importance;
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
   if (typeof raw === "string" && raw.trim() && !Number.isNaN(Number(raw))) return Number(raw);
-  return 0.75;
+  // Plain string candidates (legacy) → EventLog, not long-term
+  return 0.5;
 }
 
 async function ingestMemoryCandidate(
@@ -152,17 +155,19 @@ async function ingestMemoryCandidate(
   sessionId: string,
   scene: SceneState,
   candidate: Record<string, unknown>,
+  onLongTerm?: (target: string, characterId: string | null, live: string[]) => Promise<void>,
 ): Promise<"long" | "event" | "drop" | "dup"> {
   const enriched = enrichRecord(candidate, scene);
   const text = formatMemoryEntry(enriched);
-  const route = routeMemoryCandidate(candidateImportance(candidate));
+  const importance = candidateImportance(candidate);
+  const route = routeMemoryCandidate(importance);
   if (route === "drop") return "drop";
   if (route === "event") {
-    await appendEvents(fs, sessionId, [{ ...enriched, kind: "memory_candidate", importance: candidateImportance(candidate) }]);
+    await appendEvents(fs, sessionId, [{ ...enriched, kind: "memory_candidate", importance }]);
     return "event";
   }
   if (memoryIsDuplicate(text, memory.world)) return "dup";
-  await runMemoryTool(fs, memory, settings, "memory", { action: "add", target: "world", content: text });
+  await runMemoryTool(fs, memory, settings, "memory", { action: "add", target: "world", content: text }, onLongTerm);
   return "long";
 }
 
@@ -206,7 +211,10 @@ export async function runTurn(
   const primaryMember = primaryId ? pack.cast.find((item) => item.id === primaryId) : undefined;
   const primaryCards = primaryMember ? await loadMemberCards(fs, [primaryMember]) : [];
   const miniCfg = parseMiniConfig(settings.mini);
-  const contextCfg = parseContextConfig(settings.context);
+  const contextCfg = parseContextConfig({
+    ...settings.context,
+    generation_reserve: Math.max(settings.context?.generation_reserve ?? 4096, settings.llm.max_tokens),
+  });
   const recentSlice = loaded.messages.slice(-Math.max(8, miniCfg.recent_turns * 2));
   const recentHaystack = recentSlice.map((m) => m.content).join("\n");
   const haystack = `${userText}\n${recentHaystack}\n${scene.location} ${scene.time} ${scene.scene || scene.notes} ${scene.present.join(" ")}`;
@@ -219,6 +227,7 @@ export async function runTurn(
     primaryId,
     settings,
     recentHaystack,
+    userText,
   );
   const lore = await triggered(fs, pack, scene, loaded.messages, userText, settings, [...primaryCards, ...loreCards]);
   const promptUser = mentionPrompt(pack, userText, mentionIds);
@@ -242,8 +251,8 @@ export async function runTurn(
     contextCfg,
     miniCfg,
     loreBudget,
+    settings.llm.max_tokens,
   );
-  await saveContextReport(fs, sessionId, assembled.report);
   const cardPhi = primaryCards
     .map((card) => {
       const filled = substituteCard(card, pack.player_name);
@@ -252,26 +261,40 @@ export async function runTurn(
     .filter(Boolean)
     .join("\n\n");
   const phi = [breachPhi(library, breach), cardPhi].filter(Boolean).join("\n\n");
+  const contextReport = buildContextReport(
+    contextCfg,
+    assembled.report.sections,
+    assembled.history,
+    assembled.report.history.truncated,
+    promptUser,
+    {
+      llmMaxTokens: settings.llm.max_tokens,
+      phiText: phi,
+      extraSystem: breachSystem(library, breach),
+    },
+  );
+  await saveContextReport(fs, sessionId, contextReport);
+  assembled.report = contextReport;
   const messages: LlmMessage[] = [
     { role: "system", content: assembled.system },
     ...assembled.history.map((m) => ({ role: m.role, content: m.content })),
     { role: "user", content: promptUser },
   ];
   let nmemIndex = await loadNmemIndex((path) => fs.get(path));
+  const syncNmem = async (target: string, characterId: string | null, live: string[]) => {
+    if (!spaceId) return;
+    try {
+      nmemIndex = await syncFactToNmem(env, spaceId, nmemIndex, pack.id, target, characterId, live);
+      await saveNmemIndex((path, text, type) => fs.put(path, text, type), nmemIndex);
+    } catch (err) {
+      warnings.push(`nmem 记忆同步失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   const gm = await toolLoop(
     env,
     messages,
     [memoryToolSpec(library)],
-    (name, args) =>
-      runMemoryTool(fs, memory, settings, name, args, async (target, characterId, live) => {
-        if (!spaceId) return;
-        try {
-          nmemIndex = await syncFactToNmem(env, spaceId, nmemIndex, pack.id, target, characterId, live);
-          await saveNmemIndex((path, text, type) => fs.put(path, text, type), nmemIndex);
-        } catch (err) {
-          warnings.push(`nmem 记忆同步失败: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }),
+    (name, args) => runMemoryTool(fs, memory, settings, name, args, syncNmem),
     settings.max_tool_rounds,
     phi,
     settings.llm.temperature,
@@ -289,7 +312,7 @@ export async function runTurn(
       trailerEvents(trailer).map((item) => enrichRecord(item, nextScene)),
     );
     for (const candidate of trailerMemoryCandidates(trailer)) {
-      const route = await ingestMemoryCandidate(fs, memory, settings, sessionId, nextScene, candidate);
+      const route = await ingestMemoryCandidate(fs, memory, settings, sessionId, nextScene, candidate, syncNmem);
       if (route === "long") remembered.push(String(candidate.text || candidate.content || "").slice(0, 80));
     }
   }

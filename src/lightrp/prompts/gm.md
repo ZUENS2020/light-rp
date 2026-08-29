@@ -27,7 +27,14 @@ ongoing:
 events:
   - 本轮发生的一件事
 memory_candidates:
-  - 一句可长期保留的事实
+  - type: promise
+    text: 玩家答应周末陪铃鹿外出
+    importance: 0.9
 </rp_state>
 
-不要把该块写进对白或旁白。不要要求第二次调用。
+`memory_candidates` 每条必须是对象，字段：
+- type: promise | relationship | fact | preference | goal | important_event
+- text: 一句可长期保留的事实
+- importance: 0.0–1.0（≥0.7 长期记忆；0.4–0.7 仅事件日志；<0.4 丢弃）
+
+普通路过情节不要进 memory_candidates。不要把该块写进对白或旁白。不要要求第二次调用。

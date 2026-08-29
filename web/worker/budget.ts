@@ -19,6 +19,7 @@ export type HistoryBudget = {
 export type ContextConfig = {
   max_tokens: number;
   generation_reserve: number;
+  tool_reserve: number;
   budget: SectionBudget;
   history: HistoryBudget;
 };
@@ -34,16 +35,21 @@ export type SectionReport = {
   tokens: number;
   budget: number;
   truncated: boolean;
+  protected?: boolean;
   items: string[];
 };
 
 export type ContextReport = {
   max_tokens: number;
   generation_reserve: number;
+  tool_reserve: number;
   total: number;
+  estimated: boolean;
   sections: SectionReport[];
   history: { tokens: number; messages: number; truncated: boolean };
   input: { tokens: number };
+  phi_tokens: number;
+  extra_system_tokens: number;
 };
 
 export type SectionBlock = {
@@ -72,6 +78,7 @@ export const DEFAULT_SECTION_BUDGET: SectionBudget = {
 export const DEFAULT_CONTEXT: ContextConfig = {
   max_tokens: 32768,
   generation_reserve: 4096,
+  tool_reserve: 1500,
   budget: { ...DEFAULT_SECTION_BUDGET },
   history: { use_remaining: true, protect_recent_turns: 6 },
 };
@@ -83,21 +90,55 @@ export const DEFAULT_MINI: MiniSelectConfig = {
 };
 
 export const TRIM_ORDER = ["lore", "memory", "mini_cards", "summary", "nmem", "world"] as const;
+export const CARD_DROP_FIRST = ["mes_example", "first_mes", "backstory", "likes", "dislikes", "age"] as const;
+export const CARD_SECONDARY = ["description", "scenario"] as const;
+
+function isCjk(ch: string): boolean {
+  const code = ch.codePointAt(0) || 0;
+  return (
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0x3040 && code <= 0x30ff) ||
+    (code >= 0xac00 && code <= 0xd7af) ||
+    (code >= 0xf900 && code <= 0xfaff)
+  );
+}
 
 export function estimateTokens(text: string): number {
   if (!text) return 0;
-  return Math.max(1, Math.ceil(text.length / 3));
-}
-
-export function charsForTokens(tokens: number): number {
-  return Math.max(0, Math.floor(tokens) * 3);
+  let cjk = 0;
+  let asciiRun = 0;
+  let other = 0;
+  for (const ch of text) {
+    if (isCjk(ch)) cjk += 1;
+    else if (/[A-Za-z0-9\s]/.test(ch)) asciiRun += 1;
+    else other += 1;
+  }
+  const raw = cjk + Math.ceil(asciiRun / 4) + other;
+  return Math.max(1, Math.ceil(raw * 1.1));
 }
 
 export function truncateToTokens(text: string, tokens: number): { text: string; truncated: boolean } {
   if (tokens <= 0) return { text: "", truncated: Boolean(text) };
-  const limit = charsForTokens(tokens);
-  if (text.length <= limit) return { text, truncated: false };
-  return { text: `${text.slice(0, Math.max(0, limit - 1))}…`, truncated: true };
+  if (estimateTokens(text) <= tokens) return { text, truncated: false };
+  let lo = 0;
+  let hi = text.length;
+  let best = "";
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const candidate = text.slice(0, mid) + (mid < text.length ? "…" : "");
+    if (estimateTokens(candidate) <= tokens) {
+      best = candidate;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return { text: best || "…", truncated: true };
+}
+
+export function effectiveGenerationReserve(cfg: ContextConfig, llmMaxTokens = 0): number {
+  return Math.max(cfg.generation_reserve, llmMaxTokens || 0);
 }
 
 export function parseContextConfig(raw: Partial<ContextConfig> | null | undefined): ContextConfig {
@@ -107,6 +148,7 @@ export function parseContextConfig(raw: Partial<ContextConfig> | null | undefine
   return {
     max_tokens: Number(data.max_tokens ?? DEFAULT_CONTEXT.max_tokens),
     generation_reserve: Number(data.generation_reserve ?? DEFAULT_CONTEXT.generation_reserve),
+    tool_reserve: Number(data.tool_reserve ?? DEFAULT_CONTEXT.tool_reserve),
     budget,
     history,
   };
@@ -145,9 +187,14 @@ function fitEntries(entries: string[], labels: string[], budget: number): { text
   return { text: kept.join("\n\n"), items: keptLabels, truncated };
 }
 
-export function applySectionBudgets(blocks: SectionBlock[]): { texts: Record<string, string>; reports: SectionReport[] } {
+export function applySectionBudgets(
+  blocks: SectionBlock[],
+  softCap: number | null = null,
+): { texts: Record<string, string>; reports: SectionReport[] } {
   const texts: Record<string, string> = {};
   const reports: SectionReport[] = [];
+  const blockMap = new Map(blocks.map((b) => [b.name, b]));
+
   for (const block of blocks) {
     let text = block.text;
     let items = [...(block.items || [])];
@@ -168,9 +215,31 @@ export function applySectionBudgets(blocks: SectionBlock[]): { texts: Record<str
       tokens: estimateTokens(text),
       budget: block.budget,
       truncated,
+      protected: Boolean(block.protected),
       items,
     });
   }
+
+  if (softCap != null) {
+    const reportMap = new Map(reports.map((r) => [r.name, r]));
+    let total = Object.values(texts).reduce((sum, t) => sum + estimateTokens(t), 0);
+    for (const name of TRIM_ORDER) {
+      if (total <= softCap) break;
+      const block = blockMap.get(name);
+      if (block?.protected) continue;
+      if (!texts[name]) continue;
+      const cost = estimateTokens(texts[name]);
+      texts[name] = "";
+      total -= cost;
+      const report = reportMap.get(name);
+      if (report) {
+        report.tokens = 0;
+        report.truncated = true;
+        report.items = [];
+      }
+    }
+  }
+
   return { texts, reports };
 }
 
@@ -180,8 +249,7 @@ function histBlob(messages: { role?: string; content?: string | null }[]): strin
 
 function recentUa<T extends { role?: string }>(messages: T[], n: number): T[] {
   if (n <= 0) return [];
-  const ua = messages.filter((m) => m.role === "user" || m.role === "assistant");
-  return ua.slice(-n);
+  return messages.filter((m) => m.role === "user" || m.role === "assistant").slice(-n);
 }
 
 export function trimHistory<T extends { role?: string; content?: string | null }>(
@@ -227,8 +295,28 @@ export function trimHistory<T extends { role?: string; content?: string | null }
   return { messages: selected, truncated: truncated || selected.length < messages.length };
 }
 
-export function historyTokenBudget(cfg: ContextConfig, sectionTokens: number, userInput: string): number {
-  return Math.max(0, cfg.max_tokens - cfg.generation_reserve - sectionTokens - estimateTokens(userInput));
+export function historyTokenBudget(
+  cfg: ContextConfig,
+  sectionTokens: number,
+  userInput: string,
+  llmMaxTokens = 0,
+  phiTokens = 0,
+): number {
+  const gen = effectiveGenerationReserve(cfg, llmMaxTokens);
+  const tool = Math.max(cfg.tool_reserve, phiTokens);
+  return Math.max(0, cfg.max_tokens - gen - tool - sectionTokens - estimateTokens(userInput));
+}
+
+export function sectionSoftCap(
+  cfg: ContextConfig,
+  userInput: string,
+  llmMaxTokens = 0,
+  phiTokens = 0,
+  minHistoryTokens = 0,
+): number {
+  const gen = effectiveGenerationReserve(cfg, llmMaxTokens);
+  const tool = Math.max(cfg.tool_reserve, phiTokens);
+  return Math.max(0, cfg.max_tokens - gen - tool - estimateTokens(userInput) - Math.max(0, minHistoryTokens));
 }
 
 export function buildContextReport(
@@ -237,17 +325,26 @@ export function buildContextReport(
   historyMessages: { role?: string; content?: string | null }[],
   historyTruncated: boolean,
   userInput: string,
+  opts: { llmMaxTokens?: number; phiText?: string; extraSystem?: string } = {},
 ): ContextReport {
+  const gen = effectiveGenerationReserve(cfg, opts.llmMaxTokens || 0);
+  const phiTokens = estimateTokens(opts.phiText || "");
+  const extraTokens = estimateTokens(opts.extraSystem || "");
+  const tool = Math.max(cfg.tool_reserve, phiTokens);
   const sectionTotal = sectionReports.reduce((sum, item) => sum + item.tokens, 0);
   const historyTokens = estimateTokens(histBlob(historyMessages));
   const inputTokens = estimateTokens(userInput);
   return {
     max_tokens: cfg.max_tokens,
-    generation_reserve: cfg.generation_reserve,
-    total: sectionTotal + historyTokens + inputTokens,
+    generation_reserve: gen,
+    tool_reserve: tool,
+    total: sectionTotal + historyTokens + inputTokens + phiTokens + extraTokens,
+    estimated: true,
     sections: sectionReports,
     history: { tokens: historyTokens, messages: historyMessages.length, truncated: historyTruncated },
     input: { tokens: inputTokens },
+    phi_tokens: phiTokens,
+    extra_system_tokens: extraTokens,
   };
 }
 
@@ -279,4 +376,42 @@ export function routeMemoryCandidate(importance: number): "long" | "event" | "dr
   if (importance >= 0.7) return "long";
   if (importance >= 0.4) return "event";
   return "drop";
+}
+
+export function trimCardFieldMap(fields: Record<string, string>, budget: number): { fields: Record<string, string>; truncated: boolean } {
+  const current = { ...fields };
+  let truncated = false;
+  const cost = (data: Record<string, string>) =>
+    estimateTokens(
+      Object.entries(data)
+        .filter(([, v]) => v.trim())
+        .map(([k, v]) => `${k}:${v}`)
+        .join("\n"),
+    );
+  for (const key of CARD_DROP_FIRST) {
+    if (cost(current) <= budget) break;
+    if (current[key]) {
+      current[key] = "";
+      truncated = true;
+    }
+  }
+  for (const key of CARD_SECONDARY) {
+    if (cost(current) <= budget) break;
+    if (current[key]) {
+      const cut = truncateToTokens(current[key], Math.max(40, Math.floor(budget / 8)));
+      if (cut.text !== current[key]) truncated = true;
+      current[key] = cut.text;
+    }
+  }
+  if (cost(current) > budget) {
+    for (const key of ["system_prompt", "personality", "behavior", "speech"]) {
+      if (cost(current) <= budget) break;
+      if (current[key]) {
+        const cut = truncateToTokens(current[key], Math.max(80, Math.floor(budget / 4)));
+        current[key] = cut.text;
+        truncated = truncated || cut.truncated;
+      }
+    }
+  }
+  return { fields: current, truncated };
 }

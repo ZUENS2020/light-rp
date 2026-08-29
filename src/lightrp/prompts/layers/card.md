@@ -3,9 +3,6 @@
 
 年龄：{{age}}
 
-外貌：
-{{description}}
-
 性格：
 {{personality}}
 
@@ -15,17 +12,20 @@
 说话：
 {{speech}}
 
+角色规则：
+{{system_prompt}}
+
+外貌：
+{{description}}
+
+场景：
+{{scenario}}
+
 喜好：{{likes}}
 厌恶：{{dislikes}}
 
 背景：
 {{backstory}}
 
-场景：
-{{scenario}}
-
 示例：
 {{mes_example}}
-
-角色规则：
-{{system_prompt}}

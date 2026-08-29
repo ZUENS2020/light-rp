@@ -55,10 +55,14 @@ export type WorldSummary = {
 export type ContextReport = {
   max_tokens: number;
   generation_reserve: number;
+  tool_reserve?: number;
   total: number;
-  sections: { name: string; tokens: number; budget: number; truncated: boolean; items?: string[] }[];
+  estimated?: boolean;
+  sections: { name: string; tokens: number; budget: number; truncated: boolean; items?: string[]; protected?: boolean }[];
   history: { tokens: number; messages: number; truncated: boolean };
   input: { tokens: number };
+  phi_tokens?: number;
+  extra_system_tokens?: number;
 };
 
 export type AppSettings = {
@@ -85,6 +89,7 @@ export type AppSettings = {
   context: {
     max_tokens: number;
     generation_reserve: number;
+    tool_reserve?: number;
     budget: Record<string, number>;
     history: { use_remaining: boolean; protect_recent_turns: number };
   };

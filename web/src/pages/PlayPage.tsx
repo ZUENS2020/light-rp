@@ -272,20 +272,22 @@ export function PlayPage() {
             {state.context_report ? (
               <div className="border-t border-border px-4 py-3 font-ui text-xs text-secondary">
                 <button type="button" className="font-medium text-foreground" onClick={() => setCtxOpen((v) => !v)}>
-                  Context {ctxOpen ? "▾" : "▸"} {state.context_report.total.toLocaleString()} /{" "}
+                  Estimated Context {ctxOpen ? "▾" : "▸"} {state.context_report.total.toLocaleString()} /{" "}
                   {state.context_report.max_tokens.toLocaleString()}
                 </button>
                 {ctxOpen ? (
                   <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-md bg-muted/40 p-3 text-[11px] leading-relaxed text-foreground">
                     {[
-                      `Total: ${state.context_report.total.toLocaleString()} / ${state.context_report.max_tokens.toLocaleString()}`,
-                      `Reserve: ${state.context_report.generation_reserve}`,
+                      `Estimated: ${state.context_report.total.toLocaleString()} / ${state.context_report.max_tokens.toLocaleString()}`,
+                      `Generation reserve: ${state.context_report.generation_reserve}`,
+                      `Tool reserve: ${state.context_report.tool_reserve ?? "—"}`,
+                      `Phi: ${state.context_report.phi_tokens ?? 0}  Extra system: ${state.context_report.extra_system_tokens ?? 0}`,
                       "",
                       ...state.context_report.sections.map(
                         (section) =>
                           `${section.name.padEnd(14)} ${String(section.tokens).padStart(6)} / ${section.budget}${section.truncated ? "  truncated" : ""}${
-                            section.items?.length ? `  [${section.items.slice(0, 4).join(", ")}]` : ""
-                          }`,
+                            section.protected ? "  protected" : ""
+                          }${section.items?.length ? `  [${section.items.slice(0, 4).join(", ")}]` : ""}`,
                       ),
                       "",
                       `History       ${state.context_report.history.tokens}  msgs=${state.context_report.history.messages}${

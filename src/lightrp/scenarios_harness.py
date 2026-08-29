@@ -91,9 +91,9 @@ def run_scenario(data: dict[str, Any]) -> list[str]:
                 continue
             text = str(candidate.get("text") or candidate.get("content") or "")
             try:
-                importance = float(candidate.get("importance", 0.75))
+                importance = float(candidate.get("importance", 0.5))
             except (TypeError, ValueError):
-                importance = 0.75
+                importance = 0.5
             route = route_memory_candidate(importance)
             if route == "long":
                 if not memory_is_duplicate(text, memories):

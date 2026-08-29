@@ -5,6 +5,8 @@ import {
   historyTokenBudget,
   parseContextConfig,
   parseMiniConfig,
+  sectionSoftCap,
+  trimCardFieldMap,
   trimHistory,
   truncateToTokens,
   type ContextConfig,
@@ -63,6 +65,7 @@ export function selectMiniMembers(
   primaryId: string | null,
   miniCfg: MiniSelectConfig = parseMiniConfig(null),
   recentHaystack = "",
+  userText = "",
 ): CastMember[] {
   const mentioned = new Set(mentionIds.map((id) => id.toLowerCase()));
   const present = new Set(
@@ -73,14 +76,16 @@ export function selectMiniMembers(
       .map((m) => m.id),
   );
   const recent = recentMentionIds(pack, recentHaystack);
+  const userIntent = recentMentionIds(pack, userText);
   const ranked: { rank: number; member: CastMember }[] = [];
   for (const member of pack.cast) {
     if (primaryId && member.id === primaryId) continue;
-    const explicit = mentioned.has(member.id.toLowerCase());
+    const explicit = mentioned.has(member.id.toLowerCase()) || userIntent.has(member.id);
     const isPresent = present.has(member.id);
     const isRecent = recent.has(member.id);
     const keyword = keywordHit(member, haystack);
     if (!(explicit || isPresent || isRecent || keyword)) continue;
+    // user_text name / @mention > present > recent > other keyword
     let rank = 3;
     if (explicit) rank = 0;
     else if (isPresent) rank = 1;
@@ -102,26 +107,28 @@ function renderCastIndex(pack: WorldPack, presentIds: string[]): string {
     .join("\n");
 }
 
-export function renderCard(library: PromptLibrary, card: CharacterCard, userName: string): string {
+export function renderCard(library: PromptLibrary, card: CharacterCard, userName: string, budget?: number): string {
   const filled = substituteCard(card, userName);
-  return library
-    .render("layers/card.md", {
-      id: filled.id,
-      name: filled.name,
-      age: filled.age,
-      description: filled.description,
-      personality: filled.personality,
-      behavior: filled.behavior,
-      speech: filled.speech,
-      likes: filled.likes,
-      dislikes: filled.dislikes,
-      backstory: filled.backstory,
-      scenario: filled.scenario,
-      first_mes: filled.first_mes,
-      mes_example: filled.mes_example,
-      system_prompt: ensembleActing(filled.system_prompt, filled.name),
-    })
-    .trim();
+  let fields: Record<string, string> = {
+    id: filled.id,
+    name: filled.name,
+    age: filled.age,
+    description: filled.description,
+    personality: filled.personality,
+    behavior: filled.behavior,
+    speech: filled.speech,
+    likes: filled.likes,
+    dislikes: filled.dislikes,
+    backstory: filled.backstory,
+    scenario: filled.scenario,
+    first_mes: filled.first_mes,
+    mes_example: filled.mes_example,
+    system_prompt: ensembleActing(filled.system_prompt, filled.name),
+  };
+  if (budget != null && budget > 0) {
+    fields = trimCardFieldMap(fields, budget).fields;
+  }
+  return library.render("layers/card.md", fields).trim();
 }
 
 function renderMini(library: PromptLibrary, mini: MiniCard): string {
@@ -187,13 +194,18 @@ export function assembleBudgeted(
   contextCfg: ContextConfig = parseContextConfig(null),
   miniCfg: MiniSelectConfig = parseMiniConfig(null),
   loreBudgetOverride: number | null = null,
+  llmMaxTokens = 0,
 ): AssembleResult {
   const userName = pack.player_name;
   const minis = selectMinisWithinBudget(miniCards, library, miniCfg);
   const cast = renderCastIndex(pack, scene.present);
   const worldText = pack.world_text;
   const player = memory.userSetting || "";
-  const cardsText = presentCards.map((card) => renderCard(library, card, userName)).filter(Boolean).join("\n\n");
+  const perCardBudget = Math.floor((contextCfg.budget.primary_card * 0.85) / Math.max(1, presentCards.length || 1));
+  const cardsText = presentCards
+    .map((card) => renderCard(library, card, userName, perCardBudget))
+    .filter(Boolean)
+    .join("\n\n");
   const miniEntries = minis.map((mini) => renderMini(library, mini));
   const miniLabels = minis.map((mini) => mini.id);
   const fallbackChar = presentCards[0]?.name || minis[0]?.name || "";
@@ -262,7 +274,8 @@ export function assembleBudgeted(
     { name: "summary", text: summary, budget: contextCfg.budget.summary },
   ];
 
-  const { texts, reports } = applySectionBudgets(blocks);
+  const softCap = sectionSoftCap(contextCfg, userInput, llmMaxTokens, 0, 200);
+  const { texts, reports } = applySectionBudgets(blocks, softCap);
   const memText = texts.memory || "";
   let snapWorld = memWorld && memText.includes(memWorld) ? memWorld : memText;
   let snapPlayer = memPlayer && memText.includes(memPlayer) ? memPlayer : "";
@@ -294,9 +307,17 @@ export function assembleBudgeted(
   const system = [extraSystem.trim(), stable, contextLayer, volatile].filter(Boolean).join("\n\n");
 
   const sectionTokens = reports.reduce((sum, item) => sum + item.tokens, 0);
-  const histBudget = historyTokenBudget(contextCfg, sectionTokens + estimateTokens(extraSystem), userInput);
+  const histBudget = historyTokenBudget(
+    contextCfg,
+    sectionTokens + estimateTokens(extraSystem),
+    userInput,
+    llmMaxTokens,
+  );
   const trimmed = trimHistory(historyMessages, histBudget, contextCfg.history.protect_recent_turns);
-  const report = buildContextReport(contextCfg, reports, trimmed.messages, trimmed.truncated, userInput);
+  const report = buildContextReport(contextCfg, reports, trimmed.messages, trimmed.truncated, userInput, {
+    llmMaxTokens,
+    extraSystem,
+  });
   const miniReport = reports.find((item) => item.name === "mini_cards");
   const loreReport = reports.find((item) => item.name === "lore");
   return {

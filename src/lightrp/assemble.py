@@ -15,6 +15,8 @@ from lightrp.budget import (
     default_mini_config,
     estimate_tokens,
     history_token_budget,
+    section_soft_cap,
+    trim_card_field_map,
     trim_history,
     truncate_to_tokens,
 )
@@ -73,18 +75,20 @@ def select_mini_members(
     primary_id: str | None,
     mini_cfg: MiniSelectConfig | None = None,
     recent_haystack: str = "",
+    user_text: str = "",
 ) -> list[CastMember]:
-    """Rank: explicit mention > present > recent mention > keyword. Cap by max_characters."""
+    """Rank: user_text name/@ > present > recent > other keyword. Cap by max_characters."""
     cfg = mini_cfg or default_mini_config()
     mentioned = {item.lower() for item in mention_ids}
     present_ids = {member.id for member in pack.present_members(scene.present)}
     recent_ids = _recent_mention_ids(pack, recent_haystack) if recent_haystack else set()
+    user_intent = _recent_mention_ids(pack, user_text) if user_text else set()
 
     ranked: list[tuple[int, CastMember]] = []
     for member in pack.cast:
         if primary_id and member.id == primary_id:
             continue
-        explicit = member.id.lower() in mentioned
+        explicit = member.id.lower() in mentioned or member.id in user_intent
         present = member.id in present_ids
         recent = member.id in recent_ids
         keyword = keyword_hit(member, haystack)
@@ -135,27 +139,32 @@ def render_cast_index(pack: WorldPack, present_ids: list[str]) -> str:
     return "\n".join(lines)
 
 
-def render_card(library: PromptLibrary, card: CharacterCard, user_name: str) -> str:
+def render_card(
+    library: PromptLibrary,
+    card: CharacterCard,
+    user_name: str,
+    budget: int | None = None,
+) -> str:
     filled = card.substitute(user_name)
-    return library.render(
-        "layers/card.md",
-        {
-            "id": filled.id,
-            "name": filled.name,
-            "age": filled.age,
-            "description": filled.description,
-            "personality": filled.personality,
-            "behavior": filled.behavior,
-            "speech": filled.speech,
-            "likes": filled.likes,
-            "dislikes": filled.dislikes,
-            "backstory": filled.backstory,
-            "scenario": filled.scenario,
-            "first_mes": filled.first_mes,
-            "mes_example": filled.mes_example,
-            "system_prompt": ensemble_acting(filled.system_prompt, filled.name),
-        },
-    ).strip()
+    fields = {
+        "id": filled.id,
+        "name": filled.name,
+        "age": filled.age,
+        "description": filled.description,
+        "personality": filled.personality,
+        "behavior": filled.behavior,
+        "speech": filled.speech,
+        "likes": filled.likes,
+        "dislikes": filled.dislikes,
+        "backstory": filled.backstory,
+        "scenario": filled.scenario,
+        "first_mes": filled.first_mes,
+        "mes_example": filled.mes_example,
+        "system_prompt": ensemble_acting(filled.system_prompt, filled.name),
+    }
+    if budget is not None and budget > 0:
+        fields, _ = trim_card_field_map(fields, budget)
+    return library.render("layers/card.md", fields).strip()
 
 
 def render_mini(library: PromptLibrary, mini: MiniCard) -> str:
@@ -171,8 +180,16 @@ def render_mini(library: PromptLibrary, mini: MiniCard) -> str:
     ).strip()
 
 
-def render_cards(library: PromptLibrary, cards: list[CharacterCard], user_name: str) -> str:
-    blocks = [render_card(library, card, user_name) for card in cards]
+def render_cards(
+    library: PromptLibrary,
+    cards: list[CharacterCard],
+    user_name: str,
+    budget: int | None = None,
+) -> str:
+    if not cards:
+        return ""
+    per = max(1, (budget or 0) // max(1, len(cards))) if budget else None
+    blocks = [render_card(library, card, user_name, per) for card in cards]
     return "\n\n".join(block for block in blocks if block)
 
 
@@ -236,6 +253,7 @@ def assemble_budgeted(
     context_cfg: ContextConfig | None = None,
     mini_cfg: MiniSelectConfig | None = None,
     lore_budget_override: int | None = None,
+    llm_max_tokens: int = 0,
 ) -> AssembleResult:
     cfg = context_cfg or default_context_config()
     mcfg = mini_cfg or default_mini_config()
@@ -245,7 +263,7 @@ def assemble_budgeted(
     cast = render_cast_index(pack, scene.present)
     world_text = pack.read_world()
     player = pack.read_user_setting() or memory.user_setting
-    cards_text = render_cards(library, present_cards, user_name)
+    cards_text = render_cards(library, present_cards, user_name, budget=int(cfg.budget.primary_card * 0.85))
     mini_entries = [render_mini(library, mini) for mini in minis]
     mini_labels = [mini.id for mini in minis]
     lore_texts, lore_labels = lore_entry_blocks(
@@ -313,7 +331,8 @@ def assemble_budgeted(
         SectionBlock(name="nmem", text=nmem_recall, budget=cfg.budget.nmem),
         SectionBlock(name="summary", text=summary, budget=cfg.budget.summary),
     ]
-    texts, section_reports = apply_section_budgets(blocks)
+    soft_cap = section_soft_cap(cfg, user_input, llm_max_tokens=llm_max_tokens, min_history_tokens=200)
+    texts, section_reports = apply_section_budgets(blocks, soft_cap=soft_cap)
 
     # Split memory back into world / player snapshots when possible
     mem_text = texts.get("memory", "")
@@ -358,9 +377,22 @@ def assemble_budgeted(
     ]
 
     section_tokens = sum(item.tokens for item in section_reports)
-    hist_budget = history_token_budget(cfg, section_tokens + estimate_tokens(extra), user_input)
+    hist_budget = history_token_budget(
+        cfg,
+        section_tokens + estimate_tokens(extra),
+        user_input,
+        llm_max_tokens=llm_max_tokens,
+    )
     trimmed, hist_truncated = trim_history(history_messages, hist_budget, cfg.history.protect_recent_turns)
-    report = build_context_report(cfg, section_reports, trimmed, hist_truncated, user_input)
+    report = build_context_report(
+        cfg,
+        section_reports,
+        trimmed,
+        hist_truncated,
+        user_input,
+        llm_max_tokens=llm_max_tokens,
+        extra_system=extra,
+    )
     mini_ids = list(next((r.items for r in section_reports if r.name == "mini_cards"), []) or [])
     lore_titles = list(next((r.items for r in section_reports if r.name == "lore"), []) or [])
     return AssembleResult(system=system, report=report, history=trimmed, mini_ids=mini_ids, lore_titles=lore_titles)

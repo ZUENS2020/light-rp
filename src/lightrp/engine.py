@@ -163,6 +163,7 @@ class Engine:
             primary_id,
             mini_cfg=self.config.mini,
             recent_haystack=recent,
+            user_text=user_text,
         )
         minis = []
         lore_cards = list(primary)
@@ -207,9 +208,10 @@ class Engine:
         enriched = enrich_record(candidate, self.scene)
         text = format_memory_entry(enriched)
         try:
-            importance = float(candidate.get("importance", 0.75))
+            raw = candidate.get("importance", 0.5)
+            importance = float(raw) if raw is not None else 0.5
         except (TypeError, ValueError):
-            importance = 0.75
+            importance = 0.5
         route = route_memory_candidate(importance)
         if route == "drop":
             return "drop"
@@ -272,6 +274,18 @@ class Engine:
                 names.append(member.name if member else sid)
             prompt_user = f"{user_text}\n\n（请给{'、'.join(names)}更多台词。只回复一次。）"
         lore_budget = self.pack.lore_token_budget or self.config.lore_token_budget or self.config.context.budget.lore
+        # Force generation_reserve >= llm.max_tokens at assemble time
+        from lightrp.budget import ContextConfig, build_context_report
+
+        ctx = self.config.context
+        if ctx.generation_reserve < self.config.llm.max_tokens:
+            ctx = ContextConfig(
+                max_tokens=ctx.max_tokens,
+                generation_reserve=self.config.llm.max_tokens,
+                tool_reserve=ctx.tool_reserve,
+                budget=ctx.budget,
+                history=ctx.history,
+            )
         assembled = assemble_budgeted(
             self.prompts,
             self.pack,
@@ -285,17 +299,28 @@ class Engine:
             extra_system=breach_system(self.prompts, breach),
             mini_cards=mini_cards,
             summary=story_summary(self.session.messages),
-            context_cfg=self.config.context,
+            context_cfg=ctx,
             mini_cfg=self.config.mini,
             lore_budget_override=lore_budget,
+            llm_max_tokens=self.config.llm.max_tokens,
         )
-        self._save_context_report(assembled.report.to_dict())
         phi_bits = [breach_phi(self.prompts, breach)]
         for card in primary_cards:
             filled = card.substitute(self.pack.player_name)
             if filled.post_history_instructions.strip():
                 phi_bits.append(ensemble_acting(filled.post_history_instructions, filled.name))
         phi = "\n\n".join(part for part in phi_bits if part)
+        report = build_context_report(
+            ctx,
+            assembled.report.sections,
+            assembled.history,
+            assembled.report.history_truncated,
+            prompt_user,
+            llm_max_tokens=self.config.llm.max_tokens,
+            phi_text=phi,
+            extra_system=breach_system(self.prompts, breach),
+        )
+        self._save_context_report(report.to_dict())
         messages: list[dict[str, Any]] = [{"role": "system", "content": assembled.system}, *assembled.history]
         messages.append({"role": "user", "content": prompt_user})
         state_before = self.scene

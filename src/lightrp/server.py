@@ -78,6 +78,7 @@ class ContextHistoryBody(BaseModel):
 class ContextSettingsBody(BaseModel):
     max_tokens: int = Field(default=32768, gt=0, le=500000)
     generation_reserve: int = Field(default=4096, gt=0, le=100000)
+    tool_reserve: int = Field(default=1500, gt=0, le=100000)
     budget: ContextBudgetBody = Field(default_factory=ContextBudgetBody)
     history: ContextHistoryBody = Field(default_factory=ContextHistoryBody)
 

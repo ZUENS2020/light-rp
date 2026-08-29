@@ -35,6 +35,7 @@ function toForm(data: AppSettings): FormState {
     context: data.context || {
       max_tokens: 32768,
       generation_reserve: 4096,
+      tool_reserve: 1500,
       budget: {},
       history: { use_remaining: true, protect_recent_turns: 6 },
     },
@@ -83,6 +84,11 @@ export function SettingsPage() {
           ...form.llm,
           api_key: form.llm.clear_api_key ? null : form.llm.api_key.trim() || null,
           clear_api_key: form.llm.clear_api_key,
+        },
+        context: {
+          ...form.context,
+          tool_reserve: form.context.tool_reserve ?? 1500,
+          generation_reserve: Math.max(form.context.generation_reserve, form.llm.max_tokens),
         },
       };
       const next = await api.saveSettings(payload);
@@ -322,7 +328,7 @@ export function SettingsPage() {
                   }
                 />
               </Field>
-              <Field id="context_reserve" label="生成预留 tokens">
+              <Field id="context_reserve" label="生成预留 tokens" hint="自动 ≥ 最大 tokens。">
                 <Input
                   id="context_reserve"
                   type="number"
@@ -332,6 +338,20 @@ export function SettingsPage() {
                     setForm({
                       ...form,
                       context: { ...form.context, generation_reserve: Number(event.target.value) },
+                    })
+                  }
+                />
+              </Field>
+              <Field id="context_tool_reserve" label="工具/破甲预留" hint="覆盖 phi + tool schema 开销。">
+                <Input
+                  id="context_tool_reserve"
+                  type="number"
+                  min={0}
+                  value={form.context.tool_reserve ?? 1500}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      context: { ...form.context, tool_reserve: Number(event.target.value) },
                     })
                   }
                 />

@@ -29,6 +29,7 @@ transcript_keep_after_compact: 8
 context:
   max_tokens: 32768
   generation_reserve: 4096
+  tool_reserve: 1500
   budget:
     system: 1500
     world: 2500
