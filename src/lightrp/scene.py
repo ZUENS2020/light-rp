@@ -97,6 +97,8 @@ def load_scene(path: Path) -> SceneState:
 
 
 def save_scene(path: Path, scene: SceneState) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(scene.as_yaml(), encoding="utf-8")
 
 
@@ -163,16 +165,41 @@ def trailer_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def trailer_memory_candidates(payload: dict[str, Any]) -> list[str]:
+def trailer_memory_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw = payload.get("memory_candidates") or []
     if not isinstance(raw, list):
         raw = [raw]
-    texts: list[str] = []
+    out: list[dict[str, Any]] = []
     for item in raw:
         if isinstance(item, dict):
-            text = field_text(item.get("text") or item.get("content"))
-        else:
-            text = str(item).strip()
-        if text:
-            texts.append(text)
-    return texts
+            rec = dict(item)
+            if not field_text(rec.get("text") or rec.get("content")):
+                continue
+            out.append(rec)
+        elif str(item).strip():
+            out.append({"text": str(item).strip()})
+    return out
+
+
+def enrich_record(item: dict[str, Any], scene: SceneState) -> dict[str, Any]:
+    rec = dict(item)
+    rec.setdefault("time", scene.time)
+    rec.setdefault("season", scene.season)
+    rec.setdefault("location", scene.location)
+    rec.setdefault("characters", list(scene.present))
+    return rec
+
+
+def format_memory_entry(item: dict[str, Any]) -> str:
+    return yaml.safe_dump(item, allow_unicode=True, sort_keys=False).strip()
+
+
+def ensure_session_state(session_root: Path, initial_path: Path, default_present: list[str]) -> SceneState:
+    path = Path(session_root) / "state.yaml"
+    if path.is_file():
+        return load_scene(path)
+    scene = load_scene(initial_path)
+    if not scene.present:
+        scene.present = list(default_present)
+    save_scene(path, scene)
+    return scene

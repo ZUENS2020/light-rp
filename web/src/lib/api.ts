@@ -102,6 +102,7 @@ export type PlayState = {
   world: WorldSummary;
   session_id: string;
   session_title?: string;
+  primary_character?: string | null;
   nmem_space: string | null;
   nmem_available: boolean;
   warnings: string[];
@@ -118,12 +119,21 @@ export type PlayState = {
   };
   memory: string;
   player: string;
+  player_memory?: string;
   messages: { role: string; content: string; ts: string }[];
   reply?: string;
   spotlight?: string[];
   nmem_synced?: boolean;
   turn_warnings?: string[];
   summary?: string;
+};
+
+export type MiniCard = {
+  id: string;
+  name: string;
+  summary: string;
+  behavior_notes: string;
+  relations: string;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -188,6 +198,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ title }),
     }),
+  patchSession: (worldId: string, sessionId: string, body: { title?: string; primary_character?: string | null }) =>
+    request<PlayState | SessionInfo>(`/api/worlds/${worldId}/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
   deleteSession: (worldId: string, sessionId: string) =>
     request<{ ok: boolean }>(`/api/worlds/${worldId}/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
   cards: (id: string) =>
@@ -195,6 +210,7 @@ export const api = {
       cards: {
         member: CastMember & { card: string };
         card: CharacterCard | null;
+        mini: MiniCard | null;
       }[];
     }>(`/api/worlds/${id}/cards`),
   saveCard: (worldId: string, cid: string, body: Record<string, unknown>) =>
@@ -204,6 +220,15 @@ export const api = {
     }),
   deleteCard: (worldId: string, cid: string) =>
     request<{ ok: boolean }>(`/api/worlds/${worldId}/cards/${encodeURIComponent(cid)}`, { method: "DELETE" }),
+  getMini: (worldId: string, cid: string) =>
+    request<{ mini: MiniCard | null }>(`/api/worlds/${worldId}/cards/${encodeURIComponent(cid)}/mini`),
+  saveMini: (worldId: string, cid: string, body: MiniCard) =>
+    request<{ mini: MiniCard }>(`/api/worlds/${worldId}/cards/${encodeURIComponent(cid)}/mini`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  generateMini: (worldId: string, cid: string) =>
+    request<{ mini: MiniCard }>(`/api/worlds/${worldId}/cards/${encodeURIComponent(cid)}/mini/generate`, { method: "POST" }),
   lorebooks: (id: string) => request<{ lorebooks: { name: string; text: string }[] }>(`/api/worlds/${id}/lorebooks`),
   saveLorebook: (worldId: string, name: string, text: string) =>
     request<{ name: string; text: string }>(`/api/worlds/${worldId}/lorebooks/${encodeURIComponent(name)}`, {

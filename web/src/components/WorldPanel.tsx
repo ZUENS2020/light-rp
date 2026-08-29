@@ -2,7 +2,10 @@ import type { PlayState } from "../lib/api";
 
 export function WorldPanel({ state }: { state: PlayState }) {
   const scene = state.scene;
-  const present = new Set(scene.present);
+  const presentIds = new Set(scene.present.map((id) => id.toLowerCase()));
+  const presentMembers = state.world.cast.filter((member) =>
+    [member.id, member.name, ...member.aliases].some((name) => name && presentIds.has(name.toLowerCase())),
+  );
   const body = scene.scene || scene.notes;
   return (
     <div className="space-y-6 font-ui text-sm">
@@ -35,16 +38,18 @@ export function WorldPanel({ state }: { state: PlayState }) {
       </section>
       <section className="space-y-3">
         <h2 className="font-display text-base font-semibold">在场</h2>
-        <ul className="space-y-2">
-          {state.world.cast.map((member) => (
-            <li key={member.id} className={present.has(member.id) ? "" : "text-secondary"}>
-              <p className="font-medium">
-                {member.name}
-                <span className="font-normal text-secondary">{present.has(member.id) ? " · 在场" : " · 不在场"}</span>
-              </p>
-            </li>
-          ))}
-        </ul>
+        {presentMembers.length === 0 ? (
+          <p className="text-secondary">（无人在场）</p>
+        ) : (
+          <ul className="space-y-2">
+            {presentMembers.map((member) => (
+              <li key={member.id}>
+                <p className="font-medium">{member.name}</p>
+                {member.blurb ? <p className="text-secondary">{member.blurb}</p> : null}
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );

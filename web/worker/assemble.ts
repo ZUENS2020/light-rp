@@ -1,11 +1,6 @@
-import type { CastMember, CharacterCard, LoreEntry, MemoryStore, SceneState, WorldPack } from "./domain";
+import type { CastMember, CharacterCard, LoreEntry, MemoryStore, MiniCard, SceneState, WorldPack } from "./domain";
 import { ensembleActing, sceneYaml, substituteCard } from "./domain";
 import type { PromptLibrary } from "./prompts";
-
-function clipText(text: string, limit = 450): string {
-  const trimmed = text.trim();
-  return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit - 1)}…`;
-}
 
 export function storySummary(messages: { role: string; content: string }[]): string {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -15,10 +10,11 @@ export function storySummary(messages: { role: string; content: string }[]): str
   return "";
 }
 
-export function resolvePrimaryId(pack: WorldPack, scene: SceneState): string | null {
-  if (pack.primary) {
-    const member = pack.cast.find((item) => item.id === pack.primary || item.name === pack.primary);
-    return member?.id || pack.primary;
+export function resolvePrimaryId(pack: WorldPack, scene: SceneState, sessionPrimary: string | null = null): string | null {
+  for (const candidate of [sessionPrimary, pack.primary]) {
+    if (!candidate) continue;
+    const member = pack.cast.find((item) => item.id === candidate || item.name === candidate);
+    return member?.id || candidate;
   }
   for (const ident of scene.present) {
     const needle = ident.toLowerCase();
@@ -43,7 +39,11 @@ export function selectMiniMembers(
 ): CastMember[] {
   const mentioned = new Set(mentionIds.map((id) => id.toLowerCase()));
   const present = new Set(
-    pack.cast.filter((member) => scene.present.some((id) => [member.id, member.name, ...member.aliases].some((name) => name.toLowerCase() === id.toLowerCase()))).map((m) => m.id),
+    pack.cast
+      .filter((member) =>
+        scene.present.some((id) => [member.id, member.name, ...member.aliases].some((name) => name.toLowerCase() === id.toLowerCase())),
+      )
+      .map((m) => m.id),
   );
   const out: CastMember[] = [];
   const seen = new Set<string>();
@@ -93,16 +93,14 @@ export function renderCard(library: PromptLibrary, card: CharacterCard, userName
     .trim();
 }
 
-function renderMini(library: PromptLibrary, pack: WorldPack, card: CharacterCard, userName: string): string {
-  const filled = substituteCard(card, userName);
-  const member = pack.cast.find((item) => item.id === filled.id);
+function renderMini(library: PromptLibrary, mini: MiniCard): string {
   return library
     .render("layers/mini.md", {
-      id: filled.id,
-      name: filled.name,
-      summary: clipText((member?.blurb || "") || filled.personality),
-      behavior_notes: clipText(filled.behavior),
-      relations: clipText(filled.speech),
+      id: mini.id,
+      name: mini.name,
+      summary: mini.summary,
+      behavior_notes: mini.behavior_notes,
+      relations: mini.relations,
     })
     .trim();
 }
@@ -131,18 +129,19 @@ export function assembleSystem(
   loreEntries: LoreEntry[],
   nmemRecall: string,
   extraSystem = "",
-  miniCards: CharacterCard[] = [],
+  miniCards: MiniCard[] = [],
   summary = "",
 ): string {
   const userName = pack.player_name;
   const values: Record<string, string> = {
     world: pack.world_text,
     cast: renderCastIndex(pack, scene.present),
-    player: memory.snapPlayer,
+    player: memory.userSetting || "",
     memory: memory.snapWorld,
+    player_memory: memory.snapPlayer,
     scene: sceneYaml(scene),
     cards: presentCards.map((card) => renderCard(library, card, userName)).filter(Boolean).join("\n\n"),
-    minis: miniCards.map((card) => renderMini(library, pack, card, userName)).filter(Boolean).join("\n\n"),
+    minis: miniCards.map((mini) => renderMini(library, mini)).filter(Boolean).join("\n\n"),
     lore: renderLore(library, loreEntries, userName, presentCards[0]?.name || miniCards[0]?.name || ""),
     nmem: nmemRecall,
     summary,
@@ -152,7 +151,12 @@ export function assembleSystem(
   };
   const gm = library.render("gm.md", values);
   values.gm = gm;
-  const parts = [extraSystem.trim(), library.render("layers/stable.md", values).trim(), library.render("layers/context.md", values).trim(), library.render("layers/volatile.md", values).trim()];
+  const parts = [
+    extraSystem.trim(),
+    library.render("layers/stable.md", values).trim(),
+    library.render("layers/context.md", values).trim(),
+    library.render("layers/volatile.md", values).trim(),
+  ];
   return parts.filter(Boolean).join("\n\n");
 }
 

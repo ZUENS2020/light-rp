@@ -71,14 +71,51 @@ def test_mini_activation_keeps_present_and_mentions() -> None:
 
 
 def test_full_and_mini_in_prompt() -> None:
+    from lightrp.mini import ensure_mini
+
     pack = load_world(find_example_world())
     scene = load_scene(pack.scene_md)
     memory = MemoryStore(pack.root)
     memory.load_from_disk()
     lib = PromptLibrary(package_dir=package_prompts_dir())
     primary = [pack.load_member_card(pack.member("anlan"))]  # type: ignore[arg-type]
-    mini = [pack.load_member_card(pack.member("xiaowu"))]  # type: ignore[arg-type]
+    xiaowu = pack.load_member_card(pack.member("xiaowu"))  # type: ignore[arg-type]
+    mini = [ensure_mini(pack.root, "xiaowu", xiaowu, pack.member("xiaowu").blurb)]  # type: ignore[union-attr]
     prompt = assemble_system(lib, pack, memory, scene, primary, [], nmem_recall="", mini_cards=mini)
     assert "多人场角色卡" in prompt
     assert "小雾" in prompt and "· Mini" in prompt
     assert prompt.index("阿澜") < prompt.index("· Mini")
+    assert "玩家相关记忆" in prompt
+
+
+def test_session_state_isolated(tmp_path) -> None:
+    from pathlib import Path
+
+    from lightrp.scene import ensure_session_state, save_scene, SceneState
+
+    initial = tmp_path / "INITIAL_STATE.yaml"
+    save_scene(initial, SceneState(location="石堤", time="黄昏", present=["anlan"], scene="海风"))
+    a = ensure_session_state(tmp_path / "a", initial, ["anlan"])
+    b = ensure_session_state(tmp_path / "b", initial, ["anlan"])
+    a.location = "茶铺"
+    save_scene(Path(tmp_path / "a" / "state.yaml"), a)
+    b2 = ensure_session_state(tmp_path / "b", initial, ["anlan"])
+    assert b2.location == "石堤"
+    assert (tmp_path / "a" / "state.yaml").read_text(encoding="utf-8")
+    assert "茶铺" in (tmp_path / "a" / "state.yaml").read_text(encoding="utf-8")
+
+
+def test_player_memory_not_user_setting(tmp_path) -> None:
+    from lightrp.memory import MemoryStore
+
+    (tmp_path / "PLAYER.md").write_text("我是训练员。", encoding="utf-8")
+    (tmp_path / "PLAYER_MEMORY.md").write_text("", encoding="utf-8")
+    (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+    store = MemoryStore(tmp_path)
+    store.load_from_disk()
+    assert store.user_setting == "我是训练员。"
+    store.apply("add", "player", "喜欢麦茶", "", None)
+    store.load_from_disk()
+    assert "我是训练员。" in (tmp_path / "PLAYER.md").read_text(encoding="utf-8")
+    assert "喜欢麦茶" in (tmp_path / "PLAYER_MEMORY.md").read_text(encoding="utf-8")
+    assert "喜欢麦茶" not in (tmp_path / "PLAYER.md").read_text(encoding="utf-8")

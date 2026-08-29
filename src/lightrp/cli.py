@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from lightrp.cards import aliases_from_card, load_card, save_card_yaml, slugify
+from lightrp.mini import ensure_mini
 from lightrp.config import AppConfig, load_config
 from lightrp.engine import Engine, resolve_nmem_space
 from lightrp.nmem import NmemClient, NmemError
@@ -131,6 +132,7 @@ def cmd_import_card(args: argparse.Namespace, config: AppConfig) -> int:
             aliases=aliases_from_card(card),
         )
     )
+    ensure_mini(pack.root, cid, card, "")
     print(pack.root / rel)
     return 0
 

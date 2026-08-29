@@ -152,7 +152,7 @@ export function WorldPane({
           <Input id="player-name" value={playerName} onChange={(event) => setPlayerName(event.target.value)} />
         </div>
         <div className="space-y-2 sm:col-span-2">
-          <Label htmlFor="world-primary">主卡角色</Label>
+          <Label htmlFor="world-primary">新会话默认主卡</Label>
           <select
             id="world-primary"
             className="flex h-11 w-full rounded-md border border-border bg-background px-3 font-ui text-sm"
@@ -166,7 +166,7 @@ export function WorldPane({
               </option>
             ))}
           </select>
-          <Hint>对局只注入这一张完整卡，其余角色用 Mini。</Hint>
+          <Hint>只影响新开的会话。对局里可在顶栏切换本局主卡。</Hint>
         </div>
       </div>
       <div className="space-y-2">
@@ -192,8 +192,9 @@ export function WorldPane({
         <Textarea id="world-text" rows={12} value={worldText} onChange={(event) => setWorldText(event.target.value)} />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="player-text">PLAYER.md</Label>
+        <Label htmlFor="player-text">用户设定（PLAYER.md）</Label>
         <Textarea id="player-text" rows={6} value={playerText} onChange={(event) => setPlayerText(event.target.value)} />
+        <Hint>你自己的固定人设。模型不能改这份文件；世界了解到的信息写在 PLAYER_MEMORY.md。</Hint>
       </div>
       <Button type="submit" disabled={busy}>
         保存世界包

@@ -24,11 +24,20 @@ class Session:
     session_id: str
     thread_id: str | None = None
     nmem_space: str | None = None
+    primary_character: str | None = None
     messages: list[ChatMessage] = field(default_factory=list)
 
     @property
     def transcript_path(self) -> Path:
         return self.root / "transcript.jsonl"
+
+    @property
+    def state_path(self) -> Path:
+        return self.root / "state.yaml"
+
+    @property
+    def summary_path(self) -> Path:
+        return self.root / "summary.md"
 
     @property
     def meta_path(self) -> Path:
@@ -62,6 +71,7 @@ class Session:
             "session_id": self.session_id,
             "thread_id": self.thread_id,
             "nmem_space": self.nmem_space,
+            "primary_character": self.primary_character,
             "updated": _now(),
         }
         self.meta_path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -104,6 +114,7 @@ def load_session(root: Path) -> Session:
         session_id=str(meta.get("session_id") or root.name),
         thread_id=meta.get("thread_id"),
         nmem_space=meta.get("nmem_space"),
+        primary_character=str(meta["primary_character"]) if meta.get("primary_character") else None,
         messages=messages,
     )
 

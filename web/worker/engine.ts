@@ -5,13 +5,16 @@ import {
   applyMemory,
   applyScenePatch,
   ensembleActing,
+  enrichRecord,
+  ensureMini,
+  ensureSessionState,
+  formatMemoryEntry,
   freezeMemory,
   loadAllLore,
   loadCard,
   loadMemory,
   loadSession,
   parseMentions,
-  parseScene,
   parseTrailer,
   persistMemory,
   saveSession,
@@ -24,6 +27,7 @@ import {
   type CharacterCard,
   type ChatMessage,
   type MemoryStore,
+  type MiniCard,
   type SceneState,
   type WorldPack,
 } from "./domain";
@@ -79,8 +83,7 @@ async function triggered(
   const budget = pack.lore_token_budget || settings.lore_token_budget;
   const recent = messages.slice(-depth);
   const haystack = `${recent.map((m) => `${m.role}: ${m.content}`).join("\n")}\n${extra}`;
-  const lore = triggerLore(await loadAllLore(fs, cards), haystack, sceneLoreHaystack(pack, scene), budget);
-  return lore;
+  return triggerLore(await loadAllLore(fs, cards), haystack, sceneLoreHaystack(pack, scene), budget);
 }
 
 export function openingFor(cards: CharacterCard[], playerName: string): string {
@@ -88,6 +91,29 @@ export function openingFor(cards: CharacterCard[], playerName: string): string {
     .map((card) => substituteCard(card, playerName).first_mes.trim())
     .filter(Boolean)
     .join("\n\n");
+}
+
+async function loadMinisForTurn(
+  fs: R2Fs,
+  pack: WorldPack,
+  scene: SceneState,
+  haystack: string,
+  mentionIds: string[],
+  primaryId: string | null,
+): Promise<{ minis: MiniCard[]; loreCards: CharacterCard[] }> {
+  const members = selectMiniMembers(pack, scene, haystack, mentionIds, primaryId);
+  const minis: MiniCard[] = [];
+  const loreCards: CharacterCard[] = [];
+  for (const member of members) {
+    try {
+      const card = await loadCard(fs, member);
+      loreCards.push(card);
+      minis.push(await ensureMini(fs, member, card));
+    } catch {
+      continue;
+    }
+  }
+  return { minis, loreCards };
 }
 
 export async function runTurn(
@@ -102,11 +128,17 @@ export async function runTurn(
 ): Promise<TurnOut> {
   const warnings: string[] = [];
   const loaded = await loadSession(fs, sessionId);
-  const scene = parseScene(await fs.get("SCENE.md"));
-  if (!scene.present.length) {
-    scene.present = pack.cast.filter((m) => m.present).map((m) => m.id);
-    await fs.put("SCENE.md", sceneYaml(scene));
+  let primaryCharacter = loaded.primary_character;
+  if (!primaryCharacter && pack.primary) {
+    primaryCharacter = pack.primary;
+    await saveSession(fs, sessionId, loaded.messages, {
+      thread_id: loaded.thread_id,
+      nmem_space: loaded.nmem_space,
+      primary_character: primaryCharacter,
+      title: loaded.title,
+    });
   }
+  const scene = await ensureSessionState(fs, sessionId, pack);
   const memory = await loadMemory(fs);
   const library = new PromptLibrary(overlays);
   const listed = settings.nmem.enabled ? await listNmemSpaces(env) : { available: false, spaces: [] };
@@ -120,12 +152,15 @@ export async function runTurn(
     }
   }
   const mentionIds = parseMentions(userText, aliasMap(pack.cast));
-  const primaryId = resolvePrimaryId(pack, scene);
+  const primaryId = resolvePrimaryId(pack, scene, primaryCharacter);
   const primaryMember = primaryId ? pack.cast.find((item) => item.id === primaryId) : undefined;
   const primaryCards = primaryMember ? await loadMemberCards(fs, [primaryMember]) : [];
-  const haystack = `${userText}\n${loaded.messages.slice(-8).map((m) => m.content).join("\n")}\n${scene.location} ${scene.time} ${scene.scene || scene.notes} ${scene.present.join(" ")}`;
-  const miniCards = await loadMemberCards(fs, selectMiniMembers(pack, scene, haystack, mentionIds, primaryId));
-  const lore = await triggered(fs, pack, scene, loaded.messages, userText, settings, [...primaryCards, ...miniCards]);
+  const haystack = `${userText}\n${loaded.messages
+    .slice(-8)
+    .map((m) => m.content)
+    .join("\n")}\n${scene.location} ${scene.time} ${scene.scene || scene.notes} ${scene.present.join(" ")}`;
+  const { minis, loreCards } = await loadMinisForTurn(fs, pack, scene, haystack, mentionIds, primaryId);
+  const lore = await triggered(fs, pack, scene, loaded.messages, userText, settings, [...primaryCards, ...loreCards]);
   const promptUser = mentionPrompt(pack, userText, mentionIds);
   const breach = settings.llm.breach;
   const system = assembleSystem(
@@ -137,7 +172,7 @@ export async function runTurn(
     lore,
     recall,
     breachSystem(library, breach),
-    miniCards,
+    minis,
     storySummary(loaded.messages),
   );
   const cardPhi = primaryCards
@@ -150,7 +185,9 @@ export async function runTurn(
   const phi = [breachPhi(library, breach), cardPhi].filter(Boolean).join("\n\n");
   const messages: LlmMessage[] = [
     { role: "system", content: system },
-    ...loaded.messages.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system").map((m) => ({ role: m.role, content: m.content })),
+    ...loaded.messages
+      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
+      .map((m) => ({ role: m.role, content: m.content })),
     { role: "user", content: promptUser },
   ];
   let nmemIndex = await loadNmemIndex((path) => fs.get(path));
@@ -177,32 +214,33 @@ export async function runTurn(
   let nextScene = scene;
   if (Object.keys(trailer).length) {
     nextScene = applyScenePatch(scene, trailer);
-    await fs.put("SCENE.md", sceneYaml(nextScene));
-    await appendEvents(fs, sessionId, trailerEvents(trailer));
+    await fs.put(`sessions/${sessionId}/state.yaml`, sceneYaml(nextScene));
+    await appendEvents(
+      fs,
+      sessionId,
+      trailerEvents(trailer).map((item) => enrichRecord(item, nextScene)),
+    );
     for (const candidate of trailerMemoryCandidates(trailer)) {
-      await runMemoryTool(fs, memory, settings, "memory", { action: "add", target: "world", content: candidate });
+      await runMemoryTool(fs, memory, settings, "memory", {
+        action: "add",
+        target: "world",
+        content: formatMemoryEntry(enrichRecord(candidate, nextScene)),
+      });
     }
   }
   const memoryOps = Array.isArray(trailer.memory) ? trailer.memory : [];
   for (const raw of memoryOps) {
     if (!raw || typeof raw !== "object") continue;
     const op = raw as Record<string, unknown>;
-    await runMemoryTool(
-      fs,
-      memory,
-      settings,
-      "memory",
-      op,
-      async (target, characterId, live) => {
-        if (!spaceId) return;
-        try {
-          nmemIndex = await syncFactToNmem(env, spaceId, nmemIndex, pack.id, target, characterId, live);
-          await saveNmemIndex((path, text, type) => fs.put(path, text, type), nmemIndex);
-        } catch (err) {
-          warnings.push(`nmem 记忆同步失败: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      },
-    );
+    await runMemoryTool(fs, memory, settings, "memory", op, async (target, characterId, live) => {
+      if (!spaceId) return;
+      try {
+        nmemIndex = await syncFactToNmem(env, spaceId, nmemIndex, pack.id, target, characterId, live);
+        await saveNmemIndex((path, text, type) => fs.put(path, text, type), nmemIndex);
+      } catch (err) {
+        warnings.push(`nmem 记忆同步失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
   }
   const spotlightIds = unique([...asIdList(trailer.spotlight), ...mentionIds]);
   const nextMessages = [
@@ -237,10 +275,25 @@ export async function runTurn(
     if (waitUntil && !willCompact) waitUntil(threadJob);
     else await threadJob;
   }
-  await saveSession(fs, sessionId, nextMessages, { thread_id: threadId, nmem_space: loaded.nmem_space });
+  await saveSession(fs, sessionId, nextMessages, {
+    thread_id: threadId,
+    nmem_space: loaded.nmem_space,
+    primary_character: primaryCharacter,
+  });
   if (nextMessages.length >= settings.compact_after_turns) {
     try {
-      await runCompact(env, fs, memory, nextMessages, sessionId, { ...loaded, thread_id: threadId }, library, settings, pack.id, waitUntil);
+      await runCompact(
+        env,
+        fs,
+        memory,
+        nextMessages,
+        sessionId,
+        { ...loaded, thread_id: threadId, primary_character: primaryCharacter },
+        library,
+        settings,
+        pack.id,
+        waitUntil,
+      );
     } catch (err) {
       warnings.push(`compact failed: ${String(err)}`);
     }
@@ -295,7 +348,7 @@ export async function runCompact(
   memory: MemoryStore,
   messages: ChatMessage[],
   sessionId: string,
-  loaded: { thread_id: string | null; nmem_space: string | null },
+  loaded: { thread_id: string | null; nmem_space: string | null; primary_character?: string | null },
   library: PromptLibrary,
   settings: AppSettings,
   worldId = "",
@@ -355,10 +408,9 @@ export async function runCompact(
   const kept = keep ? messages.slice(-keep) : [];
   const next = [{ role: "system", content: summary, ts: nowIso() }, ...kept];
   await saveSession(fs, sessionId, next, loaded);
+  if (summary) await fs.put(`sessions/${sessionId}/summary.md`, `${summary}\n`);
   if (spaceId && listed.available && summary) {
-    const job = addSummaryToNmem(env, spaceId, worldId || "world", sessionId, summary, loaded.thread_id).catch(
-      () => undefined,
-    );
+    const job = addSummaryToNmem(env, spaceId, worldId || "world", sessionId, summary, loaded.thread_id).catch(() => undefined);
     if (waitUntil) waitUntil(job);
     else await job;
   }

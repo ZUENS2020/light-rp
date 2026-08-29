@@ -3,21 +3,25 @@ import { HTTPException } from "hono/http-exception";
 import {
   cardFromObj,
   cardToExport,
+  ensureSessionState,
   findMember,
+  generateMini,
   loadCard,
   loadMemory,
+  loadMini,
   loadPack,
   loadSession,
   listSessions,
   memberPresent,
-  parseScene,
   saveCast,
+  saveMini,
   saveSession,
   saveWorldMeta,
   sessionInfoFrom,
   deleteSession,
   deleteWorkspace,
   type CastMember,
+  type MiniCard,
   type WorldPack,
 } from "./domain";
 import { openingFor, runCompact, runTurn } from "./engine";
@@ -73,7 +77,17 @@ function summary(
 
 async function playState(env: Env, fs: ReturnType<typeof workspaceFs>, pack: WorldPack, sessionId: string, extra: Record<string, unknown> = {}) {
   const loaded = await loadSession(fs, sessionId);
-  const scene = parseScene(await fs.get("SCENE.md"));
+  let primaryCharacter = loaded.primary_character;
+  if (!primaryCharacter && pack.primary) {
+    primaryCharacter = pack.primary;
+    await saveSession(fs, sessionId, loaded.messages, {
+      thread_id: loaded.thread_id,
+      nmem_space: loaded.nmem_space,
+      primary_character: primaryCharacter,
+      title: loaded.title,
+    });
+  }
+  const scene = await ensureSessionState(fs, sessionId, pack);
   const memory = await loadMemory(fs);
   const cards = [];
   for (const member of pack.cast) {
@@ -89,13 +103,15 @@ async function playState(env: Env, fs: ReturnType<typeof workspaceFs>, pack: Wor
     world: { ...summary(pack, sessionId, loaded.nmem_space, { session_count: sessions.length }), sessions, world_text: pack.world_text },
     session_id: sessionId,
     session_title: sessionInfoFrom(sessionId, loaded).title,
+    primary_character: primaryCharacter,
     nmem_space: loaded.nmem_space,
     nmem_available: extra.nmem_available != null ? Boolean(extra.nmem_available) : Boolean(env.NMEM_API_KEY),
     warnings: [] as string[],
     opening: openingFor(cards, pack.player_name),
     scene,
     memory: memory.world.join("\n§\n"),
-    player: memory.player.join("\n§\n"),
+    player: memory.userSetting,
+    player_memory: memory.player.join("\n§\n"),
     messages: loaded.messages,
     ...extra,
   };
@@ -242,12 +258,48 @@ app.get("/api/worlds/:id/cards", async (c) => {
   const cards = [];
   for (const member of pack.cast) {
     try {
-      cards.push({ member, card: await loadCard(fs, member) });
+      cards.push({ member, card: await loadCard(fs, member), mini: await loadMini(fs, member.id) });
     } catch {
-      cards.push({ member, card: null });
+      cards.push({ member, card: null, mini: await loadMini(fs, member.id) });
     }
   }
   return c.json({ cards });
+});
+
+app.get("/api/worlds/:id/cards/:cid/mini", async (c) => {
+  const fs = workspaceFs(c.env.BUCKET, c.req.param("id"));
+  const mini = await loadMini(fs, c.req.param("cid"));
+  return c.json({ mini });
+});
+
+app.put("/api/worlds/:id/cards/:cid/mini", async (c) => {
+  const cid = c.req.param("cid");
+  const fs = workspaceFs(c.env.BUCKET, c.req.param("id"));
+  const pack = await loadPack(fs, c.req.param("id"));
+  const member = findMember(pack, cid);
+  const body = (await c.req.json()) as Partial<MiniCard>;
+  const mini: MiniCard = {
+    id: cid,
+    name: String(body.name || member?.name || cid),
+    summary: String(body.summary || ""),
+    behavior_notes: String(body.behavior_notes || ""),
+    relations: String(body.relations || ""),
+  };
+  await saveMini(fs, mini);
+  return c.json({ mini });
+});
+
+app.post("/api/worlds/:id/cards/:cid/mini/generate", async (c) => {
+  const cid = c.req.param("cid");
+  const fs = workspaceFs(c.env.BUCKET, c.req.param("id"));
+  const pack = await loadPack(fs, c.req.param("id"));
+  const member = findMember(pack, cid);
+  if (!member) throw new HTTPException(404, { message: `character '${cid}' not found` });
+  const card = await loadCard(fs, member);
+  const mini = generateMini(card, member.blurb);
+  mini.id = cid;
+  await saveMini(fs, mini);
+  return c.json({ mini });
 });
 
 app.put("/api/worlds/:id/cards/:cid", async (c) => {
@@ -308,6 +360,15 @@ app.put("/api/worlds/:id/cards/:cid", async (c) => {
     await fs.put(member.card, stringifyYaml(cardToExport(card)));
   }
   await saveCast(fs, pack);
+  try {
+    if (!(await loadMini(fs, cid))) {
+      const mini = generateMini(card, member.blurb);
+      mini.id = cid;
+      await saveMini(fs, mini);
+    }
+  } catch {
+    /* card load already succeeded above */
+  }
   return c.json({ member, card: { ...card, id: cid } });
 });
 
@@ -317,7 +378,10 @@ app.delete("/api/worlds/:id/cards/:cid", async (c) => {
   const fs = workspaceFs(c.env.BUCKET, id);
   const pack = await loadPack(fs, id);
   const member = findMember(pack, cid);
-  if (member) await fs.del(member.card);
+  if (member) {
+    await fs.del(member.card);
+    await fs.del(`characters/${cid}.mini.yaml`);
+  }
   pack.cast = pack.cast.filter((item) => item.id !== cid);
   await saveCast(fs, pack);
   return c.json({ ok: true });
@@ -388,7 +452,8 @@ app.post("/api/worlds/:id/sessions", async (c) => {
   let sessionId = body.session_id;
   if (!sessionId || body.new) {
     sessionId = sessionIdNow();
-    await saveSession(fs, sessionId, [], { nmem_space: space });
+    await saveSession(fs, sessionId, [], { nmem_space: space, primary_character: pack.primary });
+    await ensureSessionState(fs, sessionId, pack);
   }
   return c.json(await playState(c.env, fs, pack, sessionId, { nmem_available: listed.available }));
 });
@@ -402,16 +467,25 @@ app.get("/api/worlds/:id/sessions", async (c) => {
 app.patch("/api/worlds/:id/sessions/:sid", async (c) => {
   const fs = workspaceFs(c.env.BUCKET, c.req.param("id"));
   const sid = c.req.param("sid");
-  const body = (await c.req.json()) as { title?: string };
-  const title = (body.title || "").trim();
-  if (!title) throw new HTTPException(400, { message: "title is required" });
+  const pack = await loadPack(fs, c.req.param("id"));
+  const body = (await c.req.json()) as { title?: string; primary_character?: string | null };
   const loaded = await loadSession(fs, sid);
+  const title = body.title != null ? body.title.trim() : undefined;
+  if (body.title != null && !title) throw new HTTPException(400, { message: "title is required" });
+  let primary = body.primary_character;
+  if (primary !== undefined && primary) {
+    const member = findMember(pack, primary);
+    if (!member) throw new HTTPException(400, { message: `character '${primary}' not found` });
+    primary = member.id;
+  }
   await saveSession(fs, sid, loaded.messages, {
     thread_id: loaded.thread_id,
     nmem_space: loaded.nmem_space,
-    title,
+    title: title ?? loaded.title,
+    primary_character: primary !== undefined ? primary : loaded.primary_character,
   });
-  return c.json(sessionInfoFrom(sid, { ...loaded, title }));
+  if (title != null) return c.json(sessionInfoFrom(sid, { ...loaded, title }));
+  return c.json(await playState(c.env, fs, pack, sid));
 });
 
 app.delete("/api/worlds/:id/sessions/:sid", async (c) => {

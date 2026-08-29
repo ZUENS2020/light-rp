@@ -5,16 +5,10 @@ from typing import Any
 from lightrp.cards import CharacterCard, ensemble_acting
 from lightrp.lorebook import LoreEntry
 from lightrp.memory import MemoryStore
+from lightrp.mini import MiniCard, clip_text
 from lightrp.promptlib import PromptLibrary
 from lightrp.scene import SceneState
 from lightrp.world import CastMember, WorldPack
-
-
-def clip_text(text: str, limit: int = 450) -> str:
-    trimmed = (text or "").strip()
-    if len(trimmed) <= limit:
-        return trimmed
-    return trimmed[: limit - 1] + "…"
 
 
 def story_summary(messages: list[Any]) -> str:
@@ -26,10 +20,11 @@ def story_summary(messages: list[Any]) -> str:
     return ""
 
 
-def resolve_primary_id(pack: WorldPack, scene: SceneState) -> str | None:
-    if pack.primary:
-        member = pack.member(pack.primary)
-        return member.id if member else pack.primary
+def resolve_primary_id(pack: WorldPack, scene: SceneState, session_primary: str | None = None) -> str | None:
+    for candidate in (session_primary, pack.primary):
+        if candidate:
+            member = pack.member(candidate)
+            return member.id if member else candidate
     for ident in scene.present:
         member = pack.member(ident)
         if member:
@@ -101,18 +96,15 @@ def render_card(library: PromptLibrary, card: CharacterCard, user_name: str) -> 
     ).strip()
 
 
-def render_mini(library: PromptLibrary, pack: WorldPack, card: CharacterCard, user_name: str) -> str:
-    filled = card.substitute(user_name)
-    member = pack.member(filled.id)
-    summary = clip_text((member.blurb if member else "") or filled.personality)
+def render_mini(library: PromptLibrary, mini: MiniCard) -> str:
     return library.render(
         "layers/mini.md",
         {
-            "id": filled.id,
-            "name": filled.name,
-            "summary": summary,
-            "behavior_notes": clip_text(filled.behavior),
-            "relations": clip_text(filled.speech),
+            "id": mini.id,
+            "name": mini.name,
+            "summary": mini.summary,
+            "behavior_notes": mini.behavior_notes,
+            "relations": mini.relations,
         },
     ).strip()
 
@@ -122,8 +114,8 @@ def render_cards(library: PromptLibrary, cards: list[CharacterCard], user_name: 
     return "\n\n".join(block for block in blocks if block)
 
 
-def render_minis(library: PromptLibrary, pack: WorldPack, cards: list[CharacterCard], user_name: str) -> str:
-    blocks = [render_mini(library, pack, card, user_name) for card in cards]
+def render_minis(library: PromptLibrary, minis: list[MiniCard]) -> str:
+    blocks = [render_mini(library, mini) for mini in minis]
     return "\n\n".join(block for block in blocks if block)
 
 
@@ -150,7 +142,7 @@ def assemble_system(
     lore_entries: list[LoreEntry],
     nmem_recall: str,
     extra_system: str = "",
-    mini_cards: list[CharacterCard] | None = None,
+    mini_cards: list[MiniCard] | None = None,
     summary: str = "",
 ) -> str:
     user_name = pack.player_name
@@ -158,11 +150,12 @@ def assemble_system(
     values_common = {
         "world": pack.read_world(),
         "cast": render_cast_index(pack, scene.present),
-        "player": memory.snapshot_text("player"),
+        "player": pack.read_user_setting() or memory.user_setting,
         "memory": memory.snapshot_text("world"),
+        "player_memory": memory.snapshot_text("player"),
         "scene": scene.as_yaml(),
         "cards": render_cards(library, present_cards, user_name),
-        "minis": render_minis(library, pack, minis, user_name),
+        "minis": render_minis(library, minis),
         "lore": render_lore(library, lore_entries, user_name, present_cards[0].name if present_cards else (minis[0].name if minis else "")),
         "nmem": nmem_recall,
         "summary": summary,

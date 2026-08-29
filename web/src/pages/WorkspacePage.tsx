@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { WorkspaceShell } from "../components/WorkspaceShell";
 import { Button } from "../components/ui/button";
-import { api, type CharacterCard, type WorldSummary } from "../lib/api";
+import { api, type CharacterCard, type MiniCard, type WorldSummary } from "../lib/api";
 import { CardsPane } from "./workspace/CardsPane";
 import { LorePane } from "./workspace/LorePane";
 import { SessionsPane } from "./workspace/SessionsPane";
@@ -22,7 +22,9 @@ export function WorkspacePage() {
   const navigate = useNavigate();
   const tab = tabFromPath(location.pathname);
   const [world, setWorld] = useState<WorldSummary | null>(null);
-  const [cards, setCards] = useState<{ member: { id: string; name: string; blurb: string; present: boolean; aliases: string[] }; card: CharacterCard | null }[]>([]);
+  const [cards, setCards] = useState<
+    { member: { id: string; name: string; blurb: string; present: boolean; aliases: string[] }; card: CharacterCard | null; mini: MiniCard | null }[]
+  >([]);
   const [lorebooks, setLorebooks] = useState<{ name: string; text: string }[]>([]);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
