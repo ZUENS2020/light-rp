@@ -1,4 +1,4 @@
-import { cardFromObj, loadLorebookText, type CastMember, type CharacterCard, type WorldPack } from "./domain";
+import { cardFromObj, generateMini, loadLorebookText, saveMini, type CastMember, type CharacterCard, type WorldPack } from "./domain";
 import { pngCardJson, bytesFromBase64 } from "./pngcard";
 import type { R2Fs } from "./r2";
 import { slugify } from "./util";
@@ -151,5 +151,8 @@ async function writeCard(fs: R2Fs, pack: WorldPack, card: CharacterCard, raw: st
     aliases: aliasesFromCard(card),
   };
   pack.cast = [...pack.cast.filter((item) => item.id !== cid), member];
+  const mini = generateMini(card, member.blurb);
+  mini.id = cid;
+  await saveMini(fs, mini);
 }
 

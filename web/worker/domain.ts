@@ -448,18 +448,105 @@ export function trailerEvents(payload: Record<string, unknown>): Record<string, 
     .filter((item): item is Record<string, unknown> => Boolean(item));
 }
 
-export function trailerMemoryCandidates(payload: Record<string, unknown>): string[] {
+export function trailerMemoryCandidates(payload: Record<string, unknown>): Record<string, unknown>[] {
   const raw = payload.memory_candidates;
   const list = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
   return list
     .map((item) => {
-      if (item && typeof item === "object") {
-        const rec = item as Record<string, unknown>;
-        return fieldText(rec.text || rec.content);
-      }
-      return String(item).trim();
+      if (item && typeof item === "object") return item as Record<string, unknown>;
+      if (String(item).trim()) return { text: String(item).trim() };
+      return null;
     })
-    .filter(Boolean);
+    .filter((item): item is Record<string, unknown> => Boolean(item) && Boolean(fieldText((item as Record<string, unknown>).text || (item as Record<string, unknown>).content) || (item as Record<string, unknown>).text));
+}
+
+export function enrichRecord(item: Record<string, unknown>, scene: SceneState): Record<string, unknown> {
+  return {
+    time: scene.time,
+    season: scene.season,
+    location: scene.location,
+    characters: scene.present,
+    ...item,
+  };
+}
+
+export function formatMemoryEntry(item: Record<string, unknown>): string {
+  return stringifyYaml(item).trim();
+}
+
+export async function loadInitialState(fs: R2Fs): Promise<SceneState> {
+  const text = (await fs.get("INITIAL_STATE.yaml")) || (await fs.get("SCENE.md"));
+  return parseScene(text);
+}
+
+export async function ensureSessionState(fs: R2Fs, sessionId: string, pack: WorldPack): Promise<SceneState> {
+  const path = `sessions/${sessionId}/state.yaml`;
+  const existing = await fs.get(path);
+  if (existing) return parseScene(existing);
+  const scene = await loadInitialState(fs);
+  if (!scene.present.length) scene.present = pack.cast.filter((member) => member.present).map((member) => member.id);
+  await fs.put(path, sceneYaml(scene));
+  return scene;
+}
+
+export function miniPath(characterId: string): string {
+  return `characters/${characterId}.mini.yaml`;
+}
+
+export function generateMini(card: CharacterCard, blurb = ""): MiniCard {
+  const first = (card.personality || "").split(/\n/).map((line) => line.trim()).find(Boolean) || "";
+  const clip = (text: string, limit = 450) => {
+    const trimmed = text.trim();
+    return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit - 1)}…`;
+  };
+  return {
+    id: card.id,
+    name: card.name,
+    summary: clip(blurb || first || card.personality),
+    behavior_notes: clip(card.behavior || card.scenario || card.post_history_instructions),
+    relations: "",
+  };
+}
+
+export function parseMini(text: string | null, fallbackId: string): MiniCard | null {
+  if (!text?.trim()) return null;
+  const raw = parseYaml(text);
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as Record<string, unknown>;
+  const id = fieldText(rec.id) || fallbackId;
+  return {
+    id,
+    name: fieldText(rec.name) || id,
+    summary: fieldText(rec.summary),
+    behavior_notes: fieldText(rec.behavior_notes),
+    relations: fieldText(rec.relations),
+  };
+}
+
+export async function loadMini(fs: R2Fs, characterId: string): Promise<MiniCard | null> {
+  return parseMini(await fs.get(miniPath(characterId)), characterId);
+}
+
+export async function saveMini(fs: R2Fs, mini: MiniCard): Promise<void> {
+  await fs.put(
+    miniPath(mini.id),
+    stringifyYaml({
+      id: mini.id,
+      name: mini.name,
+      summary: mini.summary,
+      behavior_notes: mini.behavior_notes,
+      relations: mini.relations,
+    }),
+  );
+}
+
+export async function ensureMini(fs: R2Fs, member: CastMember, card: CharacterCard): Promise<MiniCard> {
+  const existing = await loadMini(fs, member.id);
+  if (existing) return existing;
+  const mini = generateMini(card, member.blurb);
+  mini.id = member.id;
+  await saveMini(fs, mini);
+  return mini;
 }
 
 export async function appendEvents(fs: R2Fs, sessionId: string, events: Record<string, unknown>[]): Promise<void> {
@@ -489,10 +576,19 @@ export function writeEntries(entries: string[]): string {
   return entries.length ? entries.join(ENTRY) + "\n" : "";
 }
 
+export type MiniCard = {
+  id: string;
+  name: string;
+  summary: string;
+  behavior_notes: string;
+  relations: string;
+};
+
 export type MemoryStore = {
   world: string[];
   player: string[];
   characters: Record<string, string[]>;
+  userSetting: string;
   snapWorld: string;
   snapPlayer: string;
   snapChars: Record<string, string>;
@@ -722,8 +818,9 @@ export async function loadMemory(fs: R2Fs): Promise<MemoryStore> {
   }
   const store: MemoryStore = {
     world: readEntries(await fs.get("MEMORY.md")),
-    player: readEntries(await fs.get("PLAYER.md")),
+    player: readEntries(await fs.get("PLAYER_MEMORY.md")),
     characters,
+    userSetting: ((await fs.get("PLAYER.md")) || "").trim(),
     snapWorld: "",
     snapPlayer: "",
     snapChars: {},
@@ -734,7 +831,7 @@ export async function loadMemory(fs: R2Fs): Promise<MemoryStore> {
 
 export async function persistMemory(fs: R2Fs, store: MemoryStore, target: string, characterId: string | null): Promise<void> {
   if (target === "world") await fs.put("MEMORY.md", writeEntries(store.world));
-  else if (target === "player") await fs.put("PLAYER.md", writeEntries(store.player));
+  else if (target === "player") await fs.put("PLAYER_MEMORY.md", writeEntries(store.player));
   else if (characterId) await fs.put(`memories/${characterId}.md`, writeEntries(store.characters[characterId] || []));
 }
 
@@ -755,6 +852,7 @@ export async function loadSession(fs: R2Fs, sessionId: string): Promise<{
   messages: ChatMessage[];
   thread_id: string | null;
   nmem_space: string | null;
+  primary_character: string | null;
   title: string;
   updated: string;
 }> {
@@ -778,6 +876,7 @@ export async function loadSession(fs: R2Fs, sessionId: string): Promise<{
     messages,
     thread_id: meta.thread_id ? String(meta.thread_id) : null,
     nmem_space: meta.nmem_space ? String(meta.nmem_space) : null,
+    primary_character: meta.primary_character ? String(meta.primary_character) : null,
     title: String(meta.title || ""),
     updated: String(meta.updated || ""),
   };
@@ -787,7 +886,7 @@ export async function saveSession(
   fs: R2Fs,
   sessionId: string,
   messages: ChatMessage[],
-  extra: { thread_id?: string | null; nmem_space?: string | null; title?: string | null } = {},
+  extra: { thread_id?: string | null; nmem_space?: string | null; title?: string | null; primary_character?: string | null } = {},
 ): Promise<void> {
   const previous = await loadSession(fs, sessionId).catch(() => null);
   const title = sessionTitle(messages, extra.title ?? previous?.title ?? "");
@@ -800,6 +899,7 @@ export async function saveSession(
         session_id: sessionId,
         thread_id: extra.thread_id !== undefined ? extra.thread_id : previous?.thread_id ?? null,
         nmem_space: extra.nmem_space !== undefined ? extra.nmem_space : previous?.nmem_space ?? null,
+        primary_character: extra.primary_character !== undefined ? extra.primary_character : previous?.primary_character ?? null,
         title,
         updated: new Date().toISOString(),
         message_count: messages.length,
@@ -871,6 +971,8 @@ export async function deleteSession(fs: R2Fs, sessionId: string): Promise<void> 
   await fs.del(`sessions/${sessionId}/transcript.jsonl`);
   await fs.del(`sessions/${sessionId}/meta.json`);
   await fs.del(`sessions/${sessionId}/events.jsonl`);
+  await fs.del(`sessions/${sessionId}/state.yaml`);
+  await fs.del(`sessions/${sessionId}/summary.md`);
 }
 
 export async function deleteWorkspace(fs: R2Fs): Promise<void> {

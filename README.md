@@ -53,24 +53,30 @@ lightrp play lamp-harbor
 | `lightrp prompts [world]` | 显示实际加载的提示词路径 |
 | `lightrp serve` | 启动 Web UI（默认 127.0.0.1:8000） |
 
-对局里：`/help` `/quit` `/compact` `/space` `/scene` `/memory` `/status` `/prompts`。`@角色名` 会对该角色做一次 spotlight 调用。
+对局里：`/help` `/quit` `/compact` `/space` `/scene` `/memory` `/status` `/prompts`。`@角色名` 会在**同一次** GM 请求里给该角色更多台词（不会第二次单独调用）。
 
 ## 世界包
 
 ```
-WORLD.md          # 世界设定（稳定层）
-PLAYER.md         # 玩家人设（§ 条目）
-MEMORY.md         # 世界记忆（§ 条目）
-SCENE.md          # 当前场景 YAML
-cast.yaml         # 演员表
-world.yaml        # id / name / nmem_space
-characters/       # 角色卡
-lorebooks/        # ST 世界书
-prompts/          # 覆盖引擎提示词（可选）
-sessions/         # 对局 transcript
+WORLD.md                 # 世界设定（稳定层）
+PLAYER.md                # 用户设定（只读进 Prompt，模型不可改）
+PLAYER_MEMORY.md         # 世界对玩家了解到的事实（memory tool 可写）
+MEMORY.md                # 世界记忆
+INITIAL_STATE.yaml       # 新 Session 的初始场景（旧 SCENE.md 仍可回退）
+cast.yaml                # 演员表
+world.yaml               # id / name / primary（新会话默认主卡）/ nmem_space
+characters/              # 完整角色卡 + <id>.mini.yaml
+lorebooks/               # ST 世界书
+prompts/                 # 覆盖引擎提示词（可选）
+sessions/<sid>/
+  meta.json              # 含 primary_character
+  transcript.jsonl
+  state.yaml             # 本局当前状态（隔离）
+  events.jsonl
+  summary.md             # compact 摘要（可选）
 ```
 
-角色卡支持 Hermes YAML、SillyTavern v2/v3 JSON、PNG `chara`/`ccv3`。世界书按关键词与场景实体触发，受 token budget 限制。角色书优先于世界书。
+角色卡支持 Hermes YAML、SillyTavern v2/v3 JSON、PNG `chara`/`ccv3`。导入时会启发式生成 `.mini.yaml`，也可在角色页点「生成 Mini」。世界书按关键词与场景实体触发，受 token budget 限制。角色书优先于世界书。
 
 ## 提示词
 
@@ -84,7 +90,7 @@ sessions/         # 对局 transcript
 
 ## 记忆
 
-启用 nmem 且已选工作区时，对局正文（含成人内容）会写入该空间的 thread / 记忆，MEMORY / PLAYER 事实也会同步，并在下一轮召回。未选择空间时不同步，也不会写入 default。
+启用 nmem 且已选工作区时，对局正文（含成人内容）会写入该空间的 thread / 记忆，MEMORY / PLAYER_MEMORY 事实也会同步，并在下一轮召回。未选择空间时不同步，也不会写入 default。PLAYER.md 用户设定不会被模型改写。
 
 ## 开发
 

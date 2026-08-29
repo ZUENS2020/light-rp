@@ -281,8 +281,10 @@ def _play_state(engine: Engine) -> dict[str, Any]:
             "ongoing": engine.scene.ongoing,
             "notes": engine.scene.scene or engine.scene.notes,
         },
+        "primary_character": engine.session.primary_character or engine.pack.primary,
         "memory": engine.memory.live_text("world"),
-        "player": engine.memory.live_text("player"),
+        "player": engine.pack.read_user_setting(),
+        "player_memory": engine.memory.live_text("player"),
         "messages": [item.to_json() for item in engine.session.messages],
     }
 

@@ -1,4 +1,4 @@
-import { ArrowLeft, LoaderCircle, PanelLeft, PanelRight } from "lucide-react";
+import { ArrowLeft, LoaderCircle, MoreHorizontal, PanelLeft, PanelRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Composer } from "../components/Composer";
@@ -28,6 +28,7 @@ export function PlayPage() {
   const [busy, setBusy] = useState(false);
   const [leftOpen, setLeftOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   async function loadPlay() {
     const next = await api.play(worldId, sessionId);
@@ -71,11 +72,30 @@ export function PlayPage() {
   async function compact() {
     setBusy(true);
     setError("");
+    setMenuOpen(false);
     try {
       const next = await api.compact(worldId, sessionId);
       setState(next);
     } catch (err) {
       setError(formatError(err, "压缩失败"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setPrimary(characterId: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const next = await api.patchSession(worldId, sessionId, { primary_character: characterId || null });
+      if ("session_id" in next) {
+        setState(next as PlayState);
+        setSessions((next as PlayState).world.sessions || []);
+      } else {
+        await loadPlay();
+      }
+    } catch (err) {
+      setError(formatError(err, "切换主卡失败"));
     } finally {
       setBusy(false);
     }
@@ -139,6 +159,7 @@ export function PlayPage() {
     />
   );
   const panel = <WorldPanel state={state} />;
+  const primaryId = state.primary_character || state.world.primary || "";
 
   return (
     <div className="flex min-h-dvh flex-col bg-background">
@@ -158,6 +179,23 @@ export function PlayPage() {
             {state.nmem_space ? ` · nmem ${state.nmem_space}` : " · nmem 未选择"}
           </p>
         </div>
+        <label className="hidden items-center gap-2 font-ui text-xs text-secondary sm:flex">
+          <span className="shrink-0">主卡</span>
+          <select
+            className="h-9 max-w-[10rem] rounded-md border border-border bg-background px-2 text-foreground"
+            value={primaryId}
+            disabled={busy}
+            aria-label="切换本局主卡"
+            onChange={(event) => void setPrimary(event.target.value)}
+          >
+            <option value="">默认</option>
+            {state.world.cast.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <Button
           variant="ghost"
           size="icon"
@@ -181,14 +219,28 @@ export function PlayPage() {
             </SheetContent>
           </Sheet>
         </div>
-        <Button variant="ghost" disabled={busy} onClick={() => void compact()}>
-          压缩
-        </Button>
+        <div className="relative">
+          <Button variant="ghost" size="icon" aria-label="更多" aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}>
+            <MoreHorizontal className="h-5 w-5" />
+          </Button>
+          {menuOpen ? (
+            <div className="absolute right-0 top-full z-50 mt-1 min-w-[8rem] border border-border bg-background p-1 shadow-sm">
+              <button
+                type="button"
+                className="flex w-full px-3 py-2 text-left font-ui text-sm hover:bg-muted disabled:opacity-50"
+                disabled={busy}
+                onClick={() => void compact()}
+              >
+                压缩会话
+              </button>
+            </div>
+          ) : null}
+        </div>
         <SettingsLink />
         <div className="xl:hidden">
           <Sheet>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="打开世界状态">
+              <Button variant="ghost" size="icon" aria-label="打开场面">
                 <PanelRight className="h-5 w-5" />
               </Button>
             </SheetTrigger>

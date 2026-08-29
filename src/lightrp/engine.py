@@ -23,7 +23,19 @@ from lightrp.memory import MemoryStore
 from lightrp.nmem import NmemClient, NmemError
 from lightrp.paths import default_user_prompts_dir, package_prompts_dir
 from lightrp.promptlib import PromptLibrary
-from lightrp.scene import SceneState, apply_scene_patch, load_scene, save_scene, scene_lore_haystack, trailer_events, trailer_memory_candidates
+from lightrp.mini import ensure_mini
+from lightrp.scene import (
+    SceneState,
+    apply_scene_patch,
+    enrich_record,
+    ensure_session_state,
+    format_memory_entry,
+    load_scene,
+    save_scene,
+    scene_lore_haystack,
+    trailer_events,
+    trailer_memory_candidates,
+)
 from lightrp.session import Session, alias_map, append_events, parse_mentions, parse_trailer
 from lightrp.world import WorldPack
 
@@ -82,10 +94,14 @@ class Engine:
             character_char_limit=config.memory.character_char_limit,
         )
         self.memory.load_from_disk()
-        self.scene = load_scene(pack.scene_md)
-        if not self.scene.present:
-            self.scene.present = [member.id for member in pack.cast if member.present]
-            save_scene(pack.scene_md, self.scene)
+        if not self.session.primary_character and pack.primary:
+            self.session.primary_character = pack.primary
+            self.session.save_meta()
+        self.scene = ensure_session_state(
+            self.session.root,
+            pack.initial_state_path,
+            [member.id for member in pack.cast if member.present],
+        )
         self.prompts = PromptLibrary(
             package_dir=package_prompts_dir(),
             user_dir=user_prompts_dir or default_user_prompts_dir(),
@@ -130,13 +146,22 @@ class Engine:
     def _present_cards(self) -> list[CharacterCard]:
         return self._load_cards(self.pack.present_members(self.scene.present))
 
-    def _cast_for_turn(self, user_text: str, mention_ids: list[str]) -> tuple[list[CharacterCard], list[CharacterCard]]:
-        primary_id = resolve_primary_id(self.pack, self.scene)
+    def _cast_for_turn(self, user_text: str, mention_ids: list[str]):
+        primary_id = resolve_primary_id(self.pack, self.scene, self.session.primary_character)
         primary_member = self.pack.member(primary_id) if primary_id else None
         primary = self._load_cards([primary_member] if primary_member else [])
         haystack = f"{user_text}\n{self.session.haystack(8)}\n{self.scene.haystack()}"
-        minis = self._load_cards(select_mini_members(self.pack, self.scene, haystack, mention_ids, primary_id))
-        return primary, minis
+        mini_members = select_mini_members(self.pack, self.scene, haystack, mention_ids, primary_id)
+        minis = []
+        lore_cards = list(primary)
+        for member in mini_members:
+            try:
+                card = self.pack.load_member_card(member)
+            except FileNotFoundError:
+                continue
+            lore_cards.append(card)
+            minis.append(ensure_mini(self.pack.root, member.id, card, member.blurb))
+        return primary, minis, lore_cards
 
     def _all_lore(self, cards: list[CharacterCard]) -> list[LoreEntry]:
         entries: list[LoreEntry] = []
@@ -194,8 +219,8 @@ class Engine:
         self.warnings = []
         aliases = alias_map(self.pack.cast)
         mention_ids = parse_mentions(user_text, aliases)
-        primary_cards, mini_cards = self._cast_for_turn(user_text, mention_ids)
-        lore = self._triggered_lore(user_text, primary_cards + mini_cards)
+        primary_cards, mini_cards, lore_cards = self._cast_for_turn(user_text, mention_ids)
+        lore = self._triggered_lore(user_text, lore_cards)
         recall = self._nmem_recall(user_text)
         breach = self.config.llm.breach
         system = assemble_system(
@@ -236,10 +261,13 @@ class Engine:
         visible, trailer = parse_trailer(gm.text)
         if trailer:
             self.scene = apply_scene_patch(self.scene, trailer)
-            save_scene(self.pack.scene_md, self.scene)
-            append_events(self.session.root, trailer_events(trailer))
+            save_scene(self.session.state_path, self.scene)
+            append_events(self.session.root, [enrich_record(item, self.scene) for item in trailer_events(trailer)])
             for candidate in trailer_memory_candidates(trailer):
-                self.run_memory_tool("memory", {"action": "add", "target": "world", "content": candidate})
+                self.run_memory_tool(
+                    "memory",
+                    {"action": "add", "target": "world", "content": format_memory_entry(enrich_record(candidate, self.scene))},
+                )
         for raw in trailer.get("memory") or []:
             if isinstance(raw, dict):
                 self.run_memory_tool("memory", raw)
@@ -268,6 +296,8 @@ class Engine:
             breach=self.config.llm.breach,
         )
         self.memory.freeze()
+        if summary.strip():
+            self.session.summary_path.write_text(summary.strip() + "\n", encoding="utf-8")
         return summary
 
     def _sync_turn(self, user_text: str, assistant_text: str) -> bool:

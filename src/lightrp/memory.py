@@ -31,6 +31,7 @@ class MemoryStore:
         self.world_entries: list[str] = []
         self.player_entries: list[str] = []
         self.character_entries: dict[str, list[str]] = {}
+        self.user_setting = ""
         self._snapshot: dict[str, str] = {"world": "", "player": ""}
         self._character_snapshots: dict[str, str] = {}
 
@@ -38,6 +39,9 @@ class MemoryStore:
         return self.root / "MEMORY.md"
 
     def player_path(self) -> Path:
+        return self.root / "PLAYER_MEMORY.md"
+
+    def user_setting_path(self) -> Path:
         return self.root / "PLAYER.md"
 
     def character_path(self, character_id: str) -> Path:
@@ -46,6 +50,7 @@ class MemoryStore:
     def load_from_disk(self) -> None:
         self.world_entries = _read_entries(self.world_path())
         self.player_entries = _read_entries(self.player_path())
+        self.user_setting = self.user_setting_path().read_text(encoding="utf-8").strip() if self.user_setting_path().is_file() else ""
         self.character_entries = {}
         memories_dir = self.root / "memories"
         if memories_dir.is_dir():

@@ -41,12 +41,23 @@ class WorldPack:
         return self.root / "PLAYER.md"
 
     @property
+    def player_memory_md(self) -> Path:
+        return self.root / "PLAYER_MEMORY.md"
+
+    @property
     def memory_md(self) -> Path:
         return self.root / "MEMORY.md"
 
     @property
-    def scene_md(self) -> Path:
+    def initial_state_path(self) -> Path:
+        initial = self.root / "INITIAL_STATE.yaml"
+        if initial.is_file():
+            return initial
         return self.root / "SCENE.md"
+
+    @property
+    def scene_md(self) -> Path:
+        return self.initial_state_path
 
     @property
     def prompts_dir(self) -> Path:
@@ -76,6 +87,11 @@ class WorldPack:
         if not self.world_md.is_file():
             raise FileNotFoundError(f"missing WORLD.md in {self.root}")
         return self.world_md.read_text(encoding="utf-8").strip()
+
+    def read_user_setting(self) -> str:
+        if not self.player_md.is_file():
+            return ""
+        return self.player_md.read_text(encoding="utf-8").strip()
 
     def member(self, ident: str) -> CastMember | None:
         needle = ident.strip().lstrip("@")
@@ -233,8 +249,9 @@ def ensure_world_files(root: Path) -> None:
     for name, content in {
         "WORLD.md": "# World\n",
         "PLAYER.md": "",
+        "PLAYER_MEMORY.md": "",
         "MEMORY.md": "",
-        "SCENE.md": "location: \ntime: \npresent: []\nnotes: |\n  \n",
+        "INITIAL_STATE.yaml": "time: \nseason: \nweather: \nlocation: \npresent: []\nscene: |\n  \nongoing: []\n",
         "cast.yaml": "player_name: 你\ncharacters: []\n",
     }.items():
         path = root / name
