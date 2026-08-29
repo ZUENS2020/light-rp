@@ -172,6 +172,67 @@ export function PlayPage() {
     }
   }
 
+  async function rewrite(index: number, content: string) {
+    if (busy) return;
+    const gen = pollGenRef.current;
+    setBusy(true);
+    setError("");
+    setState((prev) => {
+      if (!prev) return prev;
+      const current = prev.messages[index];
+      if (!current) return prev;
+      return {
+        ...prev,
+        messages: [...prev.messages.slice(0, index), { ...current, content }],
+      };
+    });
+    try {
+      const next = await api.rewrite(worldId, sessionId, index, content);
+      if (pollGenRef.current !== gen) return;
+      setState(next);
+      setSessions(next.world.sessions || []);
+      if (next.task_id) {
+        setPending(true);
+        await pollTask(next.task_id, gen);
+        return;
+      }
+      setPending(false);
+    } catch (err) {
+      if (err instanceof TaskConflictError) {
+        try {
+          await loadPlay();
+        } catch {
+          /* keep optimistic transcript until poll */
+        }
+        setPending(true);
+        await pollTask(err.task_id, gen);
+        return;
+      }
+      if (pollGenRef.current === gen) {
+        setPending(false);
+        try {
+          await loadPlay();
+        } catch {
+          /* keep optimistic transcript */
+        }
+        setError(formatError(err, "改写失败"));
+      }
+    } finally {
+      if (pollGenRef.current === gen) setBusy(false);
+    }
+  }
+
+  async function saveMemory(body: { world: string; player: string }) {
+    setError("");
+    try {
+      const next = await api.saveMemory(worldId, body);
+      setState((prev) => (prev ? { ...prev, memory: next.memory, player_memory: next.player_memory } : prev));
+    } catch (err) {
+      setError(formatError(err, "保存记忆失败"));
+      throw err;
+    }
+  }
+
   async function compact() {
     setBusy(true);
     setError("");
@@ -261,7 +322,7 @@ export function PlayPage() {
       }}
     />
   );
-  const panel = <WorldPanel state={state} />;
+  const panel = <WorldPanel state={state} disabled={busy} onSaveMemory={saveMemory} />;
   const primaryId = state.primary_character || state.world.primary || "";
 
   return (
@@ -370,7 +431,7 @@ export function PlayPage() {
             </p>
           )}
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <Transcript state={state} pending={pending} />
+            <Transcript state={state} pending={pending} disabled={busy} onRewrite={(index, content) => void rewrite(index, content)} />
             {state.context_report ? (
               <div className="border-t border-border px-4 py-3 font-ui text-xs text-secondary">
                 <button type="button" className="font-medium text-foreground" onClick={() => setCtxOpen((v) => !v)}>
