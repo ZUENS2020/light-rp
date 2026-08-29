@@ -1,0 +1,49 @@
+{
+  "name": "lamp-harbor",
+  "scan_depth": 4,
+  "token_budget": 1024,
+  "entries": [
+    {
+      "keys": ["灯塔", "值夜", "北岬"],
+      "content": "灯港北岬灯塔每晚必亮。值夜的人按潮汐表换班，灯灭会被全镇当成事故。",
+      "enabled": true,
+      "constant": false,
+      "insertion_order": 10,
+      "comment": "灯塔"
+    },
+    {
+      "keys": ["茶铺", "麦茶", "小雾"],
+      "content": "码头石阶上的茶铺卖麦茶和干饼，是外乡人打听船期的第一站。",
+      "enabled": true,
+      "constant": false,
+      "insertion_order": 20,
+      "comment": "茶铺"
+    },
+    {
+      "keys": ["涨潮", "潮汐"],
+      "content": "涨潮时最外层台阶没入水中。本地人不会在涨潮前一刻还站在堤外。",
+      "enabled": true,
+      "constant": false,
+      "insertion_order": 30,
+      "comment": "潮汐"
+    },
+    {
+      "keys": ["雾"],
+      "content": "夜雾里灯塔的光会在水面折成双影。水手拿它当进港的口诀，不拿它当怪谈讲给孩子。",
+      "enabled": true,
+      "constant": false,
+      "selective": true,
+      "secondary_keys": ["灯塔", "海"],
+      "insertion_order": 40,
+      "comment": "双影"
+    },
+    {
+      "keys": [],
+      "content": "灯港的钱不好用外地银票，茶铺可以记账到开船。",
+      "enabled": true,
+      "constant": true,
+      "insertion_order": 1,
+      "comment": "通用"
+    }
+  ]
+}

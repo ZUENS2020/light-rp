@@ -1,0 +1,5 @@
+id: lamp-harbor
+name: 灯港
+nmem_space: null
+lore_token_budget: 1024
+lore_scan_depth: 4

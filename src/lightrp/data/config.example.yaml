@@ -1,0 +1,27 @@
+# Copy to ~/.lightrp/config.yaml, or edit everything in the Web UI (设置).
+# 密钥可写在下面 api_key，也可只用环境变量 LIGHT_RP_API_KEY / OPENAI_API_KEY。
+
+llm:
+  base_url: ""          # OpenAI 兼容根路径，例如 https://api.example.com/v1
+  model: ""
+  api_key_env: LIGHT_RP_API_KEY
+  temperature: 0.85
+  max_tokens: 2048
+  timeout: 120
+  breach: true          # R18G 破甲；设 false 关闭
+
+nmem:
+  enabled: true
+  space: ""          # set a space name/id, or pass --space / world.yaml nmem_space
+  binary: nmem
+
+memory:
+  world_char_limit: 2500
+  player_char_limit: 1400
+  character_char_limit: 1200
+
+compact_after_turns: 40
+lore_scan_depth: 4
+lore_token_budget: 2048
+max_tool_rounds: 4
+transcript_keep_after_compact: 8

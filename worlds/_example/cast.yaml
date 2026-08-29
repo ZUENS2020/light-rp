@@ -1,0 +1,16 @@
+player_name: 你
+characters:
+  - id: anlan
+    name: 阿澜
+    card: characters/anlan.yaml
+    blurb: 灯塔学徒，话少，记潮汐比记人清楚
+    present: true
+    aliases:
+      - 澜
+  - id: xiaowu
+    name: 小雾
+    card: characters/xiaowu.yaml
+    blurb: 港口茶铺掌柜，爱打听但不说破
+    present: true
+    aliases:
+      - 雾
