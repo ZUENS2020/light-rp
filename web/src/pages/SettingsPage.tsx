@@ -192,10 +192,10 @@ export function SettingsPage() {
               checked={form.nmem.enabled}
               onChange={(checked) => setForm({ ...form, nmem: { ...form.nmem, enabled: checked } })}
             >
-              启用 nmem 列表（成人正文不写入 Mem）
+              启用 nmem（对局正文写入所选工作区）
             </Checkbox>
             {nmemHint ? <Hint>{nmemHint}</Hint> : null}
-            <Field id="nmem_space" label="默认 nmem 工作区" hint="填 id（如 rp-mem），不要填显示名。未选不会写 default。对局正文不写入 Mem，只同步 MEMORY 事实。">
+            <Field id="nmem_space" label="默认 nmem 工作区" hint="填 id（如 rp-mem），不要填显示名。未选不会写 default。选中后对局正文（含成人内容）会写入该空间。">
               <Input
                 id="nmem_space"
                 name="nmem_space"

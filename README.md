@@ -2,7 +2,7 @@
 
 世界观为中心的轻量多角色 RP 引擎。Web 跑在 **Cloudflare Worker**，工作区（世界观、角色卡、世界书、对局）存在 **R2**。模型默认 **NVIDIA NIM / moonshotai/kimi-k3**。提示词仍是 Markdown 文件。
 
-成人正文只写 R2，不写入 Nowledge Mem。选了 nmem 工作区时只同步 MEMORY / PLAYER 事实并召回，**不会**把对局 transcript 写进 Mem；未选则什么都不写，也不会默写 default。
+选了 nmem 工作区时，对局正文（含成人内容）、MEMORY / PLAYER 事实都会写入该空间并在下一轮召回。未选则什么都不写，也不会默写 default。
 
 ## 快速开始（Worker）
 
@@ -84,7 +84,7 @@ sessions/         # 对局 transcript
 
 ## 记忆
 
-启用 nmem 且已选工作区时，MEMORY / PLAYER 事实会按 `space_id` 写入该空间并在下一轮召回。对局正文只在 R2。未选择空间时不同步，也不会写入 default。
+启用 nmem 且已选工作区时，对局正文（含成人内容）会写入该空间的 thread / 记忆，MEMORY / PLAYER 事实也会同步，并在下一轮召回。未选择空间时不同步，也不会写入 default。
 
 ## 开发
 
