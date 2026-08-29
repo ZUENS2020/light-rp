@@ -33,7 +33,8 @@ import { listWorkspaceIds, workspaceFs } from "./r2";
 import { createWorkspace, seedLampHarbor } from "./seed";
 import { loadSettings, publicSettings, saveSettings, type AppSettings } from "./settings";
 import { parseContextConfig, parseMiniConfig } from "./budget";
-import { parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "./util";
+import { getTask, insertPending, markCompleted, markFailed, markRunning } from "./tasks";
+import { nowIso, parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "./util";
 
 async function overlays(fs: ReturnType<typeof workspaceFs>) {
   const files = await fs.list("prompts/");
@@ -521,26 +522,64 @@ app.post("/api/play/:id/:sid/turn", async (c) => {
   const sid = c.req.param("sid");
   const fs = workspaceFs(c.env.BUCKET, id);
   const pack = await loadPack(fs, id);
-  const settings = await loadSettings(c.env.BUCKET);
-  try {
-    const result = await runTurn(c.env, fs, pack, sid, text, settings, await overlays(fs), (job) =>
-      c.executionCtx.waitUntil(job),
-    );
-    return c.json({
-      ...(await playState(c.env, fs, pack, sid, {
+  if (!c.env.DB || !c.env.GENERATE_QUEUE) {
+    try {
+      const settings = await loadSettings(c.env.BUCKET);
+      const result = await runTurn(c.env, fs, pack, sid, text, settings, await overlays(fs), (job) =>
+        c.executionCtx.waitUntil(job),
+      );
+      return c.json({
+        ...(await playState(c.env, fs, pack, sid, {
+          context_report: result.context_report,
+          nmem_available: result.nmem_available,
+        })),
+        reply: result.text,
+        spotlight: result.spotlight_ids,
+        nmem_synced: result.nmem_synced,
+        turn_warnings: result.warnings,
         context_report: result.context_report,
-        nmem_available: result.nmem_available,
-      })),
-      reply: result.text,
-      spotlight: result.spotlight_ids,
-      nmem_synced: result.nmem_synced,
-      turn_warnings: result.warnings,
-      context_report: result.context_report,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new HTTPException(turnErrorStatus(err) as 502, { message });
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new HTTPException(turnErrorStatus(err) as 502, { message });
+    }
   }
+  const loaded = await loadSession(fs, sid);
+  await saveSession(fs, sid, [...loaded.messages, { role: "user", content: text, ts: nowIso() }], {
+    thread_id: loaded.thread_id,
+    nmem_space: loaded.nmem_space,
+    primary_character: loaded.primary_character,
+    title: loaded.title,
+  });
+  const taskId = crypto.randomUUID();
+  await insertPending(c.env.DB, { id: taskId, worldId: id, sessionId: sid, userText: text });
+  await c.env.GENERATE_QUEUE.send({ taskId, worldId: id, sessionId: sid });
+  return c.json({
+    ...(await playState(c.env, fs, pack, sid)),
+    task_id: taskId,
+    task_status: "pending",
+  });
+});
+
+app.get("/api/play/:id/:sid/tasks/:taskId", async (c) => {
+  const id = c.req.param("id");
+  const sid = c.req.param("sid");
+  const taskId = c.req.param("taskId");
+  if (!c.env.DB) throw new HTTPException(404, { message: "task not found" });
+  const task = await getTask(c.env.DB, taskId);
+  if (!task || task.world_id !== id || task.session_id !== sid) {
+    throw new HTTPException(404, { message: "task not found" });
+  }
+  return c.json({
+    id: task.id,
+    world_id: task.world_id,
+    session_id: task.session_id,
+    status: task.status,
+    content: task.content,
+    error: task.error,
+    created_at: task.created_at,
+    updated_at: task.updated_at,
+  });
 });
 
 app.post("/api/play/:id/:sid/compact", async (c) => {
@@ -578,4 +617,36 @@ app.post("/api/play/:id/:sid/space", async (c) => {
   return c.json(await playState(c.env, fs, pack, c.req.param("sid")));
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  async queue(batch: MessageBatch<{ taskId: string; worldId: string; sessionId: string }>, env: Env, ctx: ExecutionContext) {
+    for (const msg of batch.messages) {
+      let taskId = "";
+      try {
+        const body = typeof msg.body === "string" ? JSON.parse(msg.body) : msg.body;
+        const { taskId: id, worldId, sessionId } = body;
+        taskId = id;
+        const existing = await getTask(env.DB, taskId);
+        if (!existing || existing.status === "completed" || existing.status === "failed") {
+          msg.ack();
+          continue;
+        }
+        await markRunning(env.DB, taskId);
+        const fs = workspaceFs(env.BUCKET, worldId);
+        const pack = await loadPack(fs, worldId);
+        const settings = await loadSettings(env.BUCKET);
+        const result = await runTurn(env, fs, pack, sessionId, existing.user_text, settings, await overlays(fs), (job) => ctx.waitUntil(job), { persistUser: false });
+        await markCompleted(env.DB, taskId, result.text);
+        msg.ack();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        try {
+          await markFailed(env.DB, taskId, message);
+          msg.ack();
+        } catch {
+          msg.retry();
+        }
+      }
+    }
+  },
+};

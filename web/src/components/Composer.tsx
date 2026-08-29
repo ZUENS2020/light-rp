@@ -20,11 +20,12 @@ export function Composer({ cast, disabled, onSend }: Props) {
     const value = text.trim();
     if (!value || busy) return;
     setSending(true);
+    setText("");
     try {
       await onSend(value);
-      setText("");
     } catch {
-      // PlayPage already surfaces the error; keep the draft.
+      // PlayPage already surfaces the error; restore the draft.
+      setText(value);
     } finally {
       setSending(false);
     }

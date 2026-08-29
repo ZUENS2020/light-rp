@@ -187,9 +187,15 @@ export async function runTurn(
   settings: AppSettings,
   overlays: Record<string, string>,
   waitUntil?: (job: Promise<unknown>) => void,
+  opts?: { persistUser?: boolean },
 ): Promise<TurnOut> {
   const warnings: string[] = [];
+  const persistUser = opts?.persistUser !== false;
   const loaded = await loadSession(fs, sessionId);
+  const lastLoaded = loaded.messages[loaded.messages.length - 1];
+  const userAlreadyPersisted =
+    !persistUser && lastLoaded?.role === "user" && lastLoaded.content === userText;
+  const historyMessages = userAlreadyPersisted ? loaded.messages.slice(0, -1) : loaded.messages;
   let primaryCharacter = loaded.primary_character;
   if (!primaryCharacter && pack.primary) {
     primaryCharacter = pack.primary;
@@ -257,7 +263,7 @@ export async function runTurn(
     primaryCards,
     lore,
     recall,
-    loaded.messages
+    historyMessages
       .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
       .map((m) => ({ role: m.role, content: m.content })),
     promptUser,
@@ -337,11 +343,10 @@ export async function runTurn(
     });
   }
   const spotlightIds = unique([...asIdList(trailer.spotlight), ...mentionIds]);
-  const nextMessages = [
-    ...loaded.messages,
-    { role: "user", content: userText, ts: nowIso() },
-    { role: "assistant", content: replyText, ts: nowIso() },
-  ];
+  const assistant = { role: "assistant", content: replyText, ts: nowIso() };
+  const nextMessages = userAlreadyPersisted
+    ? [...loaded.messages, assistant]
+    : [...loaded.messages, { role: "user", content: userText, ts: nowIso() }, assistant];
   const turnNumber = nextMessages.filter((m) => m.role === "user").length;
   await appendTrace(fs, sessionId, {
     turn: turnNumber,

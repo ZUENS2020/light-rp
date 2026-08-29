@@ -261,7 +261,7 @@ class Engine:
         }
         return json.dumps(payload, ensure_ascii=False)
 
-    def turn(self, user_text: str) -> TurnResult:
+    def turn(self, user_text: str, persist_user: bool = True) -> TurnResult:
         warnings = list(self.warnings)
         self.warnings = []
         aliases = alias_map(self.pack.cast)
@@ -298,6 +298,13 @@ class Engine:
                 phi_bits.append(ensemble_acting(filled.post_history_instructions, filled.name))
         phi = "\n\n".join(part for part in phi_bits if part)
         extra = breach_system(self.prompts, breach)
+        history_messages = self.session.chat_messages()
+        last = self.session.messages[-1] if self.session.messages else None
+        last_role = getattr(last, "role", None) if last is not None else None
+        last_content = getattr(last, "content", None) if last is not None else None
+        user_already = (not persist_user) and last_role == "user" and last_content == user_text
+        if user_already:
+            history_messages = history_messages[:-1]
         assembled = assemble_budgeted(
             self.prompts,
             self.pack,
@@ -306,7 +313,7 @@ class Engine:
             primary_cards,
             lore,
             recall,
-            history_messages=self.session.chat_messages(),
+            history_messages=history_messages,
             user_input=prompt_user,
             extra_system=extra,
             mini_cards=mini_cards,
@@ -356,7 +363,8 @@ class Engine:
                     continue
                 self.run_memory_tool("memory", raw)
         spotlight_ids = _unique(_as_id_list(trailer.get("spotlight")) + mention_ids)
-        self.session.append("user", user_text)
+        if persist_user or not user_already:
+            self.session.append("user", user_text)
         self.session.append("assistant", text)
         turn_number = sum(1 for item in self.session.messages if (item.get("role") if isinstance(item, dict) else getattr(item, "role", "")) == "user")
         self._write_trace(
