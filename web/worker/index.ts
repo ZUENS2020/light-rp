@@ -33,7 +33,7 @@ import { listWorkspaceIds, workspaceFs } from "./r2";
 import { createWorkspace, seedLampHarbor } from "./seed";
 import { loadSettings, publicSettings, saveSettings, type AppSettings } from "./settings";
 import { parseContextConfig, parseMiniConfig } from "./budget";
-import { getTask, insertPending, markCompleted, markFailed, markRunning } from "./tasks";
+import { getActiveTask, getTask, insertPending, markCompleted, markFailed, markRunning } from "./tasks";
 import { nowIso, parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "./util";
 
 async function overlays(fs: ReturnType<typeof workspaceFs>) {
@@ -544,6 +544,10 @@ app.post("/api/play/:id/:sid/turn", async (c) => {
       throw new HTTPException(turnErrorStatus(err) as 502, { message });
     }
   }
+  const active = await getActiveTask(c.env.DB, id, sid);
+  if (active) {
+    return c.json({ detail: "已有生成任务进行中", task_id: active.id, task_status: active.status }, 409);
+  }
   const loaded = await loadSession(fs, sid);
   await saveSession(fs, sid, [...loaded.messages, { role: "user", content: text, ts: nowIso() }], {
     thread_id: loaded.thread_id,
@@ -558,6 +562,26 @@ app.post("/api/play/:id/:sid/turn", async (c) => {
     ...(await playState(c.env, fs, pack, sid)),
     task_id: taskId,
     task_status: "pending",
+  });
+});
+
+app.get("/api/play/:id/:sid/tasks/active", async (c) => {
+  const id = c.req.param("id");
+  const sid = c.req.param("sid");
+  if (!c.env.DB) return c.json({ task: null });
+  const task = await getActiveTask(c.env.DB, id, sid);
+  if (!task) return c.json({ task: null });
+  return c.json({
+    task: {
+      id: task.id,
+      world_id: task.world_id,
+      session_id: task.session_id,
+      status: task.status,
+      content: task.content,
+      error: task.error,
+      created_at: task.created_at,
+      updated_at: task.updated_at,
+    },
   });
 });
 

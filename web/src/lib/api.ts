@@ -172,6 +172,16 @@ export type MiniCard = {
   relations: string;
 };
 
+export class TaskConflictError extends Error {
+  task_id: string;
+  status = 409 as const;
+  constructor(taskId: string, message: string) {
+    super(message);
+    this.name = "TaskConflictError";
+    this.task_id = taskId;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
@@ -180,7 +190,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let detail = response.statusText;
     try {
-      const body = (await response.json()) as { detail?: unknown };
+      const body = (await response.json()) as { detail?: unknown; task_id?: unknown };
       if (Array.isArray(body.detail)) {
         detail = body.detail
           .map((item: { msg?: string; loc?: unknown[] }) => item.msg || JSON.stringify(item))
@@ -188,7 +198,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       } else {
         detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body);
       }
-    } catch {
+      if (response.status === 409 && typeof body.task_id === "string") {
+        throw new TaskConflictError(body.task_id, typeof body.detail === "string" ? body.detail : "已有生成任务进行中");
+      }
+    } catch (err) {
+      if (err instanceof TaskConflictError) throw err;
       detail = await response.text();
     }
     throw new Error(detail || `HTTP ${response.status}`);
@@ -207,6 +221,8 @@ export const api = {
     request<PlayState>(`/api/play/${worldId}/${sessionId}/turn`, { method: "POST", body: JSON.stringify({ text }) }),
   task: (worldId: string, sessionId: string, taskId: string) =>
     request<GenerationTask>(`/api/play/${worldId}/${sessionId}/tasks/${taskId}`),
+  activeTask: (worldId: string, sessionId: string) =>
+    request<{ task: GenerationTask | null }>(`/api/play/${worldId}/${sessionId}/tasks/active`),
   compact: (worldId: string, sessionId: string) =>
     request<PlayState>(`/api/play/${worldId}/${sessionId}/compact`, { method: "POST" }),
   setSpace: (worldId: string, sessionId: string, space: string) =>
