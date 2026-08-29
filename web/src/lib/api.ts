@@ -151,6 +151,17 @@ export type PlayState = {
   turn_warnings?: string[];
   summary?: string;
   context_report?: ContextReport | null;
+  task_id?: string;
+  task_status?: string;
+};
+
+export type GenerationTask = {
+  id: string;
+  world_id?: string;
+  session_id?: string;
+  status: "pending" | "running" | "completed" | "failed";
+  content?: string | null;
+  error?: string | null;
 };
 
 export type MiniCard = {
@@ -194,6 +205,8 @@ export const api = {
   play: (worldId: string, sessionId: string) => request<PlayState>(`/api/play/${worldId}/${sessionId}`),
   turn: (worldId: string, sessionId: string, text: string) =>
     request<PlayState>(`/api/play/${worldId}/${sessionId}/turn`, { method: "POST", body: JSON.stringify({ text }) }),
+  task: (worldId: string, sessionId: string, taskId: string) =>
+    request<GenerationTask>(`/api/play/${worldId}/${sessionId}/tasks/${taskId}`),
   compact: (worldId: string, sessionId: string) =>
     request<PlayState>(`/api/play/${worldId}/${sessionId}/compact`, { method: "POST" }),
   setSpace: (worldId: string, sessionId: string, space: string) =>

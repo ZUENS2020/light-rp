@@ -1,5 +1,5 @@
 import { ArrowLeft, LoaderCircle, MoreHorizontal, PanelLeft, PanelRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Composer } from "../components/Composer";
 import { SessionList } from "../components/SessionList";
@@ -30,6 +30,8 @@ export function PlayPage() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState(false);
+  const pollGenRef = useRef(0);
   const [leftOpen, setLeftOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -42,35 +44,108 @@ export function PlayPage() {
   }
 
   useEffect(() => {
-    let cancelled = false;
+    const gen = ++pollGenRef.current;
     setError("");
+    setPending(false);
     api
       .play(worldId, sessionId)
       .then((next) => {
-        if (cancelled) return;
+        if (pollGenRef.current !== gen) return;
         setState(next);
         setSessions(next.world.sessions || []);
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (pollGenRef.current === gen) setError(err.message);
       });
     return () => {
-      cancelled = true;
+      pollGenRef.current += 1;
     };
   }, [worldId, sessionId]);
 
+  async function pollTask(taskId: string, gen: number) {
+    const delays = [1000, 1500, 2000, 2500];
+    const deadline = Date.now() + 3 * 60 * 1000;
+    let i = 0;
+    while (pollGenRef.current === gen) {
+      const wait = i < delays.length ? delays[i] : 3000;
+      i += 1;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      if (pollGenRef.current !== gen) return;
+      if (Date.now() > deadline) {
+        setPending(false);
+        setError("生成超时，请刷新查看是否已经写入");
+        return;
+      }
+      try {
+        const task = await api.task(worldId, sessionId, taskId);
+        if (pollGenRef.current !== gen) return;
+        if (task.status === "pending" || task.status === "running") continue;
+        if (task.status === "completed") {
+          setPending(false);
+          const next = await api.play(worldId, sessionId);
+          if (pollGenRef.current !== gen) return;
+          setState(next);
+          setSessions(next.world.sessions || []);
+          return;
+        }
+        setPending(false);
+        setError(formatError(new Error(task.error || "生成失败"), "生成失败"));
+        return;
+      } catch {
+        if (pollGenRef.current !== gen) return;
+        if (Date.now() > deadline) {
+          setPending(false);
+          setError("生成超时，请刷新查看是否已经写入");
+          return;
+        }
+      }
+    }
+  }
+
   async function send(text: string) {
+    const gen = pollGenRef.current;
     setBusy(true);
     setError("");
+    setState((prev) => {
+      if (!prev) return prev;
+      const last = prev.messages[prev.messages.length - 1];
+      if (last?.role === "user" && last.content === text) return prev;
+      return {
+        ...prev,
+        messages: [...prev.messages, { role: "user", content: text, ts: new Date().toISOString() }],
+      };
+    });
     try {
       const next = await api.turn(worldId, sessionId, text);
-      setState(next);
+      if (pollGenRef.current !== gen) return;
+      const alreadyHasUser = next.messages.some((item) => item.role === "user" && item.content === text);
+      setState(alreadyHasUser ? next : {
+        ...next,
+        messages: [...next.messages, { role: "user", content: text, ts: new Date().toISOString() }],
+      });
       setSessions(next.world.sessions || []);
+      if (next.task_id) {
+        setPending(true);
+        await pollTask(next.task_id, gen);
+        return;
+      }
+      setPending(false);
     } catch (err) {
-      setError(formatError(err, "发送失败"));
+      if (pollGenRef.current === gen) {
+        setPending(false);
+        setState((prev) => {
+          if (!prev) return prev;
+          const last = prev.messages[prev.messages.length - 1];
+          if (last?.role === "user" && last.content === text) {
+            return { ...prev, messages: prev.messages.slice(0, -1) };
+          }
+          return prev;
+        });
+        setError(formatError(err, "发送失败"));
+      }
       throw err;
     } finally {
-      setBusy(false);
+      if (pollGenRef.current === gen) setBusy(false);
     }
   }
 
@@ -272,7 +347,7 @@ export function PlayPage() {
             </p>
           )}
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <Transcript state={state} />
+            <Transcript state={state} pending={pending} />
             {state.context_report ? (
               <div className="border-t border-border px-4 py-3 font-ui text-xs text-secondary">
                 <button type="button" className="font-medium text-foreground" onClick={() => setCtxOpen((v) => !v)}>

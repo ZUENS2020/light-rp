@@ -27,5 +27,17 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lightrp",
+      "database_id": "12151806-335e-4fba-8197-81820c19abd3",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [{ "binding": "GENERATE_QUEUE", "queue": "lightrp-generate" }],
+    "consumers": [{ "queue": "lightrp-generate", "max_batch_size": 1, "max_retries": 2 }]
   }
 }
