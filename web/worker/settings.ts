@@ -1,3 +1,5 @@
+import { DEFAULT_CONTEXT, DEFAULT_MINI, parseContextConfig, parseMiniConfig, type ContextConfig, type MiniSelectConfig } from "./budget";
+
 export type AppSettings = {
   llm: {
     temperature: number;
@@ -12,6 +14,8 @@ export type AppSettings = {
   lore_token_budget: number;
   max_tool_rounds: number;
   transcript_keep_after_compact: number;
+  context: ContextConfig;
+  mini: MiniSelectConfig;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -23,11 +27,22 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lore_token_budget: 2048,
   max_tool_rounds: 4,
   transcript_keep_after_compact: 8,
+  context: structuredClone(DEFAULT_CONTEXT),
+  mini: { ...DEFAULT_MINI },
 };
 
 export async function loadSettings(bucket: R2Bucket): Promise<AppSettings> {
   const obj = await bucket.get("config/settings.json");
-  if (!obj) return { ...DEFAULT_SETTINGS, llm: { ...DEFAULT_SETTINGS.llm }, nmem: { ...DEFAULT_SETTINGS.nmem }, memory: { ...DEFAULT_SETTINGS.memory } };
+  if (!obj) {
+    return {
+      ...DEFAULT_SETTINGS,
+      llm: { ...DEFAULT_SETTINGS.llm },
+      nmem: { ...DEFAULT_SETTINGS.nmem },
+      memory: { ...DEFAULT_SETTINGS.memory },
+      context: parseContextConfig(DEFAULT_CONTEXT),
+      mini: parseMiniConfig(DEFAULT_MINI),
+    };
+  }
   try {
     const raw = JSON.parse(await obj.text()) as Partial<AppSettings>;
     return {
@@ -36,6 +51,8 @@ export async function loadSettings(bucket: R2Bucket): Promise<AppSettings> {
       llm: { ...DEFAULT_SETTINGS.llm, ...(raw.llm || {}) },
       nmem: { ...DEFAULT_SETTINGS.nmem, ...(raw.nmem || {}) },
       memory: { ...DEFAULT_SETTINGS.memory, ...(raw.memory || {}) },
+      context: parseContextConfig(raw.context || DEFAULT_CONTEXT),
+      mini: parseMiniConfig(raw.mini || DEFAULT_MINI),
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -70,5 +87,7 @@ export function publicSettings(env: Env, settings: AppSettings) {
     lore_token_budget: settings.lore_token_budget,
     max_tool_rounds: settings.max_tool_rounds,
     transcript_keep_after_compact: settings.transcript_keep_after_compact,
+    context: settings.context,
+    mini: settings.mini,
   };
 }

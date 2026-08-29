@@ -31,6 +31,7 @@ import { PromptLibrary } from "./prompts";
 import { listWorkspaceIds, workspaceFs } from "./r2";
 import { createWorkspace, seedLampHarbor } from "./seed";
 import { loadSettings, publicSettings, saveSettings, type AppSettings } from "./settings";
+import { parseContextConfig, parseMiniConfig } from "./budget";
 import { parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "./util";
 
 async function overlays(fs: ReturnType<typeof workspaceFs>) {
@@ -99,6 +100,13 @@ async function playState(env: Env, fs: ReturnType<typeof workspaceFs>, pack: Wor
     }
   }
   const sessions = await listSessions(fs);
+  let contextReport = null;
+  try {
+    const raw = await fs.get(`sessions/${sessionId}/context_report.json`);
+    if (raw) contextReport = JSON.parse(raw);
+  } catch {
+    contextReport = null;
+  }
   return {
     world: { ...summary(pack, sessionId, loaded.nmem_space, { session_count: sessions.length }), sessions, world_text: pack.world_text },
     session_id: sessionId,
@@ -113,6 +121,7 @@ async function playState(env: Env, fs: ReturnType<typeof workspaceFs>, pack: Wor
     player: memory.userSetting,
     player_memory: memory.player.join("\n§\n"),
     messages: loaded.messages,
+    context_report: contextReport,
     ...extra,
   };
 }
@@ -160,6 +169,8 @@ app.put("/api/settings", async (c) => {
     lore_token_budget: Number(body.lore_token_budget ?? previous.lore_token_budget),
     max_tool_rounds: Number(body.max_tool_rounds ?? previous.max_tool_rounds),
     transcript_keep_after_compact: Number(body.transcript_keep_after_compact ?? previous.transcript_keep_after_compact),
+    context: parseContextConfig((body as { context?: unknown }).context as never || previous.context),
+    mini: parseMiniConfig((body as { mini?: unknown }).mini as never || previous.mini),
   };
   await saveSettings(c.env.BUCKET, next);
   return c.json(publicSettings(c.env, next));
@@ -514,11 +525,12 @@ app.post("/api/play/:id/:sid/turn", async (c) => {
       c.executionCtx.waitUntil(job),
     );
     return c.json({
-      ...(await playState(c.env, fs, pack, sid)),
+      ...(await playState(c.env, fs, pack, sid, { context_report: result.context_report })),
       reply: result.text,
       spotlight: result.spotlight_ids,
       nmem_synced: result.nmem_synced,
       turn_warnings: result.warnings,
+      context_report: result.context_report,
     });
   } catch (err) {
     throw new HTTPException(502, { message: err instanceof Error ? err.message : String(err) });

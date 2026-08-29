@@ -1,0 +1,13 @@
+name: multi_character
+description: Mini 激活多角色
+world: uma
+initial:
+  season: 初秋
+  time: 下午
+  location: 特雷森学园操场
+  present: [无声铃鹿, 伏特加]
+checks:
+  - mini_includes: 伏特加
+steps:
+  - user: 伏特加，你觉得铃鹿刚才那一圈怎么样？
+  - user: "＠大和赤骥 你也过来看看。"

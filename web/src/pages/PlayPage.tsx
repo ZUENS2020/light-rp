@@ -29,6 +29,7 @@ export function PlayPage() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [ctxOpen, setCtxOpen] = useState(false);
 
   async function loadPlay() {
     const next = await api.play(worldId, sessionId);
@@ -268,6 +269,34 @@ export function PlayPage() {
           )}
           <div className="min-h-0 flex-1 overflow-y-auto">
             <Transcript state={state} />
+            {state.context_report ? (
+              <div className="border-t border-border px-4 py-3 font-ui text-xs text-secondary">
+                <button type="button" className="font-medium text-foreground" onClick={() => setCtxOpen((v) => !v)}>
+                  Context {ctxOpen ? "▾" : "▸"} {state.context_report.total.toLocaleString()} /{" "}
+                  {state.context_report.max_tokens.toLocaleString()}
+                </button>
+                {ctxOpen ? (
+                  <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-md bg-muted/40 p-3 text-[11px] leading-relaxed text-foreground">
+                    {[
+                      `Total: ${state.context_report.total.toLocaleString()} / ${state.context_report.max_tokens.toLocaleString()}`,
+                      `Reserve: ${state.context_report.generation_reserve}`,
+                      "",
+                      ...state.context_report.sections.map(
+                        (section) =>
+                          `${section.name.padEnd(14)} ${String(section.tokens).padStart(6)} / ${section.budget}${section.truncated ? "  truncated" : ""}${
+                            section.items?.length ? `  [${section.items.slice(0, 4).join(", ")}]` : ""
+                          }`,
+                      ),
+                      "",
+                      `History       ${state.context_report.history.tokens}  msgs=${state.context_report.history.messages}${
+                        state.context_report.history.truncated ? "  truncated" : ""
+                      }`,
+                      `Input         ${state.context_report.input.tokens}`,
+                    ].join("\n")}
+                  </pre>
+                ) : null}
+              </div>
+            ) : null}
           </div>
           <div className="z-composer">
             <Composer cast={state.world.cast} disabled={busy} onSend={send} />

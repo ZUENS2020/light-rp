@@ -7,6 +7,16 @@ from typing import Any
 
 import yaml
 
+from lightrp.budget import (
+    ContextConfig,
+    MiniSelectConfig,
+    context_config_dict,
+    default_context_config,
+    default_mini_config,
+    mini_config_dict,
+    parse_context_config,
+    parse_mini_config,
+)
 from lightrp.paths import default_config_path, default_home, default_worlds_dir
 
 
@@ -48,6 +58,8 @@ class AppConfig:
     lore_token_budget: int = 2048
     max_tool_rounds: int = 4
     transcript_keep_after_compact: int = 8
+    context: ContextConfig = field(default_factory=default_context_config)
+    mini: MiniSelectConfig = field(default_factory=default_mini_config)
     source: Path | None = None
 
     @property
@@ -123,6 +135,8 @@ def load_config(path: Path | None = None) -> AppConfig:
         lore_token_budget=int(data.get("lore_token_budget", 2048)),
         max_tool_rounds=int(data.get("max_tool_rounds", 4)),
         transcript_keep_after_compact=int(data.get("transcript_keep_after_compact", 8)),
+        context=parse_context_config(data.get("context") if isinstance(data.get("context"), dict) else None),
+        mini=parse_mini_config(data.get("mini") if isinstance(data.get("mini"), dict) else None),
         source=cfg_path.expanduser(),
     )
 
@@ -158,6 +172,8 @@ def config_to_yaml_dict(config: AppConfig) -> dict[str, Any]:
         "lore_token_budget": config.lore_token_budget,
         "max_tool_rounds": config.max_tool_rounds,
         "transcript_keep_after_compact": config.transcript_keep_after_compact,
+        "context": context_config_dict(config.context),
+        "mini": mini_config_dict(config.mini),
     }
 
 
@@ -210,6 +226,10 @@ def apply_settings_payload(previous: AppConfig, data: dict[str, Any]) -> AppConf
         transcript_keep_after_compact=int(
             data.get("transcript_keep_after_compact", previous.transcript_keep_after_compact)
         ),
+        context=parse_context_config(
+            data.get("context") if isinstance(data.get("context"), dict) else context_config_dict(previous.context)
+        ),
+        mini=parse_mini_config(data.get("mini") if isinstance(data.get("mini"), dict) else mini_config_dict(previous.mini)),
         source=previous.source or default_config_path(),
     )
     return next_cfg
