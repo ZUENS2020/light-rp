@@ -219,6 +219,8 @@ export const api = {
   play: (worldId: string, sessionId: string) => request<PlayState>(`/api/play/${worldId}/${sessionId}`),
   turn: (worldId: string, sessionId: string, text: string) =>
     request<PlayState>(`/api/play/${worldId}/${sessionId}/turn`, { method: "POST", body: JSON.stringify({ text }) }),
+  rewrite: (worldId: string, sessionId: string, index: number, content: string) =>
+    request<PlayState>(`/api/play/${worldId}/${sessionId}/rewrite`, { method: "POST", body: JSON.stringify({ index, content }) }),
   task: (worldId: string, sessionId: string, taskId: string) =>
     request<GenerationTask>(`/api/play/${worldId}/${sessionId}/tasks/${taskId}`),
   activeTask: (worldId: string, sessionId: string) =>
@@ -246,6 +248,8 @@ export const api = {
       primary?: string | null;
     },
   ) => request<WorldSummary>(`/api/worlds/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  saveMemory: (worldId: string, body: { world?: string; player?: string }) =>
+    request<{ memory: string; player_memory: string }>(`/api/worlds/${worldId}/memory`, { method: "PUT", body: JSON.stringify(body) }),
   sessions: (id: string) => request<{ sessions: SessionInfo[] }>(`/api/worlds/${id}/sessions`),
   renameSession: (worldId: string, sessionId: string, title: string) =>
     request<SessionInfo>(`/api/worlds/${worldId}/sessions/${encodeURIComponent(sessionId)}`, {

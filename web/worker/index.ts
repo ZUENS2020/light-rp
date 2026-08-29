@@ -13,6 +13,8 @@ import {
   loadSession,
   listSessions,
   memberPresent,
+  persistMemory,
+  readEntries,
   saveCast,
   saveMini,
   saveSession,
@@ -263,6 +265,24 @@ app.put("/api/worlds/:id", async (c) => {
     sessions,
     world_text: (await fs.get("WORLD.md")) || "",
     player_text: (await fs.get("PLAYER.md")) || "",
+  });
+});
+
+app.put("/api/worlds/:id/memory", async (c) => {
+  const fs = workspaceFs(c.env.BUCKET, c.req.param("id"));
+  const body = (await c.req.json()) as { world?: string; player?: string };
+  const store = await loadMemory(fs);
+  if (body.world != null) {
+    store.world = readEntries(body.world);
+    await persistMemory(fs, store, "world", null);
+  }
+  if (body.player != null) {
+    store.player = readEntries(body.player);
+    await persistMemory(fs, store, "player", null);
+  }
+  return c.json({
+    memory: store.world.join("\n§\n"),
+    player_memory: store.player.join("\n§\n"),
   });
 });
 
@@ -563,6 +583,71 @@ app.post("/api/play/:id/:sid/turn", async (c) => {
     task_id: taskId,
     task_status: "pending",
   });
+});
+
+app.post("/api/play/:id/:sid/rewrite", async (c) => {
+  const body = (await c.req.json()) as { index?: number; content?: string };
+  const content = (body.content || "").trim();
+  const index = Number(body.index);
+  if (!content || !Number.isInteger(index) || index < 0) {
+    throw new HTTPException(400, { message: !content ? "content is required" : "index out of range" });
+  }
+  const id = c.req.param("id");
+  const sid = c.req.param("sid");
+  const fs = workspaceFs(c.env.BUCKET, id);
+  const pack = await loadPack(fs, id);
+  if (c.env.DB && c.env.GENERATE_QUEUE) {
+    const active = await getActiveTask(c.env.DB, id, sid);
+    if (active) {
+      return c.json({ detail: "已有生成任务进行中", task_id: active.id, task_status: active.status }, 409);
+    }
+  }
+  const loaded = await loadSession(fs, sid);
+  if (index >= loaded.messages.length) {
+    throw new HTTPException(400, { message: "index out of range" });
+  }
+  const kept = { ...loaded.messages[index], content };
+  const messages = [...loaded.messages.slice(0, index), kept];
+  await saveSession(fs, sid, messages, {
+    thread_id: loaded.thread_id,
+    nmem_space: loaded.nmem_space,
+    primary_character: loaded.primary_character,
+    title: loaded.title,
+  });
+  if (kept.role === "user") {
+    if (c.env.DB && c.env.GENERATE_QUEUE) {
+      const taskId = crypto.randomUUID();
+      await insertPending(c.env.DB, { id: taskId, worldId: id, sessionId: sid, userText: content });
+      await c.env.GENERATE_QUEUE.send({ taskId, worldId: id, sessionId: sid });
+      return c.json({
+        ...(await playState(c.env, fs, pack, sid)),
+        task_id: taskId,
+        task_status: "pending",
+      });
+    }
+    try {
+      const settings = await loadSettings(c.env.BUCKET);
+      const result = await runTurn(c.env, fs, pack, sid, content, settings, await overlays(fs), (job) =>
+        c.executionCtx.waitUntil(job),
+        { persistUser: false },
+      );
+      return c.json({
+        ...(await playState(c.env, fs, pack, sid, {
+          context_report: result.context_report,
+          nmem_available: result.nmem_available,
+        })),
+        reply: result.text,
+        spotlight: result.spotlight_ids,
+        nmem_synced: result.nmem_synced,
+        turn_warnings: result.warnings,
+        context_report: result.context_report,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new HTTPException(turnErrorStatus(err) as 502, { message });
+    }
+  }
+  return c.json(await playState(c.env, fs, pack, sid));
 });
 
 app.get("/api/play/:id/:sid/tasks/active", async (c) => {
