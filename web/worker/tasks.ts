@@ -39,6 +39,20 @@ export async function getTask(db: D1Database, id: string): Promise<GenerationTas
   return row ?? null;
 }
 
+export async function getActiveTask(db: D1Database, worldId: string, sessionId: string): Promise<GenerationTaskRow | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, world_id, session_id, user_text, status, content, error, created_at, updated_at
+       FROM generation_tasks
+       WHERE world_id = ? AND session_id = ? AND status IN ('pending', 'running')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .bind(worldId, sessionId)
+    .first<GenerationTaskRow>();
+  return row ?? null;
+}
+
 async function skipIfTerminal(db: D1Database, id: string): Promise<GenerationTaskRow | null> {
   const existing = await getTask(db, id);
   if (!existing || existing.status === "completed" || existing.status === "failed") return null;

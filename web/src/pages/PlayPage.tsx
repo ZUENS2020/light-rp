@@ -9,7 +9,7 @@ import { Transcript } from "../components/Transcript";
 import { WorldPanel } from "../components/WorldPanel";
 import { Button } from "../components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../components/ui/sheet";
-import { api, type PlayState, type SessionInfo } from "../lib/api";
+import { api, TaskConflictError, type PlayState, type SessionInfo } from "../lib/api";
 
 function formatError(err: unknown, fallback: string): string {
   const message = err instanceof Error ? err.message : fallback;
@@ -47,12 +47,22 @@ export function PlayPage() {
     const gen = ++pollGenRef.current;
     setError("");
     setPending(false);
+    setBusy(false);
+
     api
       .play(worldId, sessionId)
-      .then((next) => {
+      .then(async (next) => {
         if (pollGenRef.current !== gen) return;
         setState(next);
         setSessions(next.world.sessions || []);
+        const { task } = await api.activeTask(worldId, sessionId);
+        if (pollGenRef.current !== gen) return;
+        if (task && (task.status === "pending" || task.status === "running")) {
+          setPending(true);
+          setBusy(true);
+          await pollTask(task.id, gen);
+          if (pollGenRef.current === gen) setBusy(false);
+        }
       })
       .catch((err: Error) => {
         if (pollGenRef.current === gen) setError(err.message);
@@ -131,6 +141,19 @@ export function PlayPage() {
       }
       setPending(false);
     } catch (err) {
+      if (err instanceof TaskConflictError) {
+        setState((prev) => {
+          if (!prev) return prev;
+          const last = prev.messages[prev.messages.length - 1];
+          if (last?.role === "user" && last.content === text) {
+            return { ...prev, messages: prev.messages.slice(0, -1) };
+          }
+          return prev;
+        });
+        setPending(true);
+        await pollTask(err.task_id, gen);
+        return;
+      }
       if (pollGenRef.current === gen) {
         setPending(false);
         setState((prev) => {
