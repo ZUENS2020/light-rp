@@ -246,6 +246,7 @@ def _world_summary(pack, latest: str | None, latest_nmem: str | None = None) -> 
         "path": str(pack.root),
         "nmem_space": pack.nmem_space,
         "player_name": pack.player_name,
+        "primary": pack.primary,
         "latest_session": latest,
         "latest_nmem_space": latest_nmem,
         "cast": [
@@ -273,8 +274,12 @@ def _play_state(engine: Engine) -> dict[str, Any]:
         "scene": {
             "location": engine.scene.location,
             "time": engine.scene.time,
+            "season": engine.scene.season,
+            "weather": engine.scene.weather,
             "present": engine.scene.present,
-            "notes": engine.scene.notes,
+            "scene": engine.scene.scene or engine.scene.notes,
+            "ongoing": engine.scene.ongoing,
+            "notes": engine.scene.scene or engine.scene.notes,
         },
         "memory": engine.memory.live_text("world"),
         "player": engine.memory.live_text("player"),

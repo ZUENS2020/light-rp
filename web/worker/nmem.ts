@@ -21,10 +21,21 @@ function headers(key: string, json = false): Record<string, string> {
   return out;
 }
 
-async function fetchRetry(url: string, init: RequestInit): Promise<Response> {
+async function fetchRetry(url: string, init: RequestInit, timeoutMs = 12000): Promise<Response> {
   let response: Response | null = null;
   for (let i = 0; i < 3; i += 1) {
-    response = await fetch(url, init);
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      response = await fetch(url, { ...init, signal: ac.signal });
+    } catch (err) {
+      clearTimeout(timer);
+      const aborted = err instanceof Error && (err.name === "AbortError" || /aborted/i.test(err.message));
+      if (aborted || i === 2) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
+      continue;
+    }
+    clearTimeout(timer);
     if (response.ok || ![429, 502, 503, 504].includes(response.status)) return response;
     await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
   }
@@ -226,4 +237,79 @@ export async function syncFactToNmem(
     else next[i] = (await addNmemMemory(env, spaceId, live[i], title, labels)) || "";
   }
   return { ...index, [key]: next };
+}
+
+export function sessionThreadId(worldId: string, sessionId: string): string {
+  return `lightrp_${worldId}_${sessionId}`.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 96);
+}
+
+export function formatTurnMemory(userText: string, assistantText: string): string {
+  return `你: ${userText}\n\n世界: ${assistantText}`;
+}
+
+type ThreadMessage = { role: string; content: string };
+
+async function postJson(
+  auth: { url: string; key: string },
+  path: string,
+  body: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const response = await fetchRetry(
+    `${auth.url}${path}`,
+    { method: "POST", headers: headers(auth.key, true), body: JSON.stringify(body) },
+    timeoutMs,
+  );
+  return { ok: response.ok, status: response.status, data: await readJson(response) };
+}
+
+export async function syncThreadTurn(
+  env: NmemEnv,
+  spaceId: string,
+  existingThreadId: string | null,
+  threadId: string,
+  title: string,
+  messages: ThreadMessage[],
+): Promise<void> {
+  const auth = base(env);
+  if (!auth || !spaceId || !messages.length) return;
+  const payload = messages.map((item) => ({ role: item.role, content: item.content }));
+  if (!existingThreadId) {
+    const created = await postJson(
+      auth,
+      "/threads",
+      {
+        thread_id: threadId,
+        title,
+        messages: payload,
+        source: "lightrp",
+        space_id: spaceId,
+        labels: ["light-rp"],
+      },
+      20000,
+    );
+    if (created.ok) return;
+    if (created.status !== 409) {
+      throw new Error(`nmem thread create HTTP ${created.status}`);
+    }
+  }
+  const appended = await postJson(auth, `/threads/${encodeURIComponent(threadId)}/append`, { messages: payload }, 15000);
+  if (!appended.ok) throw new Error(`nmem thread append HTTP ${appended.status}`);
+}
+
+export async function syncTurnBodyToNmem(
+  env: NmemEnv,
+  spaceId: string,
+  worldId: string,
+  sessionId: string,
+  userText: string,
+  assistantText: string,
+): Promise<string | null> {
+  const content = formatTurnMemory(userText, assistantText);
+  return addNmemMemory(env, spaceId, content, `${worldId}/${sessionId}`, [
+    "light-rp",
+    `world:${worldId}`,
+    `session:${sessionId}`,
+    "lightrp-turn",
+  ]);
 }

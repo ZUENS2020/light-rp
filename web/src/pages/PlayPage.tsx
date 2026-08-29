@@ -26,6 +26,7 @@ export function PlayPage() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [leftOpen, setLeftOpen] = useState(false);
   const [creating, setCreating] = useState(false);
 
   async function loadPlay() {
@@ -157,6 +158,16 @@ export function PlayPage() {
             {state.nmem_space ? ` · nmem ${state.nmem_space}` : " · nmem 未选择"}
           </p>
         </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={leftOpen ? "收起会话列表" : "打开会话列表"}
+          aria-pressed={leftOpen}
+          className="hidden lg:inline-flex"
+          onClick={() => setLeftOpen((value) => !value)}
+        >
+          <PanelLeft className="h-5 w-5" />
+        </Button>
         <div className="lg:hidden">
           <Sheet>
             <SheetTrigger asChild>
@@ -182,7 +193,7 @@ export function PlayPage() {
               </Button>
             </SheetTrigger>
             <SheetContent>
-              <SheetTitle>世界状态</SheetTitle>
+              <SheetTitle>场面</SheetTitle>
               <div className="mt-8 overflow-y-auto">{panel}</div>
             </SheetContent>
           </Sheet>
@@ -191,7 +202,7 @@ export function PlayPage() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden min-h-0 w-72 shrink-0 flex-col border-r border-border lg:flex">{list}</aside>
+        <aside className={`min-h-0 w-72 shrink-0 flex-col border-r border-border ${leftOpen ? "hidden lg:flex" : "hidden"}`}>{list}</aside>
         <main className="flex min-w-0 flex-1 flex-col">
           {error ? (
             <p className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 font-ui text-sm text-destructive" role="alert">

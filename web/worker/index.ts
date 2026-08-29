@@ -60,6 +60,7 @@ function summary(
     latest_session: latest,
     latest_nmem_space: latestNmem,
     session_count: extra.session_count ?? 0,
+    primary: pack.primary,
     cast: pack.cast.map((member) => ({
       id: member.id,
       name: member.name,
@@ -214,12 +215,14 @@ app.put("/api/worlds/:id", async (c) => {
     player_text?: string;
     lore_token_budget?: number | null;
     lore_scan_depth?: number | null;
+    primary?: string | null;
   };
   if (body.name != null) pack.name = body.name;
   if (body.player_name != null) pack.player_name = body.player_name;
   if (body.nmem_space !== undefined) pack.nmem_space = body.nmem_space;
   if (body.lore_token_budget !== undefined) pack.lore_token_budget = body.lore_token_budget;
   if (body.lore_scan_depth !== undefined) pack.lore_scan_depth = body.lore_scan_depth;
+  if (body.primary !== undefined) pack.primary = body.primary;
   if (body.world_text != null) await fs.put("WORLD.md", body.world_text);
   if (body.player_text != null) await fs.put("PLAYER.md", body.player_text);
   await saveWorldMeta(fs, pack);
@@ -433,7 +436,9 @@ app.post("/api/play/:id/:sid/turn", async (c) => {
   const pack = await loadPack(fs, id);
   const settings = await loadSettings(c.env.BUCKET);
   try {
-    const result = await runTurn(c.env, fs, pack, sid, text, settings, await overlays(fs));
+    const result = await runTurn(c.env, fs, pack, sid, text, settings, await overlays(fs), (job) =>
+      c.executionCtx.waitUntil(job),
+    );
     return c.json({
       ...(await playState(c.env, fs, pack, sid)),
       reply: result.text,
@@ -454,7 +459,18 @@ app.post("/api/play/:id/:sid/compact", async (c) => {
   const memory = await loadMemory(fs);
   const settings = await loadSettings(c.env.BUCKET);
   const library = new PromptLibrary(await overlays(fs));
-  const summaryText = await runCompact(c.env, fs, memory, loaded.messages, sid, loaded, library, settings, id);
+  const summaryText = await runCompact(
+    c.env,
+    fs,
+    memory,
+    loaded.messages,
+    sid,
+    loaded,
+    library,
+    settings,
+    id,
+    (job) => c.executionCtx.waitUntil(job),
+  );
   const pack = await loadPack(fs, id);
   return c.json({ ...(await playState(c.env, fs, pack, sid)), summary: summaryText });
 });
