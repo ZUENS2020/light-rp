@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "properties": {
+    "state": {
+      "type": "object",
+      "properties": {
+        "time": { "type": "string" },
+        "season": { "type": "string" },
+        "weather": { "type": "string" },
+        "location": { "type": "string" },
+        "present": { "type": "array", "items": { "type": "string" } },
+        "scene": { "type": "string" },
+        "ongoing": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["time", "season", "weather", "location", "present", "scene", "ongoing"],
+      "additionalProperties": false
+    },
+    "events": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 6
+    },
+    "memory_ops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "enum": ["add", "replace", "remove"] },
+          "target": { "type": "string", "enum": ["world", "player", "character"] },
+          "character_id": { "type": "string" },
+          "content": { "type": "string" },
+          "old_text": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["promise", "relationship", "fact", "preference", "goal", "important_event"]
+          },
+          "importance": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "required": ["action", "target", "content", "type", "importance"],
+        "additionalProperties": false
+      },
+      "maxItems": 8
+    }
+  },
+  "required": ["state", "events", "memory_ops"],
+  "additionalProperties": false
+}

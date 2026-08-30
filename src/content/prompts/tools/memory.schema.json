@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["add", "replace", "remove"],
+      "description": "add appends; replace/remove match a unique substring in an existing entry."
+    },
+    "target": {
+      "type": "string",
+      "enum": ["world", "player", "character"],
+      "description": "Which store to change."
+    },
+    "character_id": {
+      "type": "string",
+      "description": "Cast id; required when target is character."
+    },
+    "content": {
+      "type": "string",
+      "description": "New entry text for add/replace; optional remove needle."
+    },
+    "old_text": {
+      "type": "string",
+      "description": "Unique substring identifying the entry to replace or remove."
+    },
+    "operations": {
+      "type": "array",
+      "description": "Preferred for consolidation: atomically apply all operations against the final character budget.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "enum": ["add", "replace", "remove"] },
+          "content": { "type": "string" },
+          "old_text": { "type": "string" }
+        },
+        "required": ["action"],
+        "additionalProperties": false
+      },
+      "maxItems": 12
+    }
+  },
+  "required": ["action", "target"]
+}

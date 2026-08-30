@@ -1,0 +1,63 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lightrp-v2",
+  "account_id": "c02febc38a3cfcb6b91c8832a9724370",
+  "main": "./src/server/index.ts",
+  "compatibility_date": "2026-08-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+  },
+  "ai": {
+    "binding": "AI",
+    "remote": true,
+  },
+  "vars": {
+    "AI_GATEWAY_ID": "sillytavern",
+    "NMEM_API_URL": "https://necmem.zuens2020.work/remote-api",
+  },
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "lightrp",
+      "remote": true,
+    },
+  ],
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/v2/*"],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lightrp-v2",
+      "database_id": "68e1f897-e8ed-4a87-8086-9c5f65b824d0",
+      "remote": true,
+      "migrations_dir": "migrations",
+    },
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "GENERATE_QUEUE", "queue": "lightrp-v2-generate" },
+      { "binding": "NMEM_QUEUE", "queue": "lightrp-v2-nmem" },
+    ],
+    "consumers": [
+      {
+        "queue": "lightrp-v2-generate",
+        "max_batch_size": 1,
+        "max_retries": 3,
+        "dead_letter_queue": "lightrp-v2-generate-dlq",
+      },
+      {
+        "queue": "lightrp-v2-nmem",
+        "max_batch_size": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "lightrp-v2-nmem-dlq",
+      },
+    ],
+  },
+}

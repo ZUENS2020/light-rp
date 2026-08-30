@@ -1,0 +1,12 @@
+node_modules
+dist
+.wrangler
+coverage
+playwright-report
+test-results
+worker-configuration.d.ts
+package-lock.json
+src/content
+.dev.vars*
+.cloudflare-token
+.secrets

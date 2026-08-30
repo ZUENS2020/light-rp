@@ -1,6 +1,6 @@
 name: long_session
 description: 重复轮次冒烟（默认 20，可设 turns=100）
-world: lamp-harbor
+world: umamusume-life
 turns: 20
 initial:
   season: ""

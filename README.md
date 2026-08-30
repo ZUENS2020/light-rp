@@ -1,100 +1,90 @@
-# Light RP
+# Light RP V2
 
-世界观为中心的轻量多角色 RP 引擎。Web 跑在 **Cloudflare Worker**，工作区（世界观、角色卡、世界书、对局）存在 **R2**。模型默认 **NVIDIA NIM / moonshotai/kimi-k3**。提示词仍是 Markdown 文件。
+Light RP 是一个单用户私有的多角色 RP Studio。前端、Cloudflare Worker、领域逻辑、内容工具与测试均使用 TypeScript，运行在 React + Vite + Cloudflare Workers 上。
 
-选了 nmem 工作区时，对局正文（含成人内容）、MEMORY / PLAYER 事实都会写入该空间并在下一轮召回。未选则什么都不写，也不会默写 default。
+V2 使用 D1 保存事务数据，R2 保存角色卡、世界书、提示词覆盖、附件和导出包，Queues 负责生成与 nmem 同步。AI 请求统一经过现有 `sillytavern` AI Gateway，并可按会话在运行时切换模型。
 
-## 快速开始（Worker）
+记忆系统采用 Hermes 风格的分层生命周期：`PLAYER.md` 是用户维护且不可被模型改写的设定，`PLAYER_MEMORY.md`、`MEMORY.md` 与角色记忆是有字符上限的核心快照；每轮只对有语义信号的输入从 `RP-mem` 按世界标签召回，生成提交后再由独立 Queue 幂等同步正文、线程和核心记忆。压缩前会先提取持久事实，召回与同步状态保存在 D1 并显示于上下文检查器。
+
+## 本地运行
 
 ```bash
-cd web
 npm install
-# 本地密钥：web/.dev.vars（NVIDIA_API_KEY、NMEM_API_KEY）
 npm run dev
 ```
 
-浏览器打开 Vite 给出的地址（默认 http://127.0.0.1:5173）。一键部署：
+本地敏感变量放在根目录 `.dev.vars`：
 
-```bash
-# 仓库根目录的 .cloudflare-token，或环境变量 CLOUDFLARE_API_TOKEN
-bash scripts/deploy-worker.sh
+```dotenv
+NMEM_API_KEY=...
 ```
 
-当前部署：https://lightrp.shengyuanzhang-zuens2020.workers.dev
+不要把 `.dev.vars` 提交到仓库。AI Gateway 通过同账户的 Worker AI binding 预认证；OpenRouter、opg 等上游凭据继续由 Gateway BYOK 管理，Worker 不保存 Gateway 或上游 token。
 
-工作区页可导入 SillyTavern **chara_card_v2 JSON / PNG** 和 **World Info**（`entries` 为数组或 uid 字典、关键词字段为 `key`）。角色卡保留原始 JSON，含 character_book。
+## 架构
+
+```text
+src/app         React Studio
+src/server      Worker V2 API、队列消费者与任务
+src/core        领域逻辑、预算、提示词规范化与导入
+src/adapters    AI Gateway、R2、nmem
+src/content     默认系统提示词
+migrations      D1 V2 schema
+scripts         TypeScript 内容包工具与仓库检查
+tests           Vitest、Cloudflare 集成与 Playwright
+```
+
+主要存储约定：
+
+- D1：工作区、角色/世界书索引、会话、可见消息、隐藏 LLM 事件、记忆、生成任务、tool 执行与 outbox。
+- R2：资源统一放在 `v2/workspaces/`；仓库不再包含 V1 API、示例世界或迁移执行入口。
+- `messages` 只含用户可见历史；`llm_events` 保存模型前缀所需的规范化事件，不保存 reasoning。
+- 每个会话最多一个活动生成任务；发送回合使用 `Idempotency-Key`，返回 `202 task_id`。
+
+## 模型与缓存
+
+内置模型配置：
+
+- 默认：`@preset/dsf0731-cheap`，经 `openrouter` Gateway BYOK。
+- `@cf/moonshotai/kimi-k2.6`，经 Workers AI binding。
+- `@cf/openai/gpt-oss-20b`，经 Workers AI binding。
+
+设置页可以登记 OpenRouter、opg 或 Workers AI 模型。新配置通过文本与工具探测后才会启用。模型解析顺序为应用默认 → 工作区默认 → 会话覆盖；切换从下一条消息起生效，已入队任务保留不可变模型快照。
+
+Gateway 整响应缓存 TTL 为 3600 秒。普通叙事、工具循环、摘要、压缩和记忆请求使用完整请求体的默认缓存键；重新生成、重写、输出通道纠错与人工诊断始终绕过缓存。模型探测使用 `model-probe:<revision>` 并缓存 24 小时。
+
+提示词在同一 epoch 内保持 append-only：稳定 system 前缀、固定工具 schema 和输出通道契约不变，动态世界书、状态、nmem 与记忆作为隐藏事件追加。模型、工具、稳定设定或提示词覆盖改变时会创建新 epoch 并轮换 session affinity。
+
+每次模型调用都会加入不可覆盖的输出通道契约，要求应用读取的完整结果进入 `assistant.content` 或正式 `tool_calls`。reasoning 不进入 D1、R2、日志、后续 tool loop 或 UI；连续两次只有 reasoning 时任务以 `LLM_OUTPUT_CHANNEL_VIOLATION` 失败。
+
+## 部署
+
+首次部署前设置 Worker secrets：
 
 ```bash
-cd web
-npx wrangler secret put NVIDIA_API_KEY
 npx wrangler secret put NMEM_API_KEY
-bash ../scripts/deploy-worker.sh
 ```
 
-每个工作区可单独编辑 WORLD.md、角色卡、世界书。默认开启 **R18G 破甲**（成年虚构，禁未成年）：`layers/breach.md` + `layers/breach_user.md`。
-
-本地 Python CLI 仍可用（文件系统世界包，不经过 R2）：
+完整验证与部署：
 
 ```bash
-pip install -e ".[dev]"
-lightrp play lamp-harbor
+npm run check
+npx wrangler d1 migrations apply lightrp-v2 --remote
+npx wrangler deploy --keep-vars
 ```
 
-## 命令
+部署后，在 Cloudflare Zero Trust 中把现有 Access allow policy 绑定到 V2 路由。旧 Worker、旧 D1、旧 Queues 与旧 R2 对象已经退役，不再作为运行或回滚路径。
 
-| 命令 | 作用 |
-|------|------|
-| `lightrp play <world>` | 进入世界 |
-| `lightrp init [name]` | 复制示例世界 |
-| `lightrp import-card FILE --world NAME` | 导入 YAML / ST JSON / PNG |
-| `lightrp import-lore FILE --world NAME` | 导入世界书 |
-| `lightrp import-library SRC_ID --world NAME` | 从 nmem library 拉文件 |
-| `lightrp spaces` | 列出 nmem 工作区 |
-| `lightrp prompts [world]` | 显示实际加载的提示词路径 |
-| `lightrp serve` | 启动 Web UI（默认 127.0.0.1:8000） |
+仓库默认关闭 `workers.dev` 与 preview URL，避免在 Access 策略绑定前公开私有应用。准备切流时先创建受 Access 保护的 V2 路由，再把该路由加入 `wrangler.jsonc` 并部署；不要直接开启未受保护的 `workers.dev`。
 
-对局里：`/help` `/quit` `/compact` `/space` `/scene` `/memory` `/status` `/prompts`。`@角色名` 会在**同一次** GM 请求里给该角色更多台词（不会第二次单独调用）。
-
-## 世界包
-
-```
-WORLD.md                 # 世界设定（稳定层）
-PLAYER.md                # 用户设定（只读进 Prompt，模型不可改）
-PLAYER_MEMORY.md         # 世界对玩家了解到的事实（memory tool 可写）
-MEMORY.md                # 世界记忆
-INITIAL_STATE.yaml       # 新 Session 的初始场景（旧 SCENE.md 仍可回退）
-cast.yaml                # 演员表
-world.yaml               # id / name / primary（新会话默认主卡）/ nmem_space
-characters/              # 完整角色卡 + <id>.mini.yaml
-lorebooks/               # ST 世界书
-prompts/                 # 覆盖引擎提示词（可选）
-sessions/<sid>/
-  meta.json              # 含 primary_character
-  transcript.jsonl
-  state.yaml             # 本局当前状态（隔离）
-  events.jsonl
-  summary.md             # compact 摘要（可选）
-```
-
-角色卡支持 Hermes YAML、SillyTavern v2/v3 JSON、PNG `chara`/`ccv3`。导入时会启发式生成 `.mini.yaml`，也可在角色页点「生成 Mini」。世界书按关键词与场景实体触发，受 token budget 限制。角色书优先于世界书。
-
-## 提示词
-
-发给模型的文字不写在 Python 里。覆盖顺序（后者覆盖前者）：
-
-1. `src/lightrp/prompts/`（包默认）
-2. `~/.lightrp/prompts/`
-3. `<world>/prompts/`
-
-改 `gm.md` / `spotlight.md` / `layers/*.md` 等即可改口吻，不必改代码。缺文件会报错，没有内置备用提示词。
-
-## 记忆
-
-启用 nmem 且已选工作区时，对局正文（含成人内容）会写入该空间的 thread / 记忆，MEMORY / PLAYER_MEMORY 事实也会同步，并在下一轮召回。未选择空间时不同步，也不会写入 default。PLAYER.md 用户设定不会被模型改写。
-
-## 开发
+## 质量检查
 
 ```bash
-pytest
-cd web && npm install && npm run build
+npm run typecheck
+npm test
+npm run build
+npm run test:e2e
+npm run check
 ```
+
+`npm run check` 包含格式、ESLint、类型、单元/集成测试、生产构建、四档响应式 Playwright 验收，以及旧运行路径扫描。
