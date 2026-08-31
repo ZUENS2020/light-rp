@@ -1128,8 +1128,10 @@ export default {
         const message = err instanceof Error ? err.message : String(err);
         const code =
           err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code || "") : undefined;
-        await markFailed(env.DB, taskId, message, { code, dead: msg.attempts >= 4 }).catch(() => undefined);
-        msg.retry();
+        const dead = msg.attempts >= 4 || code === "LLM_OUTPUT_CHANNEL_VIOLATION";
+        await markFailed(env.DB, taskId, message, { code, dead }).catch(() => undefined);
+        if (dead) msg.ack();
+        else msg.retry();
       }
     }
   },

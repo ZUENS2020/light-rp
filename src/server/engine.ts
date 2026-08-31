@@ -603,19 +603,18 @@ async function extractTurnCommit(
         .join("\n\n"),
     },
   ];
-  const commitMaxTokens = Math.min(4_096, effectiveOutputTokens(settings, options.model));
+  const commitMaxTokens = Math.min(1_536, effectiveOutputTokens(settings, options.model));
   const requestKind = memoryFeedback ? "correction" : "memory";
-  const requestJson = (retry: boolean) =>
-    chat(env, messages, null, 0, commitMaxTokens, settings.llm.timeout, {
-      ...options,
-      requestKind: retry || memoryFeedback ? "correction" : requestKind,
-      skipCache: retry || Boolean(memoryFeedback) || options.skipCache,
-    });
-  const requestTool = (retry: boolean) =>
+  const commitOptions = {
+    ...options,
+    requestKind,
+    skipCache: Boolean(memoryFeedback) || options.skipCache,
+    skipOutputChannelRetry: true,
+  };
+  const requestJson = () => chat(env, messages, null, 0, commitMaxTokens, settings.llm.timeout, commitOptions);
+  const requestTool = () =>
     chat(env, messages, [tool], 0, commitMaxTokens, settings.llm.timeout, {
-      ...options,
-      requestKind: retry || memoryFeedback ? "correction" : requestKind,
-      skipCache: retry || Boolean(memoryFeedback) || options.skipCache,
+      ...commitOptions,
       toolChoice: { type: "function", function: { name: "commit_turn" } },
     });
   const accept = (
@@ -638,38 +637,12 @@ async function extractTurnCommit(
       role: "system",
       content: `${messages[0].content}\n模型不支持工具，因此只输出一个符合以下 JSON Schema 的 JSON 对象：\n${library.text("tools/turn-commit.schema.json")}`,
     };
-    let result = await requestJson(false);
-    let commit = accept(result);
-    if (!commit) {
-      messages.push({ role: "user", content: "JSON 参数不完整。按 schema 补齐所有必填字段，只输出 JSON。" });
-      const retry = await requestJson(true);
-      commit = accept(retry, result.usage);
-    }
+    const commit = accept(await requestJson());
     if (!commit) throw new Error("文本模型没有提交合法的回合 JSON，状态与记忆未落盘");
     return commit;
   }
 
-  let result = await requestTool(false);
-  let commit = accept(result);
-  if (!commit) {
-    if (result.text.trim()) messages.push({ role: "assistant", content: result.text });
-    messages.push({
-      role: "user",
-      content:
-        "commit_turn 缺失或参数不完整。按工具 schema 填满 state、events、memory_ops 的必填字段，只调用 commit_turn 一次；也可以只输出该 JSON 对象。",
-    });
-    const retry = await requestTool(true);
-    commit = accept(retry, result.usage);
-    result = { ...retry, usage: addUsage(result.usage, retry.usage) };
-  }
-  if (!commit) {
-    messages.push({
-      role: "user",
-      content: "工具调用仍不合法。现在不要调用工具，只输出一个符合 schema 的 JSON 对象。",
-    });
-    const fallback = await requestJson(true);
-    commit = accept(fallback, result.usage);
-  }
+  const commit = accept(await requestTool());
   if (!commit) throw new Error("模型没有提交合法的 commit_turn，状态与记忆未落盘");
   return commit;
 }
@@ -886,8 +859,7 @@ export async function runTurn(
       commitUsage = commit.usage;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (/commit_turn|回合 JSON/.test(message)) warnings.push(message);
-      else throw error;
+      warnings.push(message);
     }
   } else if (Object.keys(trailer).length) {
     nextScene = applyScenePatch(scene, trailer);
@@ -958,11 +930,8 @@ export async function runTurn(
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (/commit_turn|回合 JSON/.test(message)) {
-        warnings.push(`记忆整理失败：${message}`);
-        break;
-      }
-      throw error;
+      warnings.push(`记忆整理失败：${message}`);
+      break;
     }
     activeCommit = repaired;
     memoryOps = repaired.memoryOps;

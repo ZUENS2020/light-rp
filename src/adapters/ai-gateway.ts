@@ -291,6 +291,7 @@ export async function chat(
 ): Promise<ChatResult> {
   const first = await rawChat(env, messages, tools, temperature, maxTokens, timeoutSec, options);
   if (!first.reasoningOnly) return publicResult(first);
+  if (options.skipOutputChannelRetry) return publicResult(first);
   const correction: LlmMessage[] = [
     ...messages,
     {

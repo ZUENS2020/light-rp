@@ -38,6 +38,7 @@ export type AiRequestOptions = {
   cacheKey?: string;
   affinityKey?: string;
   toolChoice?: ToolChoice;
+  skipOutputChannelRetry?: boolean;
   requestKind?:
     "story" | "ooc" | "tool" | "summary" | "compact" | "memory" | "rewrite" | "regenerate" | "correction" | "probe";
 };
