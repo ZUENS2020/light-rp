@@ -501,6 +501,68 @@ function parseCommitJson(text: string): Record<string, unknown> | null {
   }
 }
 
+function unwrapCommitPayload(raw: Record<string, unknown>): Record<string, unknown> {
+  if (raw.state && typeof raw.state === "object" && !Array.isArray(raw.state)) return raw;
+  const nested = raw.arguments;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return unwrapCommitPayload(nested as Record<string, unknown>);
+  }
+  if (typeof nested === "string") {
+    const parsed = parseCommitJson(nested);
+    if (parsed) return unwrapCommitPayload(parsed);
+  }
+  const named = raw.commit_turn;
+  if (named && typeof named === "object" && !Array.isArray(named)) {
+    return unwrapCommitPayload(named as Record<string, unknown>);
+  }
+  return raw;
+}
+
+export function coerceTurnCommitArguments(
+  raw: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const args = unwrapCommitPayload(raw);
+  const state = args.state;
+  if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+  const events = Array.isArray(args.events) ? args.events : args.events == null ? [] : [args.events];
+  const opsRaw = Array.isArray(args.memory_ops) ? args.memory_ops : [];
+  const memory_ops = opsRaw
+    .filter(
+      (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
+    )
+    .map((op) => ({
+      ...op,
+      action: ["add", "replace", "remove"].includes(String(op.action)) ? String(op.action) : "add",
+      target: ["world", "player", "character"].includes(String(op.target)) ? String(op.target) : "world",
+      content: String(op.content ?? op.text ?? ""),
+      type: String(op.type || "fact"),
+      importance: candidateImportance(op),
+    }));
+  return { ...args, state, events, memory_ops };
+}
+
+function commitArgsFromResult(result: {
+  text: string;
+  tool_calls: { id: string; name: string; arguments: Record<string, unknown> }[];
+}): {
+  args: Record<string, unknown>;
+  call: TurnCommit["call"];
+} | null {
+  const candidates = [...result.tool_calls.filter((item) => item.name === "commit_turn"), ...result.tool_calls];
+  const parsed = result.text.trim() ? parseCommitJson(result.text) : null;
+  if (parsed) candidates.push({ id: "content-commit", name: "commit_turn", arguments: parsed });
+  for (const item of candidates) {
+    const coerced = coerceTurnCommitArguments(item.arguments);
+    if (!coerced || !validTurnCommitArguments(coerced)) continue;
+    return {
+      args: coerced,
+      call: { id: item.id || "content-commit", name: "commit_turn", arguments: coerced },
+    };
+  }
+  return null;
+}
+
 async function extractTurnCommit(
   env: Env,
   library: PromptLibrary,
@@ -541,73 +603,75 @@ async function extractTurnCommit(
         .join("\n\n"),
     },
   ];
+  const commitMaxTokens = Math.min(4_096, effectiveOutputTokens(settings, options.model));
+  const requestKind = memoryFeedback ? "correction" : "memory";
+  const requestJson = (retry: boolean) =>
+    chat(env, messages, null, 0, commitMaxTokens, settings.llm.timeout, {
+      ...options,
+      requestKind: retry || memoryFeedback ? "correction" : requestKind,
+      skipCache: retry || Boolean(memoryFeedback) || options.skipCache,
+    });
+  const requestTool = (retry: boolean) =>
+    chat(env, messages, [tool], 0, commitMaxTokens, settings.llm.timeout, {
+      ...options,
+      requestKind: retry || memoryFeedback ? "correction" : requestKind,
+      skipCache: retry || Boolean(memoryFeedback) || options.skipCache,
+      toolChoice: { type: "function", function: { name: "commit_turn" } },
+    });
+  const accept = (
+    result: {
+      text: string;
+      tool_calls: { id: string; name: string; arguments: Record<string, unknown> }[];
+      usage: AiUsage;
+      request_body: string;
+    },
+    extraUsage?: AiUsage,
+  ): TurnCommit | null => {
+    const picked = commitArgsFromResult(result);
+    if (!picked) return null;
+    const usage = extraUsage ? addUsage(extraUsage, result.usage) : result.usage;
+    return normalizeTurnCommit(picked.args, scene, pack, picked.call, usage);
+  };
+
   if (options.model?.supports_tools === false) {
     messages[0] = {
       role: "system",
       content: `${messages[0].content}\n模型不支持工具，因此只输出一个符合以下 JSON Schema 的 JSON 对象：\n${library.text("tools/turn-commit.schema.json")}`,
     };
-    const requestJson = (retry: boolean) =>
-      chat(
-        env,
-        messages,
-        null,
-        0,
-        Math.min(2_048, effectiveOutputTokens(settings, options.model)),
-        settings.llm.timeout,
-        {
-          ...options,
-          requestKind: retry || memoryFeedback ? "correction" : "memory",
-          skipCache: retry || Boolean(memoryFeedback) || options.skipCache,
-        },
-      );
     let result = await requestJson(false);
-    let args = parseCommitJson(result.text);
-    if (!args || !validTurnCommitArguments(args)) {
+    let commit = accept(result);
+    if (!commit) {
       messages.push({ role: "user", content: "JSON 参数不完整。按 schema 补齐所有必填字段，只输出 JSON。" });
       const retry = await requestJson(true);
-      result = { ...retry, usage: addUsage(result.usage, retry.usage) };
-      args = parseCommitJson(retry.text);
+      commit = accept(retry, result.usage);
     }
-    if (!args || !validTurnCommitArguments(args)) {
-      throw new Error("文本模型没有提交合法的回合 JSON，状态与记忆未落盘");
-    }
-    const call = {
-      id: `commit-${(await sha256(result.request_body)).slice(0, 24)}`,
-      name: "commit_turn",
-      arguments: args,
-    };
-    return normalizeTurnCommit(args, scene, pack, call, result.usage);
+    if (!commit) throw new Error("文本模型没有提交合法的回合 JSON，状态与记忆未落盘");
+    return commit;
   }
-  const request = (retry: boolean) =>
-    chat(
-      env,
-      messages,
-      [tool],
-      0,
-      Math.min(2_048, effectiveOutputTokens(settings, options.model)),
-      settings.llm.timeout,
-      {
-        ...options,
-        requestKind: retry || memoryFeedback ? "correction" : "memory",
-        skipCache: retry || Boolean(memoryFeedback) || options.skipCache,
-        toolChoice: { type: "function", function: { name: "commit_turn" } },
-      },
-    );
-  let result = await request(false);
-  let call = result.tool_calls.find((item) => item.name === "commit_turn");
-  if (!call || !validTurnCommitArguments(call.arguments)) {
+
+  let result = await requestTool(false);
+  let commit = accept(result);
+  if (!commit) {
+    if (result.text.trim()) messages.push({ role: "assistant", content: result.text });
     messages.push({
       role: "user",
-      content: "commit_turn 缺失或参数不完整。现在按工具 schema 填满所有必填字段，只调用该工具一次。",
+      content:
+        "commit_turn 缺失或参数不完整。按工具 schema 填满 state、events、memory_ops 的必填字段，只调用 commit_turn 一次；也可以只输出该 JSON 对象。",
     });
-    const retry = await request(true);
+    const retry = await requestTool(true);
+    commit = accept(retry, result.usage);
     result = { ...retry, usage: addUsage(result.usage, retry.usage) };
-    call = result.tool_calls.find((item) => item.name === "commit_turn");
   }
-  if (!call || !validTurnCommitArguments(call.arguments)) {
-    throw new Error("模型没有提交合法的 commit_turn，状态与记忆未落盘");
+  if (!commit) {
+    messages.push({
+      role: "user",
+      content: "工具调用仍不合法。现在不要调用工具，只输出一个符合 schema 的 JSON 对象。",
+    });
+    const fallback = await requestJson(true);
+    commit = accept(fallback, result.usage);
   }
-  return normalizeTurnCommit(call.arguments, scene, pack, call, result.usage);
+  if (!commit) throw new Error("模型没有提交合法的 commit_turn，状态与记忆未落盘");
+  return commit;
 }
 
 export async function runTurn(
@@ -807,18 +871,24 @@ export async function runTurn(
       : []),
   ];
   if (opts?.ai) {
-    const commit = await extractTurnCommit(env, library, pack, scene, memory, userText, replyText, settings, {
-      model: opts.ai.model,
-      affinityKey: affinity,
-    });
-    activeCommit = commit;
-    const argsHash = await sha256(stableStringify(commit.call.arguments));
-    const replay = await getCachedToolExecution(opts.ai.db, opts.ai.taskId, commit.call.id, argsHash);
-    commitWasReplayed = replay != null;
-    nextScene = commit.state;
-    events = replay == null ? commit.events : [];
-    memoryOps = replay == null ? commit.memoryOps : [];
-    commitUsage = commit.usage;
+    try {
+      const commit = await extractTurnCommit(env, library, pack, scene, memory, userText, replyText, settings, {
+        model: opts.ai.model,
+        affinityKey: affinity,
+      });
+      activeCommit = commit;
+      const argsHash = await sha256(stableStringify(commit.call.arguments));
+      const replay = await getCachedToolExecution(opts.ai.db, opts.ai.taskId, commit.call.id, argsHash);
+      commitWasReplayed = replay != null;
+      nextScene = commit.state;
+      events = replay == null ? commit.events : [];
+      memoryOps = replay == null ? commit.memoryOps : [];
+      commitUsage = commit.usage;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/commit_turn|回合 JSON/.test(message)) warnings.push(message);
+      else throw error;
+    }
   } else if (Object.keys(trailer).length) {
     nextScene = applyScenePatch(scene, trailer);
   }
@@ -872,18 +942,28 @@ export async function runTurn(
       attempt: consolidationFailures,
       maximum_attempts: 3,
     });
-    const repaired = await extractTurnCommit(
-      env,
-      library,
-      pack,
-      scene,
-      memory,
-      userText,
-      replyText,
-      settings,
-      { model: opts.ai.model, affinityKey: affinity, requestKind: "correction", skipCache: true },
-      feedback,
-    );
+    let repaired: TurnCommit;
+    try {
+      repaired = await extractTurnCommit(
+        env,
+        library,
+        pack,
+        scene,
+        memory,
+        userText,
+        replyText,
+        settings,
+        { model: opts.ai.model, affinityKey: affinity, requestKind: "correction", skipCache: true },
+        feedback,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/commit_turn|回合 JSON/.test(message)) {
+        warnings.push(`记忆整理失败：${message}`);
+        break;
+      }
+      throw error;
+    }
     activeCommit = repaired;
     memoryOps = repaired.memoryOps;
     commitUsage = addUsage(commitUsage, repaired.usage);

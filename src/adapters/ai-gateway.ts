@@ -122,20 +122,46 @@ function parseUsage(raw: Record<string, unknown>): AiUsage {
   };
 }
 
+function recoverJsonObject(text: string): Record<string, unknown> | null {
+  const trimmed = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(trimmed.slice(start, end + 1)) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseToolCallArgs(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value || "{}") as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    const recovered = recoverJsonObject(value);
+    if (recovered) return recovered;
+  }
+  return recoverJsonObject(value) || {};
+}
+
 function parseToolCalls(message: Record<string, unknown>): ToolCall[] {
   const calls: ToolCall[] = [];
-  for (const raw of (message.tool_calls as Record<string, unknown>[] | undefined) || []) {
-    const fn = (raw.function as Record<string, unknown> | undefined) || {};
-    let args: Record<string, unknown>;
-    try {
-      args =
-        typeof fn.arguments === "string"
-          ? JSON.parse(fn.arguments || "{}")
-          : (fn.arguments as Record<string, unknown>) || {};
-    } catch {
-      args = {};
-    }
-    calls.push({ id: String(raw.id || ""), name: String(fn.name || ""), arguments: args });
+  const rawCalls = [...((message.tool_calls as Record<string, unknown>[] | undefined) || [])];
+  if (message.function_call && typeof message.function_call === "object") {
+    rawCalls.push(message.function_call as Record<string, unknown>);
+  }
+  for (const raw of rawCalls) {
+    const fn = (raw.function as Record<string, unknown> | undefined) || raw;
+    const args = parseToolCallArgs(fn.arguments ?? raw.arguments);
+    calls.push({ id: String(raw.id || ""), name: String(fn.name || raw.name || ""), arguments: args });
   }
   return calls;
 }
