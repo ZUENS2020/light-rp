@@ -49,6 +49,19 @@ export function SettingsPage() {
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: api.models });
   const spacesQuery = useQuery({ queryKey: ["nmem-spaces"], queryFn: api.spaces });
+  const connection = useQuery({
+    queryKey: ["nmem-status"],
+    queryFn: api.nmemStatus,
+    retry: false,
+    refetchInterval: 5000,
+  });
+  const connectionMutation = useMutation({
+    mutationFn: (online: boolean) => (online ? api.connectNmem() : api.disconnectNmem()),
+    onSuccess: async (state) => {
+      queryClient.setQueryData(["nmem-status"], state);
+      await queryClient.invalidateQueries({ queryKey: ["nmem-spaces"] });
+    },
+  });
   const [form, setForm] = useState<SettingsPut | null>(null);
   const [modelDraft, setModelDraft] = useState<ModelDraft>(emptyModel);
   const [saved, setSaved] = useState("");
@@ -346,9 +359,9 @@ export function SettingsPage() {
               checked={form.llm.breach}
               onChange={(checked) => setForm({ ...form, llm: { ...form.llm, breach: checked } })}
             >
-              R18G 成年虚构层
+              破甲 · 叙事风格
             </Checkbox>
-            <Hint>稳定规则会进入 prompt epoch 前缀；动态状态、世界书与 nmem 召回只追加为隐藏事件。</Hint>
+            <Hint>生活化对白与动作优先，默认 400–800 字，不代控玩家。只影响正文风格，不注入记忆或压缩任务。</Hint>
             <div className="grid gap-4 sm:grid-cols-3">
               <NumberField
                 id="temperature"
@@ -377,18 +390,20 @@ export function SettingsPage() {
 
           <fieldset className="settings-section">
             <legend>Nowledge Mem</legend>
-            <Checkbox
-              id="nmem-enabled"
-              checked={form.nmem.enabled}
-              onChange={(checked) => setForm({ ...form, nmem: { ...form.nmem, enabled: checked } })}
-            >
-              启用独立 nmem Queue
-            </Checkbox>
-            <Field
-              id="nmem-space"
-              label="默认空间"
-              hint={spacesQuery.data?.available ? "生成提交后异步同步。" : spacesQuery.data?.error || "nmem 未连通"}
-            >
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="font-ui text-sm">{connection.data?.status === "online" ? "在线" : "离线"}</p>
+                <Hint>待补传 {connection.data?.pending ?? 0} 回合 · 离线后静默停用，仅手动上线恢复。</Hint>
+              </div>
+              <Button
+                type="button"
+                disabled={connectionMutation.isPending}
+                onClick={() => connectionMutation.mutate(connection.data?.status !== "online")}
+              >
+                {connectionMutation.isPending ? "检测中" : connection.data?.status === "online" ? "下线" : "上线"}
+              </Button>
+            </div>
+            <Field id="nmem-space" label="默认空间" hint="上线后按顺序补传真实会话，并同步当前核心记忆。">
               <Input
                 id="nmem-space"
                 list="nmem-spaces"

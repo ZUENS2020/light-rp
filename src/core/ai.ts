@@ -32,6 +32,7 @@ export type ResponseCacheStatus = "HIT" | "MISS" | "BYPASS" | "unknown";
 export type ToolChoice = "auto" | "required" | "none" | { type: "function"; function: { name: string } };
 
 export type AiRequestOptions = {
+  signal?: AbortSignal;
   model?: AiModelConfig;
   skipCache?: boolean;
   cacheTtl?: number;

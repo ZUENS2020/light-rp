@@ -137,6 +137,12 @@ function stubApi() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Play Studio", () => {
+  it("does not expose message editing", async () => {
+    stubApi();
+    renderPlay();
+    await screen.findByText("门铃轻响。");
+    expect(screen.queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
+  });
   it("keeps the composer free of the character mention shortcut bar", async () => {
     stubApi();
     renderPlay();

@@ -1,3 +1,6 @@
+import { consumeGeneration } from "./generation-service";
+import { connectNmem, connectionStatus, drainNmem, requestNmemSnapshot, wakeNmem } from "./nmem-service";
+import { takeNmemOffline } from "../adapters/nmem-connection";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import {
@@ -26,33 +29,19 @@ import {
   type MiniCard,
   type WorldPack,
 } from "../core/domain";
-import { openingFor, runCompact, runOoc, runTurn, type TurnOut } from "./engine";
-import { turnErrorStatus } from "../adapters/ai-gateway";
+import { openingFor, runCompact } from "./engine";
 import { importStFiles, type ImportFile } from "../core/sillytavern-import";
-import {
-  listNmemSpaces,
-  loadNmemIndex,
-  resolveSpaceId,
-  saveNmemIndex,
-  sessionThreadId,
-  syncMemorySnapshotToNmem,
-  syncThreadTurn,
-  syncTurnBodyToNmem,
-} from "../adapters/nmem";
+import { listNmemSpaces, resolveSpaceId } from "../adapters/nmem";
 import { PromptLibrary } from "../core/prompts";
 import { listWorkspaceIds, workspaceFs } from "../adapters/r2";
 import { createWorkspace } from "./seed";
 import { loadSettings, publicSettings, saveSettings, type AppSettings } from "./settings";
 import { parseContextConfig, parseMiniConfig } from "../core/budget";
-import { completeTask, getActiveTask, getTask, insertPending, leaseTask, markFailed } from "./tasks";
-import { nowIso, parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "../core/util";
+import { flushGenerationOutbox, getActiveTask } from "./tasks";
+import { parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "../core/util";
 import { projectWorkspaceAndSession, projectWorkspaceContent, registerV2Routes } from "./api-v2";
-import type { AiModelConfig, AiUsage, ResponseCacheStatus } from "../core/ai";
-import { sha256 } from "../core/ai";
-import { selectedNmemSpace } from "../core/memory";
-import { beginNmemSync, completeNmemSync, failNmemSync, mirrorCoreMemorySnapshot } from "./memory";
-import { getApplicationDefaultModel, sessionRuntime } from "./models";
-import { isOocMessage } from "../core/commands";
+import { mirrorCoreMemorySnapshot } from "./memory";
+import { getApplicationDefaultModel, resolveSessionModel } from "./models";
 import { createPromptEpoch } from "./prompt-state";
 
 async function overlays(fs: ReturnType<typeof workspaceFs>) {
@@ -64,29 +53,6 @@ async function overlays(fs: ReturnType<typeof workspaceFs>) {
     if (text != null) out[file.replace(/^prompts\//, "")] = text;
   }
   return out;
-}
-
-type PersistedTurnDiagnostics = {
-  task_id?: string | null;
-  ai_usage?: AiUsage;
-  response_cache_status?: ResponseCacheStatus;
-  request_hash?: string | null;
-  stable_prefix_tokens?: number;
-  volatile_tokens?: number;
-  hidden_prompt_events?: Array<{ kind: "context" | "memory"; content: string; hashSeed?: string }>;
-  rotate_prompt_epoch_reason?: "context_compacted" | null;
-};
-
-async function loadTurnDiagnostics(
-  fs: ReturnType<typeof workspaceFs>,
-  sessionId: string,
-): Promise<PersistedTurnDiagnostics | null> {
-  try {
-    const raw = await fs.get(`sessions/${sessionId}/last_turn.json`);
-    return raw ? (JSON.parse(raw) as PersistedTurnDiagnostics) : null;
-  } catch {
-    return null;
-  }
 }
 
 function summary(
@@ -176,6 +142,23 @@ async function playState(
   } catch {
     lastTurn = null;
   }
+  // Pending, stopped or failed input is already durable in D1, even if the queue
+  // never started. Read it here without letting a cancelled worker mutate R2.
+  const uncommitted = await env.DB.prepare(
+    `SELECT m.content, m.created_at AS ts, m.task_id FROM messages m
+     JOIN generation_tasks g ON g.id = m.task_id
+     WHERE m.session_id = ? AND m.role = 'user' AND g.status <> 'completed'
+     ORDER BY m.sequence`,
+  )
+    .bind(sessionId)
+    .all<{ content: string; ts: string; task_id: string }>();
+  const visibleMessages = [...loaded.messages];
+  for (const message of uncommitted.results) {
+    if (!visibleMessages.some((existing) => existing.task_id === message.task_id && existing.role === "user")) {
+      const index = visibleMessages.findIndex((existing) => existing.role !== "system" && existing.ts > message.ts);
+      visibleMessages.splice(index < 0 ? visibleMessages.length : index, 0, { ...message, role: "user" });
+    }
+  }
   return {
     world: {
       ...summary(pack, sessionId, loaded.nmem_space, { session_count: sessions.length }),
@@ -194,7 +177,7 @@ async function playState(
     player: memory.userSetting,
     player_memory: memory.player.join("\n§\n"),
     character_memory: memory.characters,
-    messages: loaded.messages,
+    messages: visibleMessages,
     context_report: contextReport,
     turn_warnings: Array.isArray(lastTurn?.warnings) ? lastTurn.warnings.map(String) : [],
     remembered: Array.isArray(lastTurn?.remembered) ? lastTurn.remembered.map(String) : [],
@@ -241,7 +224,7 @@ app.put("/api/v2/settings", async (c) => {
       breach: body.llm?.breach != null ? Boolean(body.llm.breach) : previous.llm.breach,
     },
     nmem: {
-      enabled: body.nmem?.enabled != null ? Boolean(body.nmem.enabled) : previous.nmem.enabled,
+      enabled: true,
       space: resolveSpaceId(requestedSpace, listed.spaces) || "",
     },
     memory: {
@@ -260,6 +243,17 @@ app.put("/api/v2/settings", async (c) => {
   await saveSettings(c.env.BUCKET, next);
   const defaultModel = await getApplicationDefaultModel(c.env.DB);
   return c.json(publicSettings(c.env, next, defaultModel.id));
+});
+
+app.get("/api/v2/nmem/status", async (c) => c.json(await connectionStatus(c.env)));
+app.post("/api/v2/nmem/connect", async (c) => {
+  const state = await connectNmem(c.env);
+  if (state.status === "online") c.executionCtx.waitUntil(wakeNmem(c.env));
+  return c.json(state);
+});
+app.post("/api/v2/nmem/disconnect", async (c) => {
+  await takeNmemOffline(c.env.DB);
+  return c.json(await connectionStatus(c.env));
 });
 
 app.get("/api/v2/nmem/spaces", async (c) => c.json(await listNmemSpaces(c.env)));
@@ -655,181 +649,23 @@ app.get("/api/v2/play/:id/:sid", async (c) => {
   return c.json(await playState(c.env, fs, pack, c.req.param("sid")));
 });
 
-app.post("/api/v2/play/:id/:sid/turn", async (c) => {
-  const body = (await c.req.json()) as { text?: string };
-  const text = (body.text || "").trim();
-  if (!text) throw new HTTPException(400, { message: "text is required" });
-  const id = c.req.param("id");
-  const sid = c.req.param("sid");
-  const fs = workspaceFs(c.env.BUCKET, id);
-  const pack = await loadPack(fs, id);
-  if (!c.env.DB || !c.env.GENERATE_QUEUE) {
-    try {
-      const settings = await loadSettings(c.env.BUCKET);
-      const result = await runTurn(c.env, fs, pack, sid, text, settings, await overlays(fs), (job) =>
-        c.executionCtx.waitUntil(job),
-      );
-      return c.json({
-        ...(await playState(c.env, fs, pack, sid, {
-          context_report: result.context_report,
-          nmem_available: result.nmem_available,
-        })),
-        reply: result.text,
-        spotlight: result.spotlight_ids,
-        nmem_synced: result.nmem_synced,
-        turn_warnings: result.warnings,
-        context_report: result.context_report,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new HTTPException(turnErrorStatus(err) as 502, { message });
-    }
-  }
-  const active = await getActiveTask(c.env.DB, id, sid);
-  if (active) {
-    return c.json({ detail: "已有生成任务进行中", task_id: active.id, task_status: active.status }, 409);
-  }
-  const loaded = await loadSession(fs, sid);
-  await saveSession(fs, sid, [...loaded.messages, { role: "user", content: text, ts: nowIso() }], {
-    thread_id: loaded.thread_id,
-    nmem_space: loaded.nmem_space,
-    primary_character: loaded.primary_character,
-    title: loaded.title,
-  });
-  const taskId = crypto.randomUUID();
-  await insertPending(c.env.DB, { id: taskId, worldId: id, sessionId: sid, userText: text });
-  await c.env.GENERATE_QUEUE.send({ taskId, worldId: id, sessionId: sid });
-  return c.json({
-    ...(await playState(c.env, fs, pack, sid)),
-    task_id: taskId,
-    task_status: "pending",
-  });
-});
-
-app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
-  const body = (await c.req.json()) as { index?: number; content?: string };
-  const content = (body.content || "").trim();
-  const index = Number(body.index);
-  if (!content || !Number.isInteger(index) || index < 0) {
-    throw new HTTPException(400, { message: !content ? "content is required" : "index out of range" });
-  }
-  const id = c.req.param("id");
-  const sid = c.req.param("sid");
-  const fs = workspaceFs(c.env.BUCKET, id);
-  const pack = await loadPack(fs, id);
-  if (c.env.DB && c.env.GENERATE_QUEUE) {
-    const active = await getActiveTask(c.env.DB, id, sid);
-    if (active) {
-      return c.json({ detail: "已有生成任务进行中", task_id: active.id, task_status: active.status }, 409);
-    }
-  }
-  const loaded = await loadSession(fs, sid);
-  if (index >= loaded.messages.length) {
-    throw new HTTPException(400, { message: "index out of range" });
-  }
-  const kept = { ...loaded.messages[index], content };
-  const messages = [...loaded.messages.slice(0, index), kept];
-  await saveSession(fs, sid, messages, {
-    thread_id: loaded.thread_id,
-    nmem_space: loaded.nmem_space,
-    primary_character: loaded.primary_character,
-    title: loaded.title,
-  });
-  if (kept.role === "user") {
-    if (c.env.DB && c.env.GENERATE_QUEUE) {
-      const taskId = crypto.randomUUID();
-      await insertPending(c.env.DB, { id: taskId, worldId: id, sessionId: sid, userText: content });
-      await c.env.GENERATE_QUEUE.send({ taskId, worldId: id, sessionId: sid });
-      return c.json({
-        ...(await playState(c.env, fs, pack, sid)),
-        task_id: taskId,
-        task_status: "pending",
-      });
-    }
-    try {
-      const settings = await loadSettings(c.env.BUCKET);
-      const result = await runTurn(
-        c.env,
-        fs,
-        pack,
-        sid,
-        content,
-        settings,
-        await overlays(fs),
-        (job) => c.executionCtx.waitUntil(job),
-        { persistUser: false },
-      );
-      return c.json({
-        ...(await playState(c.env, fs, pack, sid, {
-          context_report: result.context_report,
-          nmem_available: result.nmem_available,
-        })),
-        reply: result.text,
-        spotlight: result.spotlight_ids,
-        nmem_synced: result.nmem_synced,
-        turn_warnings: result.warnings,
-        context_report: result.context_report,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new HTTPException(turnErrorStatus(err) as 502, { message });
-    }
-  }
-  return c.json(await playState(c.env, fs, pack, sid));
-});
-
-app.get("/api/v2/play/:id/:sid/tasks/active", async (c) => {
-  const id = c.req.param("id");
-  const sid = c.req.param("sid");
-  if (!c.env.DB) return c.json({ task: null });
-  const task = await getActiveTask(c.env.DB, id, sid);
-  if (!task) return c.json({ task: null });
-  return c.json({
-    task: {
-      id: task.id,
-      world_id: task.world_id,
-      session_id: task.session_id,
-      status: task.status,
-      content: task.content,
-      error: task.error,
-      created_at: task.created_at,
-      updated_at: task.updated_at,
-    },
-  });
-});
-
-app.get("/api/v2/play/:id/:sid/tasks/:taskId", async (c) => {
-  const id = c.req.param("id");
-  const sid = c.req.param("sid");
-  const taskId = c.req.param("taskId");
-  if (!c.env.DB) throw new HTTPException(404, { message: "task not found" });
-  const task = await getTask(c.env.DB, taskId);
-  if (!task || task.world_id !== id || task.session_id !== sid) {
-    throw new HTTPException(404, { message: "task not found" });
-  }
-  return c.json({
-    id: task.id,
-    world_id: task.world_id,
-    session_id: task.session_id,
-    status: task.status,
-    content: task.content,
-    error: task.error,
-    created_at: task.created_at,
-    updated_at: task.updated_at,
-  });
-});
-
 app.post("/api/v2/play/:id/:sid/compact", async (c) => {
   const id = c.req.param("id");
   const sid = c.req.param("sid");
+  if (await getActiveTask(c.env.DB, id, sid)) throw new HTTPException(409, { message: "生成期间不能压缩" });
   const fs = workspaceFs(c.env.BUCKET, id);
   const loaded = await loadSession(fs, sid);
   const memory = await loadMemory(fs);
   const settings = await loadSettings(c.env.BUCKET);
   const library = new PromptLibrary(await overlays(fs));
-  const summaryText = await runCompact(c.env, fs, memory, loaded.messages, sid, loaded, library, settings, id, (job) =>
-    c.executionCtx.waitUntil(job),
-  );
+  const summaryText = await runCompact(c.env, fs, memory, loaded.messages, sid, loaded, library, settings, {
+    model: await resolveSessionModel(c.env.DB, sid),
+    requestKind: "compact",
+  });
+  await mirrorCoreMemorySnapshot(c.env.DB, { workspaceId: id, sessionId: sid, snapshot: await loadMemory(fs) });
+  await createPromptEpoch(c.env.DB, sid, "context_compacted");
+  await requestNmemSnapshot(c.env, id, loaded.nmem_space);
+  c.executionCtx.waitUntil(wakeNmem(c.env));
   const pack = await loadPack(fs, id);
   return c.json({ ...(await playState(c.env, fs, pack, sid)), summary: summaryText });
 });
@@ -847,6 +683,11 @@ app.post("/api/v2/play/:id/:sid/space", async (c) => {
 
 export default {
   fetch: app.fetch,
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    // Dispatch durable work only while explicitly online. This never probes nmem.
+    ctx.waitUntil(wakeNmem(env));
+    ctx.waitUntil(flushGenerationOutbox(env));
+  },
   async queue(
     batch: MessageBatch<{
       kind?: "generation" | "nmem";
@@ -861,278 +702,11 @@ export default {
     ctx: ExecutionContext,
   ) {
     if (batch.queue === "lightrp-v2-nmem") {
-      for (const msg of batch.messages) {
-        try {
-          const payload = msg.body;
-          const workspaceId = payload.workspaceId || payload.worldId || "";
-          if (!workspaceId || !payload.userText || !payload.assistantText) {
-            msg.ack();
-            continue;
-          }
-          const fs = workspaceFs(env.BUCKET, workspaceId);
-          const loaded = await loadSession(fs, payload.sessionId);
-          const settings = await loadSettings(env.BUCKET);
-          if (!settings.nmem.enabled) {
-            msg.ack();
-            continue;
-          }
-          const listed = await listNmemSpaces(env);
-          if (!listed.available) throw new Error(listed.error || "nmem unavailable");
-          const spaceId = resolveSpaceId(selectedNmemSpace(loaded.nmem_space, settings.nmem.space), listed.spaces);
-          if (!spaceId || !listed.spaces.some((space) => space.id === spaceId)) {
-            throw new Error(`nmem space '${spaceId || ""}' is unavailable`);
-          }
-          await beginNmemSync(env.DB, {
-            taskId: payload.taskId,
-            workspaceId,
-            sessionId: payload.sessionId,
-            spaceId,
-            attempt: msg.attempts,
-          });
-          const threadId = loaded.thread_id || sessionThreadId(workspaceId, payload.sessionId);
-          const externalMemoryId = await syncTurnBodyToNmem(
-            env,
-            spaceId,
-            workspaceId,
-            payload.sessionId,
-            payload.userText,
-            payload.assistantText,
-            payload.taskId,
-          );
-          await syncThreadTurn(
-            env,
-            spaceId,
-            loaded.thread_id,
-            threadId,
-            `Light RP / ${workspaceId} / ${payload.sessionId}`,
-            [
-              { role: "user", content: payload.userText },
-              { role: "assistant", content: payload.assistantText },
-            ],
-            payload.taskId,
-          );
-          const memory = await loadMemory(fs);
-          const synced = await syncMemorySnapshotToNmem(
-            env,
-            spaceId,
-            await loadNmemIndex((path) => fs.get(path)),
-            workspaceId,
-            memory,
-          );
-          await saveNmemIndex((path, text, type) => fs.put(path, text, type), synced.index);
-          const mirroredCount = await mirrorCoreMemorySnapshot(env.DB, {
-            workspaceId,
-            sessionId: payload.sessionId,
-            taskId: payload.taskId,
-            snapshot: memory,
-          });
-          await saveSession(fs, payload.sessionId, loaded.messages, {
-            thread_id: threadId,
-            nmem_space: spaceId,
-            primary_character: loaded.primary_character,
-            title: loaded.title,
-          });
-          const ts = nowIso();
-          const content = `${payload.userText}\n\n${payload.assistantText}`;
-          await env.DB.batch([
-            env.DB.prepare(`UPDATE workspaces SET nmem_space = ?, updated_at = ? WHERE id = ?`).bind(
-              spaceId,
-              ts,
-              workspaceId,
-            ),
-            env.DB.prepare(`UPDATE sessions SET nmem_space = ?, updated_at = ? WHERE id = ?`).bind(
-              spaceId,
-              ts,
-              payload.sessionId,
-            ),
-            env.DB.prepare(
-              `INSERT INTO memories (
-                 id, workspace_id, session_id, character_id, scope, content, content_hash,
-                 importance, source, created_at, updated_at, memory_type, status, external_id,
-                 source_task_id, provenance_json
-               ) VALUES (?, ?, ?, NULL, 'nmem', ?, ?, 0.45, ?, ?, ?, 'event', 'active', ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                 content = excluded.content, content_hash = excluded.content_hash,
-                 source = excluded.source, updated_at = excluded.updated_at, status = 'active',
-                 external_id = excluded.external_id, source_task_id = excluded.source_task_id,
-                 provenance_json = excluded.provenance_json`,
-            ).bind(
-              `nmem:${payload.taskId}`,
-              workspaceId,
-              payload.sessionId,
-              content,
-              await sha256(content),
-              externalMemoryId ? `nmem:${externalMemoryId}` : "nmem",
-              ts,
-              ts,
-              externalMemoryId,
-              payload.taskId,
-              JSON.stringify({ origin: "sync_turn", space_id: spaceId, thread_id: threadId }),
-            ),
-          ]);
-          await completeNmemSync(env.DB, {
-            taskId: payload.taskId,
-            coreMemoryCount: mirroredCount,
-            turnExternalId: externalMemoryId,
-            threadId,
-          });
-          msg.ack();
-        } catch (error) {
-          await failNmemSync(env.DB, msg.body.taskId, error, msg.attempts >= 4).catch(() => undefined);
-          console.error("nmem queue sync failed", {
-            taskId: msg.body.taskId,
-            sessionId: msg.body.sessionId,
-            attempt: msg.attempts,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          msg.retry();
-        }
-      }
+      // A wake-up drains durable jobs; stale V2 payloads cannot create new sync work.
+      await drainNmem(env);
+      batch.ackAll();
       return;
     }
-    for (const msg of batch.messages) {
-      let taskId = "";
-      try {
-        const body = typeof msg.body === "string" ? JSON.parse(msg.body) : msg.body;
-        const { taskId: id, sessionId } = body;
-        taskId = id;
-        const existing = await getTask(env.DB, taskId);
-        if (
-          !existing ||
-          existing.status === "completed" ||
-          existing.status === "failed" ||
-          existing.status === "dead"
-        ) {
-          msg.ack();
-          continue;
-        }
-        const owner = `queue-${msg.id}-${crypto.randomUUID()}`;
-        const leased = await leaseTask(env.DB, taskId, owner);
-        if (!leased) {
-          msg.retry({ delaySeconds: 5 });
-          continue;
-        }
-        const workspaceId = leased.workspace_id;
-        const fs = workspaceFs(env.BUCKET, workspaceId);
-        const pack = await loadPack(fs, workspaceId);
-        const settings = await loadSettings(env.BUCKET);
-        const loaded = await loadSession(fs, sessionId);
-        const ooc = isOocMessage(leased.user_text);
-        const persistedAssistant = [...loaded.messages]
-          .reverse()
-          .find((message) => message.role === "assistant" && message.task_id === taskId);
-        if (persistedAssistant) {
-          const diagnostics = await loadTurnDiagnostics(fs, sessionId);
-          await mirrorCoreMemorySnapshot(env.DB, {
-            workspaceId,
-            sessionId,
-            taskId,
-            snapshot: await loadMemory(fs),
-          });
-          if (!ooc) {
-            await env.NMEM_QUEUE.send({
-              kind: "nmem",
-              taskId,
-              workspaceId,
-              sessionId,
-              userText: leased.user_text,
-              assistantText: persistedAssistant.content,
-            });
-          }
-          await completeTask(env.DB, taskId, {
-            content: persistedAssistant.content,
-            includeInPrompt: !ooc,
-            requestHash: diagnostics?.task_id === taskId ? diagnostics.request_hash || undefined : undefined,
-            cacheStatus: diagnostics?.task_id === taskId ? diagnostics.response_cache_status : undefined,
-            usage: diagnostics?.task_id === taskId ? diagnostics.ai_usage : undefined,
-            stablePrefixTokens: diagnostics?.task_id === taskId ? diagnostics.stable_prefix_tokens || 0 : undefined,
-            volatileTokens: diagnostics?.task_id === taskId ? diagnostics.volatile_tokens || 0 : undefined,
-            hiddenEvents: diagnostics?.task_id === taskId ? diagnostics.hidden_prompt_events || [] : undefined,
-            rotatePromptEpochReason:
-              diagnostics?.task_id === taskId ? diagnostics.rotate_prompt_epoch_reason || undefined : undefined,
-          });
-          msg.ack();
-          continue;
-        }
-        const last = loaded.messages[loaded.messages.length - 1];
-        if (last?.role !== "user" || (last.task_id !== taskId && last.content !== leased.user_text)) {
-          await saveSession(
-            fs,
-            sessionId,
-            [...loaded.messages, { role: "user", content: leased.user_text, ts: leased.created_at, task_id: taskId }],
-            {
-              thread_id: loaded.thread_id,
-              nmem_space: loaded.nmem_space,
-              primary_character: loaded.primary_character,
-              title: loaded.title,
-            },
-          );
-        }
-        const model = JSON.parse(leased.model_snapshot_json) as AiModelConfig;
-        const result = ooc
-          ? await runOoc(env, fs, pack, sessionId, leased.user_text, settings, {
-              model,
-              affinityKey: (await sessionRuntime(env.DB, sessionId)).affinity_key,
-              taskId,
-            })
-          : await runTurn(
-              env,
-              fs,
-              pack,
-              sessionId,
-              leased.user_text,
-              settings,
-              await overlays(fs),
-              (job) => ctx.waitUntil(job),
-              {
-                persistUser: false,
-                deferNmemWrites: true,
-                ai: {
-                  db: env.DB,
-                  taskId,
-                  model,
-                  requestKind:
-                    leased.kind === "rewrite" ? "rewrite" : leased.kind === "regenerate" ? "regenerate" : "story",
-                },
-              },
-            );
-        if (!ooc) {
-          await mirrorCoreMemorySnapshot(env.DB, {
-            workspaceId,
-            sessionId,
-            taskId,
-            snapshot: await loadMemory(fs),
-          });
-          await env.NMEM_QUEUE.send({
-            kind: "nmem",
-            taskId,
-            workspaceId,
-            sessionId,
-            userText: leased.user_text,
-            assistantText: result.text,
-          });
-        }
-        await completeTask(env.DB, taskId, {
-          content: result.text,
-          includeInPrompt: !ooc,
-          requestHash: result.request_hash,
-          cacheStatus: result.response_cache_status,
-          usage: result.ai_usage,
-          stablePrefixTokens: result.stable_prefix_tokens,
-          volatileTokens: result.volatile_tokens,
-          hiddenEvents: (result as Partial<TurnOut>).hidden_prompt_events,
-          rotatePromptEpochReason: (result as Partial<TurnOut>).rotate_prompt_epoch_reason,
-        });
-        msg.ack();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const code =
-          err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code || "") : undefined;
-        const dead = msg.attempts >= 4 || code === "LLM_OUTPUT_CHANNEL_VIOLATION";
-        await markFailed(env.DB, taskId, message, { code, dead }).catch(() => undefined);
-        if (dead) msg.ack();
-        else msg.retry();
-      }
-    }
+    for (const msg of batch.messages) await consumeGeneration(env, msg, ctx);
   },
 };

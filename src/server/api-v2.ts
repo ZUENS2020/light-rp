@@ -1,3 +1,4 @@
+import { requestNmemSnapshot, wakeNmem } from "./nmem-service";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -17,29 +18,18 @@ import {
   setSessionModel,
   upsertModel,
 } from "./models";
-import { ActiveTaskConflict, createTurnTask, getActiveTask, getTask, listMessages, publishTask } from "./tasks";
+import {
+  ActiveTaskConflict,
+  cancelTask,
+  createTurnTask,
+  getActiveTask,
+  getTask,
+  listMessages,
+  publishTask,
+} from "./tasks";
 import { memoryStatus } from "./memory";
-import { mirrorCoreMemorySnapshot } from "./memory";
-import {
-  loadLorebookText,
-  loadMemory,
-  loadPack,
-  loadSession,
-  listSessions,
-  saveCast,
-  saveSession,
-  saveWorldMeta,
-  type WorldPack,
-} from "../core/domain";
-import {
-  listNmemSpaces,
-  loadNmemIndex,
-  resolveSpaceId,
-  saveNmemIndex,
-  syncMemorySnapshotToNmem,
-} from "../adapters/nmem";
+import { loadLorebookText, loadPack, type WorldPack } from "../core/domain";
 import { workspaceFs } from "../adapters/r2";
-import { loadSettings } from "./settings";
 import { selectedNmemSpace } from "../core/memory";
 import { isUnknownSlashCommand, parseSystemCommand } from "../core/commands";
 
@@ -241,7 +231,7 @@ export function registerV2Routes(app: App): void {
         idempotencyKey,
       });
       if (created.task.status === "pending" || created.task.status === "running")
-        await publishTask(c.env, created.task);
+        c.executionCtx.waitUntil(publishTask(c.env, created.task));
       return c.json({ task_id: created.task.id, status: created.task.status, duplicate: created.duplicate }, 202);
     } catch (error) {
       if (error instanceof ActiveTaskConflict) {
@@ -269,7 +259,8 @@ export function registerV2Routes(app: App): void {
       idempotencyKey,
       kind: "regenerate",
     });
-    await publishTask(c.env, created.task);
+    if (created.task.status === "pending" || created.task.status === "running")
+      c.executionCtx.waitUntil(publishTask(c.env, created.task));
     return c.json({ task_id: created.task.id, status: created.task.status }, 202);
   });
 
@@ -291,6 +282,12 @@ export function registerV2Routes(app: App): void {
 
   app.get("/api/v2/tasks/:id", async (c) => {
     const task = await getTask(c.env.DB, c.req.param("id"));
+    if (!task) throw new HTTPException(404, { message: "task not found" });
+    return c.json(publicTask(task));
+  });
+
+  app.post("/api/v2/tasks/:id/cancel", async (c) => {
+    const task = await cancelTask(c.env.DB, c.req.param("id"));
     if (!task) throw new HTTPException(404, { message: "task not found" });
     return c.json(publicTask(task));
   });
@@ -336,55 +333,16 @@ export function registerV2Routes(app: App): void {
     const input = await body(c, memorySyncSchema);
     const workspaceId = c.req.param("id");
     const fs = workspaceFs(c.env.BUCKET, workspaceId);
-    const [pack, settings, listed] = await Promise.all([
-      loadPack(fs, workspaceId),
-      loadSettings(c.env.BUCKET),
-      listNmemSpaces(c.env),
-    ]);
-    if (!listed.available) throw new HTTPException(503, { message: listed.error || "nmem unavailable" });
-    const spaceId = resolveSpaceId(
-      selectedNmemSpace(input.space_id, pack.nmem_space, settings.nmem.space),
-      listed.spaces,
-    );
-    if (!spaceId || !listed.spaces.some((space) => space.id === spaceId)) {
-      throw new HTTPException(400, { message: `nmem space '${spaceId || ""}' is unavailable` });
-    }
-    pack.nmem_space = spaceId;
-    await Promise.all([saveWorldMeta(fs, pack), saveCast(fs, pack)]);
-    const sessions = await listSessions(fs);
-    for (const session of sessions) {
-      const loaded = await loadSession(fs, session.id);
-      await saveSession(fs, session.id, loaded.messages, {
-        thread_id: loaded.thread_id,
-        nmem_space: spaceId,
-        primary_character: loaded.primary_character,
-        title: loaded.title,
-      });
-    }
-    const memory = await loadMemory(fs);
-    const synced = await syncMemorySnapshotToNmem(
-      c.env,
-      spaceId,
-      await loadNmemIndex((path) => fs.get(path)),
-      workspaceId,
-      memory,
-    );
-    await saveNmemIndex((path, text, type) => fs.put(path, text, type), synced.index);
-    const mirrored = await mirrorCoreMemorySnapshot(c.env.DB, { workspaceId, snapshot: memory });
-    const ts = new Date().toISOString();
-    await c.env.DB.batch([
-      c.env.DB.prepare(`UPDATE workspaces SET nmem_space = ?, updated_at = ? WHERE id = ?`).bind(
-        spaceId,
-        ts,
-        workspaceId,
-      ),
-      c.env.DB.prepare(`UPDATE sessions SET nmem_space = ?, updated_at = ? WHERE workspace_id = ?`).bind(
-        spaceId,
-        ts,
-        workspaceId,
-      ),
-    ]);
-    return c.json({ ok: true, workspace_id: workspaceId, space_id: spaceId, core_memory_count: mirrored });
+    await loadPack(fs, workspaceId);
+    await requestNmemSnapshot(c.env, workspaceId, input.space_id || null);
+    c.executionCtx.waitUntil(wakeNmem(c.env));
+    return c.json({
+      ok: true,
+      queued: true,
+      workspace_id: workspaceId,
+      space_id: input.space_id || "rp-mem",
+      core_memory_count: 0,
+    });
   });
 
   app.post("/api/v2/sessions/:sid/prompt-epoch", async (c) => {

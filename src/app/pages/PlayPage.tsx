@@ -241,6 +241,11 @@ function Metric({
 }
 
 export function PlayPage() {
+  const { worldId, sessionId } = useParams();
+  return <PlaySession key={`${worldId}:${sessionId}`} />;
+}
+
+function PlaySession() {
   const { worldId = "", sessionId = "" } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -279,20 +284,21 @@ export function PlayPage() {
     enabled: Boolean(taskId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "pending" || status === "running" || !status ? 1_500 : false;
+      return status === "pending" || status === "running" || status === "committing" || !status ? 1_500 : false;
     },
   });
   const state = playQuery.data;
 
   useEffect(() => {
     const active = activeQuery.data?.task;
-    if (active && (active.status === "pending" || active.status === "running")) setTaskId(active.id);
+    if (active && (active.status === "pending" || active.status === "running" || active.status === "committing"))
+      setTaskId(active.id);
   }, [activeQuery.data]);
 
   useEffect(() => {
     const task = taskQuery.data;
-    if (!task || task.status === "pending" || task.status === "running") return;
-    if (task.status === "completed") {
+    if (!task || task.status === "pending" || task.status === "running" || task.status === "committing") return;
+    if (task.status === "completed" || task.status === "cancelled") {
       setOptimisticText("");
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ["play", worldId, sessionId] }),
@@ -318,6 +324,11 @@ export function PlayPage() {
     },
   });
 
+  const cancelMutation = useMutation({
+    mutationFn: () => api.cancelTask(taskId || ""),
+    onSuccess: (task) => queryClient.setQueryData(["task", task.id], task),
+  });
+
   const modelMutation = useMutation({
     mutationFn: (id: string) => api.setSessionModel(sessionId, id),
     onSuccess: async () => {
@@ -325,15 +336,6 @@ export function PlayPage() {
         queryClient.invalidateQueries({ queryKey: ["session-model", sessionId] }),
         queryClient.invalidateQueries({ queryKey: ["session-cache", sessionId] }),
       ]);
-    },
-  });
-
-  const rewriteMutation = useMutation({
-    mutationFn: ({ index, content }: { index: number; content: string }) =>
-      api.rewrite(worldId, sessionId, index, content),
-    onSuccess: async (next) => {
-      queryClient.setQueryData(["play", worldId, sessionId], next);
-      if (next.task_id) setTaskId(next.task_id);
     },
   });
 
@@ -371,7 +373,9 @@ export function PlayPage() {
     modelMutation.isPending ||
     primaryMutation.isPending ||
     activeStatus === "pending" ||
-    activeStatus === "running";
+    activeStatus === "running" ||
+    activeStatus === "committing" ||
+    Boolean(taskId && !activeStatus);
   const taskFailure =
     taskQuery.data && (taskQuery.data.status === "failed" || taskQuery.data.status === "dead")
       ? taskQuery.data.error || "生成失败"
@@ -383,8 +387,8 @@ export function PlayPage() {
         turnMutation.error ||
         regenerateMutation.error ||
         compactMutation.error ||
+        cancelMutation.error ||
         modelMutation.error ||
-        rewriteMutation.error ||
         memorySyncMutation.error,
       "",
     );
@@ -602,9 +606,7 @@ export function PlayPage() {
                 disabled={busy}
                 onClick={() => {
                   setMenuOpen(false);
-                  void api
-                    .compact(worldId, sessionId)
-                    .then((next) => queryClient.setQueryData(["play", worldId, sessionId], next));
+                  compactMutation.mutate();
                 }}
               >
                 压缩会话
@@ -612,7 +614,9 @@ export function PlayPage() {
             </div>
           ) : null}
         </div>
-        <SettingsLink />
+        <div className="hidden md:contents">
+          <SettingsLink />
+        </div>
         <div className="xl:hidden">
           <Sheet>
             <SheetTrigger asChild>
@@ -626,7 +630,9 @@ export function PlayPage() {
             </SheetContent>
           </Sheet>
         </div>
-        <ThemeToggle />
+        <div className="hidden md:contents">
+          <ThemeToggle />
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -643,12 +649,7 @@ export function PlayPage() {
             </p>
           ) : null}
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <Transcript
-              state={displayed}
-              pending={busy}
-              disabled={busy}
-              onRewrite={(index, content) => rewriteMutation.mutate({ index, content })}
-            />
+            <Transcript state={displayed} pending={busy} />
           </div>
           <div className="z-composer">
             {commandHelpOpen ? (
@@ -677,6 +678,21 @@ export function PlayPage() {
               </section>
             ) : null}
             <Composer
+              key={sessionId}
+              sessionKey={`${worldId}:${sessionId}`}
+              phase={
+                taskId
+                  ? activeStatus === "committing"
+                    ? "committing"
+                    : activeStatus === "running"
+                      ? "running"
+                      : activeStatus === "pending" || !activeStatus
+                        ? "pending"
+                        : undefined
+                  : undefined
+              }
+              onStop={() => cancelMutation.mutate()}
+              stopping={cancelMutation.isPending}
               disabled={busy}
               onSend={async (text) => {
                 await runComposerCommand(text);

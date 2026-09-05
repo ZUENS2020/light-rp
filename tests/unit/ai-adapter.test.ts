@@ -44,11 +44,44 @@ function fakeGatewayEnv(run: ReturnType<typeof vi.fn>) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("AI Gateway adapter contract", () => {
+  it("never exposes a provider error body as a task error", async () => {
+    const run = vi.fn(
+      async () => new Response('{"reasoning_content":"private thought","error":"upstream"}', { status: 502 }),
+    );
+    await expect(chat(fakeGatewayEnv(run), [], null, 0, 50, 10, { model: gatewayModel })).rejects.toThrow(
+      "LLM HTTP 502: AI Gateway request failed",
+    );
+  });
+  it("aborts a stalled body without correction or further model calls", async () => {
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    const run = vi.fn(async () => new Response(new ReadableStream({ cancel })));
+    const result = chat(fakeGatewayEnv(run), [{ role: "user", content: "stop" }], null, 0, 50, 120, {
+      model: gatewayModel,
+      signal: controller.signal,
+    });
+    const assertion = expect(result).rejects.toThrow("Stopped");
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    controller.abort(new Error("Stopped"));
+    await assertion;
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("does not invoke the provider for an already cancelled task", async () => {
+    const run = vi.fn();
+    const controller = new AbortController();
+    controller.abort(new Error("Stopped"));
+    await expect(
+      chat(fakeGatewayEnv(run), [], null, 0, 50, 120, { model: gatewayModel, signal: controller.signal }),
+    ).rejects.toThrow("Stopped");
+    expect(run).not.toHaveBeenCalled();
+  });
   it("uses the Workers AI binding with Gateway cache and affinity options", async () => {
     const run = vi.fn(async (_modelId: string, _payload: Record<string, unknown>, _options: Record<string, unknown>) =>
       jsonResponse({ content: "正式输出" }),

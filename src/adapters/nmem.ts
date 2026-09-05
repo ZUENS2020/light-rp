@@ -3,7 +3,8 @@ import { sha256 } from "../core/ai";
 
 export type NmemSpace = { id: string; name: string; key: string };
 
-export type NmemEnv = { NMEM_API_URL?: string; NMEM_API_KEY?: string };
+import { nmemConnection, nmemRequest, type NmemEnv } from "./nmem-connection";
+export type { NmemEnv } from "./nmem-connection";
 
 const UA = "LightRP/0.1 (CloudflareWorker)";
 
@@ -22,30 +23,6 @@ function headers(key: string, json = false): Record<string, string> {
   };
   if (json) out["Content-Type"] = "application/json";
   return out;
-}
-
-async function fetchRetry(url: string, init: RequestInit, timeoutMs = 8000): Promise<Response> {
-  let response: Response | null = null;
-  const attempts = 2;
-  for (let i = 0; i < attempts; i += 1) {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), timeoutMs);
-    try {
-      response = await fetch(url, { ...init, signal: ac.signal });
-    } catch (err) {
-      clearTimeout(timer);
-      const aborted = err instanceof Error && (err.name === "AbortError" || /aborted/i.test(err.message));
-      const wrapped = aborted ? new Error(`nmem 超时（${Math.round(timeoutMs / 1000)}s）`) : err;
-      if (aborted && i === attempts - 1) throw wrapped;
-      if (!aborted && i === attempts - 1) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
-      continue;
-    }
-    clearTimeout(timer);
-    if (response.ok || ![429, 502, 503, 504].includes(response.status)) return response;
-    await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
-  }
-  return response as Response;
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -99,8 +76,15 @@ export async function listNmemSpaces(
 ): Promise<{ available: boolean; spaces: NmemSpace[]; error?: string }> {
   const auth = base(env);
   if (!auth) return { available: false, spaces: [], error: "missing nmem url or key" };
+  if (env.DB && env.nmemProbeRevision === undefined) {
+    const state = await nmemConnection(env.DB);
+    return {
+      available: state.status === "online",
+      spaces: state.status === "online" ? JSON.parse(state.spaces_json) : [],
+    };
+  }
   try {
-    const response = await fetchRetry(`${auth.url}/spaces`, { headers: headers(auth.key) });
+    const response = await nmemRequest(env, `${auth.url}/spaces`, { headers: headers(auth.key) });
     if (!response.ok) {
       return { available: false, spaces: [], error: `nmem spaces HTTP ${response.status}` };
     }
@@ -124,10 +108,11 @@ export async function listNmemSpaces(
 }
 
 async function postSearch(
+  env: NmemEnv,
   auth: { url: string; key: string },
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>[]> {
-  const response = await fetchRetry(`${auth.url}/memories/search`, {
+  const response = await nmemRequest(env, `${auth.url}/memories/search`, {
     method: "POST",
     headers: headers(auth.key, true),
     body: JSON.stringify(body),
@@ -150,12 +135,13 @@ export async function searchNmem(
 ): Promise<Record<string, unknown>[]> {
   const auth = base(env);
   if (!auth || !spaceId || !query.trim()) return [];
+  const recallEnv = { ...env, nmemDeadline: Math.min(env.nmemDeadline ?? Infinity, Date.now() + 1500) };
   try {
-    return await postSearch(auth, { query, limit, space_id: spaceId, filter_labels: filterLabels });
+    return await postSearch(recallEnv, auth, { query, limit, space_id: spaceId, filter_labels: filterLabels });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (!/HTTP 422|HTTP 502/.test(message)) throw err;
-    return postSearch(auth, { query, limit, space_id: spaceId });
+    if (!/HTTP 422/.test(message)) throw err;
+    return postSearch(recallEnv, auth, { query, limit, space_id: spaceId });
   }
 }
 
@@ -181,7 +167,7 @@ export async function addNmemMemory(
 ): Promise<string | null> {
   const auth = base(env);
   if (!auth || !spaceId) return null;
-  const response = await fetchRetry(`${auth.url}/memories`, {
+  const response = await nmemRequest(env, `${auth.url}/memories`, {
     method: "POST",
     headers: headers(auth.key, true),
     body: JSON.stringify({
@@ -196,17 +182,19 @@ export async function addNmemMemory(
       ...(options.metadata ? { metadata: options.metadata } : {}),
     }),
   });
+  if (response.status === 409 && options.id) return options.id;
   if (!response.ok) throw new Error(`nmem add HTTP ${response.status}`);
   const data = (await readJson(response)) as Record<string, unknown> | null;
   const memory = (data?.memory as Record<string, unknown> | undefined) || data;
   const id = memory?.id || memory?.memory_id;
-  return id ? String(id) : null;
+  if (!id) throw new Error("nmem add returned no memory id");
+  return String(id);
 }
 
 export async function forgetNmemMemory(env: NmemEnv, spaceId: string, memoryId: string): Promise<void> {
   const auth = base(env);
   if (!auth || !spaceId || !memoryId) return;
-  const response = await fetchRetry(`${auth.url}/memories/${encodeURIComponent(memoryId)}/forget`, {
+  const response = await nmemRequest(env, `${auth.url}/memories/${encodeURIComponent(memoryId)}/forget`, {
     method: "POST",
     headers: headers(auth.key, true),
     body: JSON.stringify({ space_id: spaceId }),
@@ -217,7 +205,7 @@ export async function forgetNmemMemory(env: NmemEnv, spaceId: string, memoryId: 
 export async function updateNmemMemory(env: NmemEnv, memoryId: string, content: string): Promise<void> {
   const auth = base(env);
   if (!auth || !memoryId) return;
-  const response = await fetchRetry(`${auth.url}/memories/${encodeURIComponent(memoryId)}`, {
+  const response = await nmemRequest(env, `${auth.url}/memories/${encodeURIComponent(memoryId)}`, {
     method: "PATCH",
     headers: headers(auth.key, true),
     body: JSON.stringify({ content }),
@@ -320,12 +308,14 @@ export function formatTurnMemory(userText: string, assistantText: string): strin
 type ThreadMessage = { role: string; content: string };
 
 async function postJson(
+  env: NmemEnv,
   auth: { url: string; key: string },
   path: string,
   body: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const response = await fetchRetry(
+  const response = await nmemRequest(
+    env,
     `${auth.url}${path}`,
     { method: "POST", headers: headers(auth.key, true), body: JSON.stringify(body) },
     timeoutMs,
@@ -347,6 +337,7 @@ export async function syncThreadTurn(
   const payload = messages.map((item) => ({ role: item.role, content: item.content }));
   if (!existingThreadId) {
     const created = await postJson(
+      env,
       auth,
       "/threads",
       {
@@ -357,7 +348,7 @@ export async function syncThreadTurn(
         space_id: spaceId,
         labels: ["light-rp"],
       },
-      20000,
+      3000,
     );
     if (created.ok) return;
     if (created.status !== 409) {
@@ -365,10 +356,11 @@ export async function syncThreadTurn(
     }
   }
   const appended = await postJson(
+    env,
     auth,
     `/threads/${encodeURIComponent(threadId)}/append`,
     { messages: payload, deduplicate: true, ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}) },
-    15000,
+    3000,
   );
   if (!appended.ok) throw new Error(`nmem thread append HTTP ${appended.status}`);
 }

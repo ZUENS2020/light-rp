@@ -1,3 +1,4 @@
+import { abortable, readResponseText } from "./http";
 import {
   DEFAULT_MODEL,
   canonicalMessages,
@@ -211,6 +212,7 @@ async function rawChat(
   timeoutSec: number,
   options: AiRequestOptions,
 ): Promise<ParsedResponse> {
+  options.signal?.throwIfAborted();
   const model: AiModelConfig = options.model || DEFAULT_MODEL;
   if (!model.enabled && options.requestKind !== "probe") throw new Error(`model '${model.label}' is disabled`);
   const canonical = canonicalMessages(messages);
@@ -231,32 +233,14 @@ async function rawChat(
   const seconds = Math.max(1, timeoutSec || 120);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), seconds * 1000);
+  const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
   let response: Response;
   try {
     if (model.transport === "cloudflare") {
-      response = await env.AI.run(model.model_id as keyof AiModels, normalizedPayload as never, {
-        returnRawResponse: true,
-        signal: controller.signal,
-        gateway: {
-          id: env.AI_GATEWAY_ID,
-          cacheTtl: cache.cacheTtl,
-          skipCache: cache.skipCache,
-          collectLog: false,
-          ...(cache.cacheKey ? { cacheKey: cache.cacheKey } : {}),
-        },
-        extraHeaders: options.affinityKey ? { "x-session-affinity": options.affinityKey } : undefined,
-      });
-    } else {
-      if (!model.provider_slug) throw new Error(`gateway model '${model.label}' is missing provider_slug`);
-      response = await env.AI.gateway(env.AI_GATEWAY_ID).run(
-        {
-          provider: model.provider_slug,
-          endpoint: "chat/completions",
-          headers: { "Content-Type": "application/json" },
-          query: normalizedPayload,
-        },
-        {
-          signal: controller.signal,
+      response = await abortable(
+        env.AI.run(model.model_id as keyof AiModels, normalizedPayload as never, {
+          returnRawResponse: true,
+          signal,
           gateway: {
             id: env.AI_GATEWAY_ID,
             cacheTtl: cache.cacheTtl,
@@ -265,19 +249,46 @@ async function rawChat(
             ...(cache.cacheKey ? { cacheKey: cache.cacheKey } : {}),
           },
           extraHeaders: options.affinityKey ? { "x-session-affinity": options.affinityKey } : undefined,
-        },
+        }),
+        signal,
+      );
+    } else {
+      if (!model.provider_slug) throw new Error(`gateway model '${model.label}' is missing provider_slug`);
+      response = await abortable(
+        env.AI.gateway(env.AI_GATEWAY_ID).run(
+          {
+            provider: model.provider_slug,
+            endpoint: "chat/completions",
+            headers: { "Content-Type": "application/json" },
+            query: normalizedPayload,
+          },
+          {
+            signal,
+            gateway: {
+              id: env.AI_GATEWAY_ID,
+              cacheTtl: cache.cacheTtl,
+              skipCache: cache.skipCache,
+              collectLog: false,
+              ...(cache.cacheKey ? { cacheKey: cache.cacheKey } : {}),
+            },
+            extraHeaders: options.affinityKey ? { "x-session-affinity": options.affinityKey } : undefined,
+          },
+        ),
+        signal,
       );
     }
+    const rawText = await abortable(readResponseText(response, signal), signal);
+    // Error bodies can echo the prompt or provider reasoning. Persist status only.
+    if (!response.ok) throw new LlmHttpError(response.status, "AI Gateway request failed");
+    return parseResponse(response, rawText, requestBody, cache.skipCache);
   } catch (error) {
+    options.signal?.throwIfAborted();
     const aborted = error instanceof Error && (error.name === "AbortError" || /aborted/i.test(error.message));
     if (aborted) throw new LlmTimeoutError(seconds);
     throw error;
   } finally {
     clearTimeout(timer);
   }
-  const rawText = await response.text();
-  if (!response.ok) throw new LlmHttpError(response.status, rawText.slice(0, 800));
-  return parseResponse(response, rawText, requestBody, cache.skipCache);
 }
 
 export async function chat(
@@ -289,7 +300,9 @@ export async function chat(
   timeoutSec = 120,
   options: AiRequestOptions = {},
 ): Promise<ChatResult> {
+  options.signal?.throwIfAborted();
   const first = await rawChat(env, messages, tools, temperature, maxTokens, timeoutSec, options);
+  options.signal?.throwIfAborted();
   if (!first.reasoningOnly) return publicResult(first);
   if (options.skipOutputChannelRetry) return publicResult(first);
   const correction: LlmMessage[] = [
@@ -330,6 +343,7 @@ export async function toolLoop(
     if (!result.tool_calls.length) return result;
     loopMessages.push({ role: "assistant", content: result.text || null, tool_calls: result.tool_calls });
     for (const call of result.tool_calls) {
+      options.signal?.throwIfAborted();
       const output = await runTool(call.name, call.arguments, call);
       loopMessages.push({ role: "tool", content: output, tool_call_id: call.id });
     }

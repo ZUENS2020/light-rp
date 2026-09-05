@@ -15,8 +15,7 @@ import volatile from "../content/prompts/layers/volatile.md?raw";
 import card from "../content/prompts/layers/card.md?raw";
 import mini from "../content/prompts/layers/mini.md?raw";
 import lore from "../content/prompts/layers/lore.md?raw";
-import breach from "../content/prompts/layers/breach.md?raw";
-import breachUser from "../content/prompts/layers/breach_user.md?raw";
+import narrativeStyle from "../content/prompts/layers/narrative-style.md?raw";
 import { renderTemplate } from "./util";
 
 const FILES: Record<string, string> = {
@@ -37,8 +36,7 @@ const FILES: Record<string, string> = {
   "layers/card.md": card,
   "layers/mini.md": mini,
   "layers/lore.md": lore,
-  "layers/breach.md": breach,
-  "layers/breach_user.md": breachUser,
+  "layers/narrative-style.md": narrativeStyle,
 };
 
 export class PromptLibrary {

@@ -420,11 +420,7 @@ export function assembleSystem(
 }
 
 export function breachSystem(library: PromptLibrary, enabled: boolean): string {
-  return enabled ? library.text("layers/breach.md").trim() : "";
-}
-
-export function breachPhi(library: PromptLibrary, enabled: boolean): string {
-  return enabled ? library.text("layers/breach_user.md").trim() : "";
+  return enabled ? library.text("layers/narrative-style.md").trim() : "";
 }
 
 export function withPhi(messages: LlmMessage[], phi: string): LlmMessage[] {

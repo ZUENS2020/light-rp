@@ -239,9 +239,26 @@ export async function memoryStatus(db: D1Database, sessionId: string) {
         updated_at: string;
       }>(),
   ]);
+  const job = await db
+    .prepare(
+      `SELECT j.status, j.updated_at, s.space_id, s.core_memory_count
+    FROM nmem_jobs j LEFT JOIN memory_sync_runs s ON s.task_id = j.task_id
+    WHERE j.session_id = ? ORDER BY j.rowid DESC LIMIT 1`,
+    )
+    .bind(sessionId)
+    .first<{ status: string; updated_at: string; space_id: string | null; core_memory_count: number | null }>();
   return {
     core: Object.fromEntries((counts.results || []).map((row) => [row.scope, Number(row.count)])),
     recall: recall || null,
-    sync: sync || null,
+    sync:
+      job && ["deferred", "running"].includes(job.status)
+        ? {
+            status: job.status,
+            space_id: job.space_id || "rp-mem",
+            core_memory_count: job.core_memory_count || 0,
+            error: null,
+            updated_at: job.updated_at,
+          }
+        : sync || null,
   };
 }

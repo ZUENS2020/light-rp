@@ -8,10 +8,19 @@ import { SYSTEM_COMMANDS } from "../../core/commands";
 type Props = {
   disabled: boolean;
   onSend: (text: string) => Promise<void>;
+  sessionKey?: string;
+  phase?: "pending" | "running" | "committing";
+  stopping?: boolean;
+  onStop?: () => void;
 };
 
-export function Composer({ disabled, onSend }: Props) {
-  const [text, setText] = useState("");
+export function Composer({ disabled, onSend, sessionKey = "default", phase, stopping, onStop }: Props) {
+  const storageKey = `lightrp:draft:${sessionKey}`;
+  const [text, setDraft] = useState(() => sessionStorage.getItem(storageKey) || "");
+  const setText = (value: string) => {
+    setDraft(value);
+    sessionStorage.setItem(storageKey, value);
+  };
   const [sending, setSending] = useState(false);
   const busy = disabled || sending;
   const commandQuery = text.trim().startsWith("/") ? text.trim().slice(1).toLowerCase() : "";
@@ -28,7 +37,11 @@ export function Composer({ disabled, onSend }: Props) {
       await onSend(value);
     } catch {
       // PlayPage already surfaces the error; restore the draft.
-      setText(value);
+      setDraft((current) => {
+        const restored = current || value;
+        sessionStorage.setItem(storageKey, restored);
+        return restored;
+      });
     } finally {
       setSending(false);
     }
@@ -49,11 +62,10 @@ export function Composer({ disabled, onSend }: Props) {
           name="turn"
           rows={3}
           value={text}
-          disabled={busy}
           placeholder="写下这一轮。Enter 发送，Shift+Enter 换行。"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
               event.preventDefault();
               void submit();
             }
@@ -75,11 +87,25 @@ export function Composer({ disabled, onSend }: Props) {
           </div>
         ) : null}
         <div className="flex items-center justify-between gap-3">
-          <p className="font-ui text-xs text-secondary">Enter 发送 · Shift+Enter 换行 · /help 命令</p>
-          <Button type="submit" disabled={busy || !text.trim()} aria-busy={sending}>
-            {sending ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden /> : null}
-            {sending ? "生成中" : "发送"}
-          </Button>
+          <p className="font-ui text-xs text-secondary" aria-live="polite">
+            {phase === "committing"
+              ? "正在保存"
+              : phase === "pending"
+                ? "排队中 · 可起草下一条"
+                : phase === "running"
+                  ? "生成中 · 可起草下一条"
+                  : "Enter 发送 · Shift+Enter 换行 · /help 命令"}
+          </p>
+          {phase && onStop ? (
+            <Button type="button" onClick={onStop} disabled={stopping || phase === "committing"}>
+              {phase === "committing" ? "正在保存" : stopping ? "停止中" : "停止生成"}
+            </Button>
+          ) : (
+            <Button type="submit" disabled={busy || !text.trim()} aria-busy={sending}>
+              {sending ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden /> : null}
+              {sending ? "生成中" : "发送"}
+            </Button>
+          )}
         </div>
       </div>
     </form>

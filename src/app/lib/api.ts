@@ -170,13 +170,13 @@ export type GenerationTask = {
   id: string;
   world_id?: string;
   session_id?: string;
-  status: "pending" | "running" | "completed" | "failed" | "dead";
+  status: "pending" | "running" | "committing" | "cancelled" | "completed" | "failed" | "dead";
   content?: string | null;
   error?: string | null;
   error_code?: string | null;
   response_cache_status?: "HIT" | "MISS" | "BYPASS" | "unknown";
   prompt_tokens?: number;
-  nmem_sync_status?: "not_requested" | "pending" | "running" | "completed" | "failed" | "dead";
+  nmem_sync_status?: "not_requested" | "pending" | "deferred" | "running" | "completed" | "failed" | "dead";
   nmem_synced_at?: string | null;
   nmem_error?: string | null;
   nmem_memory_count?: number;
@@ -229,7 +229,7 @@ export type MemoryStatus = {
   core: Partial<Record<"world" | "player" | "character" | "event" | "nmem", number>>;
   recall: { space_id: string; recalled_count: number; created_at: string } | null;
   sync: {
-    status: "pending" | "running" | "completed" | "failed" | "dead";
+    status: "pending" | "deferred" | "running" | "completed" | "failed" | "dead";
     space_id: string;
     core_memory_count: number;
     error: string | null;
@@ -286,6 +286,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  nmemStatus: () =>
+    request<{ status: "offline" | "probing" | "online"; revision: number; pending: number }>("/api/v2/nmem/status"),
+  connectNmem: () =>
+    request<{ status: "offline" | "probing" | "online"; revision: number; pending: number }>("/api/v2/nmem/connect", {
+      method: "POST",
+    }),
+  disconnectNmem: () =>
+    request<{ status: "offline" | "probing" | "online"; revision: number; pending: number }>(
+      "/api/v2/nmem/disconnect",
+      { method: "POST" },
+    ),
+  cancelTask: (id: string) => request<GenerationTask>(`/api/v2/tasks/${id}/cancel`, { method: "POST" }),
   worlds: () => request<{ worlds: WorldSummary[] }>("/api/v2/worlds"),
   world: (id: string) => request<WorldSummary>(`/api/v2/worlds/${id}`),
   spaces: () =>
@@ -305,11 +317,6 @@ export const api = {
     request<TurnAccepted>(`/api/v2/sessions/${sessionId}/regenerate`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-    }),
-  rewrite: (worldId: string, sessionId: string, index: number, content: string) =>
-    request<PlayState>(`/api/v2/play/${worldId}/${sessionId}/rewrite`, {
-      method: "POST",
-      body: JSON.stringify({ index, content }),
     }),
   task: (taskId: string) => request<GenerationTask>(`/api/v2/tasks/${taskId}`),
   activeTask: (sessionId: string) =>

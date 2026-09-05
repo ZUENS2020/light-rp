@@ -3,15 +3,15 @@ import {
   affinityKey,
   sha256,
   stableStringify,
-  type AiModelConfig,
   type AiUsage,
   type ResponseCacheStatus,
 } from "../core/ai";
 import { estimateTokens } from "../core/budget";
 import { nowIso } from "../core/util";
 import { resolveSessionModel, sessionRuntime } from "./models";
+import { MAX_GENERATION_ATTEMPTS, recoverGenerationTasks } from "./generation-recovery";
 
-export type TaskStatus = "pending" | "running" | "completed" | "failed" | "dead";
+export type TaskStatus = "pending" | "running" | "committing" | "cancelled" | "completed" | "failed" | "dead";
 export type TaskKind = "turn" | "regenerate" | "rewrite" | "compact" | "summary" | "memory" | "probe";
 
 export type GenerationTaskRow = {
@@ -24,6 +24,8 @@ export type GenerationTaskRow = {
   user_text: string;
   target_message_id: string | null;
   status: TaskStatus;
+  execution_phase: "generating" | "committing" | "cancelled";
+  commit_payload_json: string | null;
   model_snapshot_json: string;
   request_hash: string | null;
   response_cache_status: ResponseCacheStatus;
@@ -32,7 +34,7 @@ export type GenerationTaskRow = {
   stable_prefix_tokens: number;
   volatile_tokens: number;
   output_contract_tokens: number;
-  nmem_sync_status: "not_requested" | "pending" | "running" | "completed" | "failed" | "dead";
+  nmem_sync_status: "not_requested" | "pending" | "deferred" | "running" | "completed" | "failed" | "dead";
   nmem_synced_at: string | null;
   nmem_error: string | null;
   nmem_memory_count: number;
@@ -68,7 +70,10 @@ export type TaskCompletion = {
 };
 
 const TASK_COLUMNS = `id, workspace_id, workspace_id AS world_id, session_id, kind, idempotency_key,
-  COALESCE(user_text, '') AS user_text, target_message_id, status, model_snapshot_json, request_hash,
+  COALESCE(user_text, '') AS user_text, target_message_id,
+  CASE WHEN execution_phase = 'cancelled' THEN 'cancelled'
+       WHEN status = 'running' AND execution_phase = 'committing' THEN 'committing' ELSE status END AS status,
+  execution_phase, commit_payload_json, model_snapshot_json, request_hash,
   response_cache_status, prompt_tokens, cached_input_tokens, stable_prefix_tokens, volatile_tokens,
   output_contract_tokens, attempt_count, lease_owner, lease_expires_at, result_message_id,
   nmem_sync_status, nmem_synced_at, nmem_error, nmem_memory_count, nmem_recall_count,
@@ -128,8 +133,7 @@ export async function createTurnTask(
     sessionId: string;
     text: string;
     idempotencyKey: string;
-    kind?: TaskKind;
-    targetMessageId?: string | null;
+    kind?: "turn" | "regenerate";
   },
 ): Promise<{ task: GenerationTaskRow; duplicate: boolean; userMessageId: string }> {
   const duplicate = await getTaskByIdempotency(db, input.sessionId, input.idempotencyKey);
@@ -167,7 +171,7 @@ export async function createTurnTask(
         kind,
         input.idempotencyKey,
         input.text,
-        input.targetMessageId || null,
+        null,
         snapshot,
         estimateTokens(OUTPUT_CHANNEL_CONTRACT),
         ts,
@@ -207,44 +211,11 @@ export async function createTurnTask(
   return { task, duplicate: false, userMessageId };
 }
 
-export async function insertPending(
-  db: D1Database,
-  input: {
-    id: string;
-    worldId: string;
-    sessionId: string;
-    userText: string;
-    idempotencyKey?: string;
-    model?: AiModelConfig;
-  },
-): Promise<void> {
-  const ts = nowIso();
-  const model = input.model || (await resolveSessionModel(db, input.sessionId));
-  await db
-    .prepare(
-      `INSERT INTO generation_tasks (
-         id, workspace_id, session_id, kind, idempotency_key, user_text, status,
-         model_snapshot_json, output_contract_tokens, nmem_sync_status, created_at, updated_at
-       ) VALUES (?, ?, ?, 'turn', ?, ?, 'pending', ?, ?, 'pending', ?, ?)`,
-    )
-    .bind(
-      input.id,
-      input.worldId,
-      input.sessionId,
-      input.idempotencyKey || input.id,
-      input.userText,
-      stableStringify(model),
-      estimateTokens(OUTPUT_CHANNEL_CONTRACT),
-      ts,
-      ts,
-    )
-    .run();
-}
-
 export async function markOutboxPublished(db: D1Database, taskId: string): Promise<void> {
   await db
     .prepare(
-      `UPDATE outbox_events SET published_at = ?, attempt_count = attempt_count + 1 WHERE aggregate_id = ? AND published_at IS NULL`,
+      `UPDATE outbox_events SET published_at = ?, attempt_count = attempt_count + 1
+       WHERE aggregate_id = ? AND event_type = 'generation.requested' AND published_at IS NULL`,
     )
     .bind(nowIso(), taskId)
     .run();
@@ -258,6 +229,20 @@ export async function publishTask(env: Env, task: GenerationTaskRow): Promise<vo
     sessionId: task.session_id,
   });
   await markOutboxPublished(env.DB, task.id);
+}
+
+/** Recover expired leases as well as sends lost after the input transaction. */
+export async function flushGenerationOutbox(env: Env): Promise<void> {
+  await recoverGenerationTasks(env.DB);
+  const rows = await env.DB.prepare(
+    `SELECT o.aggregate_id AS id FROM outbox_events o JOIN generation_tasks g ON g.id = o.aggregate_id
+     WHERE o.event_type = 'generation.requested' AND o.published_at IS NULL AND g.status IN ('pending', 'running')
+     ORDER BY o.created_at LIMIT 25`,
+  ).all<{ id: string }>();
+  for (const row of rows.results) {
+    const task = await getTask(env.DB, row.id);
+    if (task && ["pending", "running", "committing"].includes(task.status)) await publishTask(env, task);
+  }
 }
 
 export async function leaseTask(
@@ -274,23 +259,45 @@ export async function leaseTask(
        SET status = 'running', lease_owner = ?, lease_expires_at = ?, attempt_count = attempt_count + 1, updated_at = ?
        WHERE id = ?
          AND status IN ('pending', 'running')
+         AND attempt_count < ?
          AND (lease_expires_at IS NULL OR lease_expires_at < ? OR lease_owner = ?)`,
     )
-    .bind(owner, expires, now.toISOString(), id, now.toISOString(), owner)
+    .bind(owner, expires, now.toISOString(), id, MAX_GENERATION_ATTEMPTS, now.toISOString(), owner)
     .run();
   const task = await getTask(db, id);
-  return task?.lease_owner === owner && task.status === "running" ? task : null;
+  return task?.lease_owner === owner && (task.status === "running" || task.status === "committing") ? task : null;
 }
 
-export async function markRunning(db: D1Database, id: string): Promise<void> {
-  await leaseTask(db, id, `legacy-${id}`);
+export async function cancelTask(db: D1Database, id: string): Promise<GenerationTaskRow | null> {
+  await db
+    .prepare(
+      `UPDATE generation_tasks SET status = 'dead', execution_phase = 'cancelled',
+    nmem_sync_status = 'not_requested', lease_owner = NULL, lease_expires_at = NULL,
+    updated_at = ?, completed_at = ? WHERE id = ? AND status IN ('pending', 'running') AND execution_phase = 'generating'`,
+    )
+    .bind(nowIso(), nowIso(), id)
+    .run();
+  return getTask(db, id);
+}
+
+export async function beginCommit(db: D1Database, id: string, payload: string, owner?: string): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE generation_tasks SET execution_phase = 'committing', status = 'running', commit_payload_json = ?
+    WHERE id = ? AND status IN ('pending', 'running') AND execution_phase = 'generating'
+      AND (? IS NULL OR lease_owner = ?) RETURNING id`,
+    )
+    .bind(payload, id, owner ?? null, owner ?? null)
+    .first();
+  return Boolean(result);
 }
 
 export async function completeTask(db: D1Database, id: string, completion: TaskCompletion): Promise<void> {
   const task = await getTask(db, id);
-  if (!task || task.status === "completed" || task.status === "dead") return;
+  if (!task || ["completed", "dead", "cancelled", "failed"].includes(task.status)) return;
+  if (task.status !== "committing" && !(await beginCommit(db, id, JSON.stringify({ completion })))) return;
   const runtime = await sessionRuntime(db, task.session_id);
-  const messageId = crypto.randomUUID();
+  const messageId = `assistant:${id}`;
   const includeInPrompt = completion.includeInPrompt !== false;
   const outboxId = crypto.randomUUID();
   const ts = nowIso();
@@ -372,6 +379,15 @@ export async function completeTask(db: D1Database, id: string, completion: TaskC
       ),
   ];
   if (includeInPrompt) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO nmem_jobs (task_id, workspace_id, session_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(task_id) DO NOTHING`,
+        )
+        .bind(id, task.workspace_id, task.session_id, ts, ts),
+      db.prepare("UPDATE generation_tasks SET nmem_sync_status = 'deferred' WHERE id = ?").bind(id),
+    );
     statements.splice(
       1,
       0,
@@ -422,7 +438,11 @@ export async function completeTask(db: D1Database, id: string, completion: TaskC
         .bind(ts, id),
     );
   }
-  await db.batch(statements);
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    if ((await getTask(db, id))?.status !== "completed") throw error;
+  }
 }
 
 async function nextMessageSequence(db: D1Database, sessionId: string): Promise<number> {
@@ -449,15 +469,23 @@ export async function markFailed(
   db: D1Database,
   id: string,
   error: string,
-  options: { code?: string; dead?: boolean } = {},
+  options: { code?: string; dead?: boolean; owner?: string } = {},
 ): Promise<void> {
   await db
     .prepare(
       `UPDATE generation_tasks SET
          status = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
-       WHERE id = ? AND status IN ('pending', 'running')`,
+       WHERE id = ? AND status IN ('pending', 'running') AND (? IS NULL OR lease_owner = ?)`,
     )
-    .bind(options.dead ? "dead" : "pending", options.code || null, error.slice(0, 2000), nowIso(), id)
+    .bind(
+      options.dead ? "dead" : "pending",
+      options.code || null,
+      error.slice(0, 2000),
+      nowIso(),
+      id,
+      options.owner ?? null,
+      options.owner ?? null,
+    )
     .run();
 }
 

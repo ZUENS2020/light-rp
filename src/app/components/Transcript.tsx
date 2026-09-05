@@ -2,7 +2,6 @@ import { ChevronDown, CloudSun, LoaderCircle, MapPin, Users } from "lucide-react
 import { useEffect, useRef, useState } from "react";
 import type { PlayState } from "../lib/api";
 import { Button } from "./ui/button";
-import { Hint, Textarea } from "./ui/field";
 
 function stripHidden(content: string): string {
   return content
@@ -68,52 +67,24 @@ function StateBar({ state }: { state: PlayState }) {
   );
 }
 
-function EditPanel({
-  draft,
-  saveLabel,
-  onDraft,
-  onCancel,
-  onSave,
-}: {
-  draft: string;
-  saveLabel: string;
-  onDraft: (value: string) => void;
-  onCancel: () => void;
-  onSave: () => void;
-}) {
-  return (
-    <div className="flex w-full flex-col gap-2">
-      <Textarea value={draft} rows={4} onChange={(event) => onDraft(event.target.value)} />
-      <Hint>会删掉这条后面的全部回复</Hint>
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" onClick={onCancel}>
-          取消
-        </Button>
-        <Button type="button" disabled={!draft.trim()} onClick={onSave}>
-          {saveLabel}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-export function Transcript({
-  state,
-  pending,
-  disabled,
-  onRewrite,
-}: {
-  state: PlayState;
-  pending?: boolean;
-  disabled?: boolean;
-  onRewrite?: (index: number, content: string) => void;
-}) {
+export function Transcript({ state, pending }: { state: PlayState; pending?: boolean }) {
   const endRef = useRef<HTMLDivElement>(null);
-  const [editingIndex, setEditingIndex] = useState<number | null>(null);
-  const [draft, setDraft] = useState("");
+  const following = useRef(true);
+  const [showLatest, setShowLatest] = useState(false);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    const scroller = endRef.current?.parentElement?.parentElement;
+    if (!scroller) return;
+    const track = () => {
+      following.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
+      setShowLatest(!following.current);
+    };
+    scroller.addEventListener("scroll", track, { passive: true });
+    return () => scroller.removeEventListener("scroll", track);
+  }, []);
+
+  useEffect(() => {
+    if (following.current) endRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
   }, [state.messages.length, state.opening, pending]);
 
   const lastAssistantIndex = (() => {
@@ -123,20 +94,6 @@ export function Transcript({
     }
     return -1;
   })();
-  const canEditRole = (role: string) => role === "user" || role === "assistant";
-  const showEdit = Boolean(onRewrite) && !pending && !disabled;
-
-  function startEdit(index: number, content: string) {
-    setEditingIndex(index);
-    setDraft(content);
-  }
-
-  function saveEdit(index: number) {
-    const text = draft;
-    setEditingIndex(null);
-    onRewrite?.(index, text);
-  }
-
   return (
     <div id="transcript" className="mx-auto flex w-full max-w-[42rem] flex-col gap-8 px-4 py-10">
       {state.opening ? (
@@ -148,34 +105,13 @@ export function Transcript({
         const text = stripHidden(item.content);
         if (item.role === "system" && !item.content) return null;
         if (item.role !== "system" && !text) return null;
-        const editing = editingIndex === index;
-        const editControl =
-          showEdit && canEditRole(item.role) && !editing ? (
-            <button
-              type="button"
-              className="font-ui text-[0.65rem] text-secondary hover:text-foreground"
-              onClick={() => startEdit(index, item.content)}
-            >
-              编辑
-            </button>
-          ) : null;
-        const editor = editing ? (
-          <EditPanel
-            draft={draft}
-            saveLabel={item.role === "user" ? "保存并重写" : "保存"}
-            onDraft={setDraft}
-            onCancel={() => setEditingIndex(null)}
-            onSave={() => saveEdit(index)}
-          />
-        ) : null;
         if (item.role === "user") {
           return (
             <article key={`${item.ts}-${index}`} className="ml-auto flex max-w-[85%] flex-col items-end gap-1">
               <div className="flex items-center gap-2">
                 <p className="font-ui text-[0.65rem] uppercase tracking-wide text-secondary">你</p>
-                {editControl}
               </div>
-              {editor || <div className="whitespace-pre-wrap font-body text-base leading-relaxed">{text}</div>}
+              <div className="whitespace-pre-wrap font-body text-base leading-relaxed">{text}</div>
             </article>
           );
         }
@@ -189,8 +125,7 @@ export function Transcript({
         }
         return (
           <article key={`${item.ts}-${index}`} className="flex flex-col gap-3">
-            {editControl}
-            {editor || <div className="whitespace-pre-wrap font-body text-base leading-relaxed">{text}</div>}
+            <div className="whitespace-pre-wrap font-body text-base leading-relaxed">{text}</div>
             {index === lastAssistantIndex ? <StateBar state={state} /> : null}
           </article>
         );
@@ -203,6 +138,21 @@ export function Transcript({
         </article>
       ) : null}
       <div ref={endRef} />
+      {showLatest ? (
+        <div className="sticky bottom-3 flex justify-end">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => {
+              following.current = true;
+              setShowLatest(false);
+              endRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
+            }}
+          >
+            回到底部
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

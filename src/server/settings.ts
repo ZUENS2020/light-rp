@@ -60,6 +60,7 @@ export async function loadSettings(bucket: R2Bucket): Promise<AppSettings> {
       nmem: {
         ...DEFAULT_SETTINGS.nmem,
         ...(raw.nmem || {}),
+        enabled: true, // Connection state is controlled only by explicit online/offline actions.
         space: selectedNmemSpace(raw.nmem?.space),
       },
       memory: { ...DEFAULT_SETTINGS.memory, ...(raw.memory || {}) },
