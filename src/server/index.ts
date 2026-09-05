@@ -44,7 +44,7 @@ import { listWorkspaceIds, workspaceFs } from "../adapters/r2";
 import { createWorkspace } from "./seed";
 import { loadSettings, publicSettings, saveSettings, type AppSettings } from "./settings";
 import { parseContextConfig, parseMiniConfig } from "../core/budget";
-import { completeTask, flushGenerationOutbox, getActiveTask, getTask, insertPending, leaseTask, markFailed } from "./tasks";
+import { completeTask, flushGenerationOutbox, getActiveTask, getTask, insertPending, leaseTask, markFailed, replaceSessionTranscriptProjection } from "./tasks";
 import { MAX_GENERATION_ATTEMPTS } from "./generation-recovery";
 import { nowIso, parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "../core/util";
 import { projectWorkspaceAndSession, projectWorkspaceContent, registerV2Routes } from "./api-v2";
@@ -736,6 +736,9 @@ app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
     primary_character: loaded.primary_character,
     title: loaded.title,
   });
+  if (c.env.DB) {
+    await replaceSessionTranscriptProjection(c.env.DB, sid, messages, "message_edited");
+  }
   if (kept.role === "user") {
     if (c.env.DB && c.env.GENERATE_QUEUE) {
       const taskId = crypto.randomUUID();

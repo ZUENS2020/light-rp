@@ -18,6 +18,7 @@ import {
   getTask,
   listMessages,
   recordToolExecution,
+  replaceSessionTranscriptProjection,
 } from "../../src/server/tasks";
 import {
   beginNmemSync,
@@ -123,6 +124,52 @@ describe("D1 task and model integration", () => {
     const page = await listMessages(env.DB, id);
     expect(task).toMatchObject({ status: "completed", response_cache_status: "HIT", cached_input_tokens: 700 });
     expect(page.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("replaceSessionTranscriptProjection clears trailing D1 messages and llm_events", async () => {
+    const id = await seedSession();
+    const created = await createTurnTask(env.DB, {
+      workspaceId: "world-1",
+      sessionId: id,
+      text: "hello",
+      idempotencyKey: "proj-1",
+    });
+    await completeTask(env.DB, created.task.id, { content: "old assistant reply" });
+    const before = await listMessages(env.DB, id);
+    expect(before.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    const epochBefore = await env.DB.prepare(`SELECT prompt_epoch FROM sessions WHERE id = ?`)
+      .bind(id)
+      .first<{ prompt_epoch: number }>();
+
+    await replaceSessionTranscriptProjection(
+      env.DB,
+      id,
+      [{ role: "user", content: "hello edited" }],
+      "message_edited",
+    );
+
+    const after = await listMessages(env.DB, id);
+    expect(after.messages.map((m) => ({ role: m.role, content: m.content }))).toEqual([
+      { role: "user", content: "hello edited" },
+    ]);
+    const events = await env.DB.prepare(`SELECT COUNT(*) AS n FROM llm_events WHERE session_id = ?`)
+      .bind(id)
+      .first<{ n: number }>();
+    expect(Number(events?.n || 0)).toBe(0);
+    const session = await env.DB.prepare(
+      `SELECT prompt_epoch, prompt_epoch_reason, next_message_sequence, next_event_sequence FROM sessions WHERE id = ?`,
+    )
+      .bind(id)
+      .first<{
+        prompt_epoch: number;
+        prompt_epoch_reason: string;
+        next_message_sequence: number;
+        next_event_sequence: number;
+      }>();
+    expect(session?.prompt_epoch).toBe((epochBefore?.prompt_epoch || 1) + 1);
+    expect(session?.prompt_epoch_reason).toBe("message_edited");
+    expect(session?.next_message_sequence).toBe(2);
+    expect(session?.next_event_sequence).toBe(1);
   });
 
   it("commits assistant, state, and memory deltas in append-only prompt order", async () => {

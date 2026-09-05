@@ -17,7 +17,7 @@ import {
   setSessionModel,
   upsertModel,
 } from "./models";
-import { ActiveTaskConflict, createTurnTask, getActiveTask, getTask, listMessages, publishTask } from "./tasks";
+import { ActiveTaskConflict, createTurnTask, getActiveTask, getTask, getTaskByIdempotency, insertPending, listMessages, publishTask, replaceSessionTranscriptProjection } from "./tasks";
 import { memoryStatus } from "./memory";
 import { mirrorCoreMemorySnapshot } from "./memory";
 import {
@@ -255,22 +255,46 @@ export function registerV2Routes(app: App): void {
     const sid = c.req.param("sid");
     const idempotencyKey = c.req.header("Idempotency-Key")?.trim();
     if (!idempotencyKey) throw new HTTPException(400, { message: "Idempotency-Key is required" });
-    const latest = await c.env.DB.prepare(
-      `SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY sequence DESC LIMIT 1`,
-    )
-      .bind(sid)
-      .first<{ content: string }>();
-    if (!latest) throw new HTTPException(409, { message: "session has no user message to regenerate" });
     const runtime = await sessionRuntime(c.env.DB, sid);
-    const created = await createTurnTask(c.env.DB, {
-      workspaceId: runtime.workspace_id,
+    const duplicate = await getTaskByIdempotency(c.env.DB, sid, idempotencyKey);
+    if (duplicate) return c.json({ task_id: duplicate.id, status: duplicate.status }, 202);
+    const active = await getActiveTask(c.env.DB, runtime.workspace_id, sid);
+    if (active) {
+      return c.json({ detail: "已有生成任务进行中", task_id: active.id, task_status: active.status }, 409);
+    }
+    const fs = workspaceFs(c.env.BUCKET, runtime.workspace_id);
+    const loaded = await loadSession(fs, sid);
+    let lastUserIdx = -1;
+    for (let i = loaded.messages.length - 1; i >= 0; i -= 1) {
+      if (loaded.messages[i]?.role === "user") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx < 0) throw new HTTPException(409, { message: "session has no user message to regenerate" });
+    const truncated = loaded.messages.slice(0, lastUserIdx + 1);
+    if (truncated.length < loaded.messages.length) {
+      await saveSession(fs, sid, truncated, {
+        thread_id: loaded.thread_id,
+        nmem_space: loaded.nmem_space,
+        primary_character: loaded.primary_character,
+        title: loaded.title,
+      });
+    }
+    await replaceSessionTranscriptProjection(c.env.DB, sid, truncated, "regenerated");
+    const taskId = crypto.randomUUID();
+    await insertPending(c.env.DB, {
+      id: taskId,
+      worldId: runtime.workspace_id,
       sessionId: sid,
-      text: latest.content,
+      userText: truncated[lastUserIdx]!.content,
       idempotencyKey,
-      kind: "regenerate",
     });
-    await publishTask(c.env, created.task);
-    return c.json({ task_id: created.task.id, status: created.task.status }, 202);
+    await c.env.DB.prepare(`UPDATE generation_tasks SET kind = 'regenerate' WHERE id = ?`).bind(taskId).run();
+    const task = await getTask(c.env.DB, taskId);
+    if (!task) throw new Error("regenerate task insert did not commit");
+    await publishTask(c.env, task);
+    return c.json({ task_id: task.id, status: task.status }, 202);
   });
 
   app.get("/api/v2/sessions/:sid/messages", async (c) => {

@@ -242,6 +242,58 @@ export async function insertPending(
     .run();
 }
 
+
+export async function replaceSessionTranscriptProjection(
+  db: D1Database,
+  sessionId: string,
+  messages: Array<{ role: string; content: string; task_id?: string; ts?: string }>,
+  reason = "transcript_edited",
+): Promise<void> {
+  const projected = messages.filter((message) => message.role === "user" || message.role === "assistant");
+  const runtime = await sessionRuntime(db, sessionId);
+  const model = await resolveSessionModel(db, sessionId);
+  const nextEpoch = runtime.prompt_epoch + 1;
+  const nextAffinity = await affinityKey(sessionId, model, nextEpoch);
+  const ts = nowIso();
+  const statements = [
+    db.prepare(`DELETE FROM messages WHERE session_id = ?`).bind(sessionId),
+    db.prepare(`DELETE FROM llm_events WHERE session_id = ?`).bind(sessionId),
+  ];
+  for (const [index, message] of projected.entries()) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO messages (id, session_id, sequence, role, content, task_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          sessionId,
+          index + 1,
+          message.role,
+          message.content,
+          message.task_id || null,
+          message.ts || ts,
+        ),
+    );
+  }
+  statements.push(
+    db
+      .prepare(
+        `UPDATE sessions
+         SET next_message_sequence = ?,
+             next_event_sequence = 1,
+             prompt_epoch = ?,
+             prompt_epoch_reason = ?,
+             affinity_key = ?,
+             updated_at = ?
+         WHERE id = ?`,
+      )
+      .bind(projected.length + 1, nextEpoch, reason, nextAffinity, ts, sessionId),
+  );
+  await db.batch(statements);
+}
+
 export async function markOutboxPublished(db: D1Database, taskId: string): Promise<void> {
   await db
     .prepare(
