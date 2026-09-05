@@ -10,6 +10,7 @@ import {
 import { estimateTokens } from "../core/budget";
 import { nowIso } from "../core/util";
 import { resolveSessionModel, sessionRuntime } from "./models";
+import { MAX_GENERATION_ATTEMPTS, recoverGenerationTasks } from "./generation-recovery";
 
 export type TaskStatus = "pending" | "running" | "completed" | "failed" | "dead";
 export type TaskKind = "turn" | "regenerate" | "rewrite" | "compact" | "summary" | "memory" | "probe";
@@ -260,6 +261,20 @@ export async function publishTask(env: Env, task: GenerationTaskRow): Promise<vo
   await markOutboxPublished(env.DB, task.id);
 }
 
+/** Recover expired leases as well as sends lost after the input transaction. */
+export async function flushGenerationOutbox(env: Env): Promise<void> {
+  await recoverGenerationTasks(env.DB);
+  const rows = await env.DB.prepare(
+    `SELECT o.aggregate_id AS id FROM outbox_events o JOIN generation_tasks g ON g.id = o.aggregate_id
+     WHERE o.event_type = 'generation.requested' AND o.published_at IS NULL AND g.status IN ('pending', 'running')
+     ORDER BY o.created_at LIMIT 25`,
+  ).all<{ id: string }>();
+  for (const row of rows.results) {
+    const task = await getTask(env.DB, row.id);
+    if (task && (task.status === "pending" || task.status === "running")) await publishTask(env, task);
+  }
+}
+
 export async function leaseTask(
   db: D1Database,
   id: string,
@@ -274,9 +289,10 @@ export async function leaseTask(
        SET status = 'running', lease_owner = ?, lease_expires_at = ?, attempt_count = attempt_count + 1, updated_at = ?
        WHERE id = ?
          AND status IN ('pending', 'running')
+         AND attempt_count < ?
          AND (lease_expires_at IS NULL OR lease_expires_at < ? OR lease_owner = ?)`,
     )
-    .bind(owner, expires, now.toISOString(), id, now.toISOString(), owner)
+    .bind(owner, expires, now.toISOString(), id, MAX_GENERATION_ATTEMPTS, now.toISOString(), owner)
     .run();
   const task = await getTask(db, id);
   return task?.lease_owner === owner && task.status === "running" ? task : null;
@@ -451,13 +467,23 @@ export async function markFailed(
   error: string,
   options: { code?: string; dead?: boolean } = {},
 ): Promise<void> {
+  const ts = nowIso();
   await db
     .prepare(
       `UPDATE generation_tasks SET
-         status = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+         status = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL,
+         completed_at = CASE WHEN ? THEN ? ELSE completed_at END, updated_at = ?
        WHERE id = ? AND status IN ('pending', 'running')`,
     )
-    .bind(options.dead ? "dead" : "pending", options.code || null, error.slice(0, 2000), nowIso(), id)
+    .bind(
+      options.dead ? "dead" : "pending",
+      options.code || null,
+      error.slice(0, 2000),
+      Number(Boolean(options.dead)),
+      ts,
+      ts,
+      id,
+    )
     .run();
 }
 

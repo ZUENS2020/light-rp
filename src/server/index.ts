@@ -44,7 +44,8 @@ import { listWorkspaceIds, workspaceFs } from "../adapters/r2";
 import { createWorkspace } from "./seed";
 import { loadSettings, publicSettings, saveSettings, type AppSettings } from "./settings";
 import { parseContextConfig, parseMiniConfig } from "../core/budget";
-import { completeTask, getActiveTask, getTask, insertPending, leaseTask, markFailed } from "./tasks";
+import { completeTask, flushGenerationOutbox, getActiveTask, getTask, insertPending, leaseTask, markFailed } from "./tasks";
+import { MAX_GENERATION_ATTEMPTS } from "./generation-recovery";
 import { nowIso, parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "../core/util";
 import { projectWorkspaceAndSession, projectWorkspaceContent, registerV2Routes } from "./api-v2";
 import type { AiModelConfig, AiUsage, ResponseCacheStatus } from "../core/ai";
@@ -847,6 +848,9 @@ app.post("/api/v2/play/:id/:sid/space", async (c) => {
 
 export default {
   fetch: app.fetch,
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(flushGenerationOutbox(env));
+  },
   async queue(
     batch: MessageBatch<{
       kind?: "generation" | "nmem";
@@ -1009,7 +1013,9 @@ export default {
         const owner = `queue-${msg.id}-${crypto.randomUUID()}`;
         const leased = await leaseTask(env.DB, taskId, owner);
         if (!leased) {
-          msg.retry({ delaySeconds: 5 });
+          // D1 owns recovery: retrying a duplicate while its lease is held only burns
+          // the Queue delivery budget. The cron republishes work if that owner dies.
+          msg.ack();
           continue;
         }
         const workspaceId = leased.workspace_id;
@@ -1128,7 +1134,10 @@ export default {
         const message = err instanceof Error ? err.message : String(err);
         const code =
           err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code || "") : undefined;
-        const dead = msg.attempts >= 4 || code === "LLM_OUTPUT_CHANNEL_VIOLATION";
+        const current = taskId ? await getTask(env.DB, taskId).catch(() => null) : null;
+        const dead =
+          (current?.attempt_count || msg.attempts) >= MAX_GENERATION_ATTEMPTS ||
+          code === "LLM_OUTPUT_CHANNEL_VIOLATION";
         await markFailed(env.DB, taskId, message, { code, dead }).catch(() => undefined);
         if (dead) msg.ack();
         else msg.retry();
