@@ -142,12 +142,7 @@ describe("D1 task and model integration", () => {
       .bind(id)
       .first<{ prompt_epoch: number }>();
 
-    await replaceSessionTranscriptProjection(
-      env.DB,
-      id,
-      [{ role: "user", content: "hello edited" }],
-      "message_edited",
-    );
+    await replaceSessionTranscriptProjection(env.DB, id, [{ role: "user", content: "hello edited" }], "message_edited");
 
     const after = await listMessages(env.DB, id);
     expect(after.messages.map((m) => ({ role: m.role, content: m.content }))).toEqual([
