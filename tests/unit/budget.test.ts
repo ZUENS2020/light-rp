@@ -47,6 +47,7 @@ describe("ported budget behavior", () => {
   it("parses context defaults", () => {
     const value = parseContextConfig(null);
     expect(value.max_tokens).toBe(32_768);
+    expect(value.generation_reserve).toBe(16_384);
     expect(value.budget.lore).toBe(3_000);
     expect(value.tool_reserve).toBe(1_500);
   });

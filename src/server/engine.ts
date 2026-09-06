@@ -143,19 +143,33 @@ async function withinDeadline<T>(promise: Promise<T>, milliseconds: number, labe
   }
 }
 
-function effectiveOutputTokens(settings: AppSettings, model?: AiModelConfig): number {
+/** Story completions need headroom for ~2000 汉字 plus GLM/OpenRouter reasoning tokens. */
+export const STORY_OUTPUT_TOKEN_FLOOR = 12_288;
+
+function isStoryOutputKind(kind?: AiRequestOptions["requestKind"]): boolean {
+  return kind == null || kind === "story" || kind === "rewrite" || kind === "regenerate";
+}
+
+export function effectiveOutputTokens(
+  settings: AppSettings,
+  model?: AiModelConfig,
+  requestKind?: AiRequestOptions["requestKind"],
+): number {
   const configured = Math.max(1, Math.floor(settings.llm.max_tokens));
-  return model ? Math.min(configured, Math.max(1, Math.floor(model.max_output_tokens))) : configured;
+  const wanted = isStoryOutputKind(requestKind) ? Math.max(configured, STORY_OUTPUT_TOKEN_FLOOR) : configured;
+  return model ? Math.min(wanted, Math.max(1, Math.floor(model.max_output_tokens))) : wanted;
 }
 
 export function effectiveContextConfig(settings: AppSettings, model?: AiModelConfig) {
   const outputTokens = effectiveOutputTokens(settings, model);
   const configuredWindow = Math.max(1, Math.floor(settings.context.max_tokens));
   const modelWindow = model ? Math.max(1, Math.floor(model.context_window)) : configuredWindow;
+  const reserved = Math.max(settings.context.generation_reserve, outputTokens);
+  const modelOutputCap = model ? Math.max(1, Math.floor(model.max_output_tokens)) : reserved;
   return parseContextConfig({
     ...settings.context,
     max_tokens: Math.min(configuredWindow, modelWindow),
-    generation_reserve: Math.max(settings.context.generation_reserve, outputTokens),
+    generation_reserve: Math.min(reserved, modelOutputCap),
   });
 }
 
@@ -188,7 +202,7 @@ export async function runOoc(
     ],
     null,
     Math.min(settings.llm.temperature, 0.5),
-    effectiveOutputTokens(settings, options.model),
+    effectiveOutputTokens(settings, options.model, "ooc"),
     settings.llm.timeout,
     { model: options.model, affinityKey: options.affinityKey, requestKind: "ooc" },
   );
@@ -603,7 +617,7 @@ async function extractTurnCommit(
         .join("\n\n"),
     },
   ];
-  const commitMaxTokens = Math.min(1_536, effectiveOutputTokens(settings, options.model));
+  const commitMaxTokens = Math.min(1_536, effectiveOutputTokens(settings, options.model, "tool"));
   const requestKind = memoryFeedback ? "correction" : "memory";
   const commitOptions = {
     ...options,
@@ -729,7 +743,7 @@ export async function runTurn(
   const primaryCards = primaryMember ? await loadMemberCards(fs, [primaryMember]) : [];
   const miniCfg = parseMiniConfig(settings.mini);
   const contextCfg = effectiveContextConfig(settings, opts?.ai?.model);
-  const outputTokens = effectiveOutputTokens(settings, opts?.ai?.model);
+  const outputTokens = effectiveOutputTokens(settings, opts?.ai?.model, opts?.ai?.requestKind || "story");
   const recentSlice = roleplayMessages.slice(-Math.max(8, miniCfg.recent_turns * 2));
   const recentHaystack = recentSlice.map((m) => m.content).join("\n");
   const haystack = `${userText}\n${recentHaystack}\n${scene.location} ${scene.time} ${scene.scene || scene.notes} ${scene.present.join(" ")}`;
@@ -1203,7 +1217,7 @@ export async function runCompact(
   aiOptions?: AiRequestOptions,
   deferNmemWrites = false,
 ): Promise<string> {
-  const outputTokens = effectiveOutputTokens(settings, aiOptions?.model);
+  const outputTokens = effectiveOutputTokens(settings, aiOptions?.model, "compact");
   const roleplayMessages = roleplayOnlyMessages(messages);
   const transcript = roleplayMessages.map((m) => `${m.role}: ${m.content}`).join("\n");
   const values: Record<string, string> = {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { effectiveContextConfig } from "../../src/server/engine";
+import { effectiveContextConfig, effectiveOutputTokens, STORY_OUTPUT_TOKEN_FLOOR } from "../../src/server/engine";
 import { DEFAULT_SETTINGS } from "../../src/server/settings";
-import type { AiModelConfig } from "../../src/core/ai";
+import { DEFAULT_MODEL, type AiModelConfig } from "../../src/core/ai";
 
 const model: AiModelConfig = {
   id: "small-window",
@@ -35,5 +35,24 @@ describe("runtime model limits", () => {
     settings.context.max_tokens = 64_000;
 
     expect(effectiveContextConfig(settings, model).max_tokens).toBe(64_000);
+  });
+
+  it("floors story completions above 4k even when saved settings are 2048", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.llm.max_tokens = 2_048;
+    settings.context.generation_reserve = 4_096;
+    const glm: AiModelConfig = { ...DEFAULT_MODEL, max_output_tokens: 16_384 };
+
+    expect(effectiveOutputTokens(settings, glm, "story")).toBe(STORY_OUTPUT_TOKEN_FLOOR);
+    expect(effectiveOutputTokens(settings, glm, "ooc")).toBe(2_048);
+    expect(STORY_OUTPUT_TOKEN_FLOOR).toBeGreaterThan(4_096);
+    expect(effectiveContextConfig(settings, glm).generation_reserve).toBe(STORY_OUTPUT_TOKEN_FLOOR);
+  });
+
+  it("does not exceed the OpenRouter GLM output cap", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.llm.max_tokens = 32_768;
+    expect(effectiveOutputTokens(settings, DEFAULT_MODEL, "story")).toBe(DEFAULT_MODEL.max_output_tokens);
+    expect(DEFAULT_MODEL.max_output_tokens).toBeGreaterThanOrEqual(STORY_OUTPUT_TOKEN_FLOOR);
   });
 });

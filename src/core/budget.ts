@@ -88,7 +88,7 @@ export const DEFAULT_MEMORY_SPLIT: MemorySplitConfig = {
 
 export const DEFAULT_CONTEXT: ContextConfig = {
   max_tokens: 32768,
-  generation_reserve: 4096,
+  generation_reserve: 16384,
   tool_reserve: 1500,
   budget: { ...DEFAULT_SECTION_BUDGET },
   memory_split: { ...DEFAULT_MEMORY_SPLIT },

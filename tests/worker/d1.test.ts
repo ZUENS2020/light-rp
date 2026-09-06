@@ -49,6 +49,7 @@ describe("D1 task and model integration", () => {
     const model = await resolveSessionModel(env.DB, id);
     expect(model.model_id).toBe("@preset/dsf0731-cheap");
     expect(model.source).toBe("application");
+    expect(model.max_output_tokens).toBe(16_384);
   });
 
   it("switches model and rotates epoch", async () => {
