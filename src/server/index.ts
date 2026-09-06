@@ -42,9 +42,18 @@ import {
 import { PromptLibrary } from "../core/prompts";
 import { listWorkspaceIds, workspaceFs } from "../adapters/r2";
 import { createWorkspace } from "./seed";
-import { loadSettings, publicSettings, saveSettings, type AppSettings } from "./settings";
+import { loadSettings, publicSettings, resolveLlmMaxTokens, saveSettings, type AppSettings } from "./settings";
 import { parseContextConfig, parseMiniConfig } from "../core/budget";
-import { completeTask, flushGenerationOutbox, getActiveTask, getTask, insertPending, leaseTask, markFailed, replaceSessionTranscriptProjection } from "./tasks";
+import {
+  completeTask,
+  flushGenerationOutbox,
+  getActiveTask,
+  getTask,
+  insertPending,
+  leaseTask,
+  markFailed,
+  replaceSessionTranscriptProjection,
+} from "./tasks";
 import { MAX_GENERATION_ATTEMPTS } from "./generation-recovery";
 import { nowIso, parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "../core/util";
 import { projectWorkspaceAndSession, projectWorkspaceContent, registerV2Routes } from "./api-v2";
@@ -237,7 +246,7 @@ app.put("/api/v2/settings", async (c) => {
   const next: AppSettings = {
     llm: {
       temperature: Number(body.llm?.temperature ?? previous.llm.temperature),
-      max_tokens: Number(body.llm?.max_tokens ?? previous.llm.max_tokens),
+      max_tokens: resolveLlmMaxTokens(Number(body.llm?.max_tokens ?? previous.llm.max_tokens)),
       timeout: Number(body.llm?.timeout ?? previous.llm.timeout),
       breach: body.llm?.breach != null ? Boolean(body.llm.breach) : previous.llm.breach,
     },

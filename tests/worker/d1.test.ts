@@ -42,7 +42,7 @@ async function seedSession(id = crypto.randomUUID()) {
 }
 
 describe("D1 task and model integration", () => {
-  it("seeds the four model configs", async () => expect(await listModels(env.DB)).toHaveLength(4));
+  it("seeds the five model configs", async () => expect(await listModels(env.DB)).toHaveLength(5));
 
   it("resolves the OpenRouter preset as the application default", async () => {
     const id = await seedSession();
@@ -50,6 +50,14 @@ describe("D1 task and model integration", () => {
     expect(model.model_id).toBe("@preset/dsf0731-cheap");
     expect(model.source).toBe("application");
     expect(model.max_output_tokens).toBe(16_384);
+  });
+
+  it("seeds the live GLM 5.3 Flash OpenRouter preset with a 32k output cap", async () => {
+    const models = await listModels(env.DB);
+    const glm = models.find((item) => item.id === "glm53-flash-cheap-openrouter");
+    expect(glm?.model_id).toBe("@preset/glm53-flash-cheap");
+    expect(glm?.max_output_tokens).toBe(32_768);
+    expect(glm?.enabled).toBe(true);
   });
 
   it("switches model and rotates epoch", async () => {
