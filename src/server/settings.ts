@@ -29,12 +29,6 @@ export type AppSettings = {
 /** Story completions need headroom for ≥2000 汉字 plus GLM/OpenRouter reasoning tokens. */
 export const STORY_OUTPUT_TOKEN_FLOOR = 12_288;
 
-export function resolveLlmMaxTokens(raw?: number): number {
-  const parsed = Math.floor(Number(raw));
-  const configured = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SETTINGS.llm.max_tokens;
-  return Math.max(configured, STORY_OUTPUT_TOKEN_FLOOR);
-}
-
 export const DEFAULT_SETTINGS: AppSettings = {
   // 16384 covers ~2000 汉字 of RP body plus GLM/OpenRouter reasoning tokens.
   llm: { temperature: 1, max_tokens: 16_384, timeout: 180, breach: true },
@@ -49,28 +43,23 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mini: { ...DEFAULT_MINI },
 };
 
-function withStoryTokenFloor(settings: AppSettings): AppSettings {
+export function cloneAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
-    llm: { ...settings.llm, max_tokens: resolveLlmMaxTokens(settings.llm.max_tokens) },
+    llm: { ...settings.llm },
+    nmem: { ...settings.nmem },
+    memory: { ...settings.memory },
+    context: parseContextConfig(settings.context),
+    mini: parseMiniConfig(settings.mini),
   };
 }
 
 export async function loadSettings(bucket: R2Bucket): Promise<AppSettings> {
   const obj = await bucket.get("v2/config/settings.json");
-  if (!obj) {
-    return withStoryTokenFloor({
-      ...DEFAULT_SETTINGS,
-      llm: { ...DEFAULT_SETTINGS.llm },
-      nmem: { ...DEFAULT_SETTINGS.nmem },
-      memory: { ...DEFAULT_SETTINGS.memory },
-      context: parseContextConfig(DEFAULT_CONTEXT),
-      mini: parseMiniConfig(DEFAULT_MINI),
-    });
-  }
+  if (!obj) return cloneAppSettings(DEFAULT_SETTINGS);
   try {
     const raw = JSON.parse(await obj.text()) as Partial<AppSettings>;
-    return withStoryTokenFloor({
+    return cloneAppSettings({
       ...DEFAULT_SETTINGS,
       ...raw,
       llm: { ...DEFAULT_SETTINGS.llm, ...(raw.llm || {}) },
@@ -84,7 +73,7 @@ export async function loadSettings(bucket: R2Bucket): Promise<AppSettings> {
       mini: parseMiniConfig(raw.mini || DEFAULT_MINI),
     });
   } catch {
-    return withStoryTokenFloor(DEFAULT_SETTINGS);
+    return cloneAppSettings(DEFAULT_SETTINGS);
   }
 }
 

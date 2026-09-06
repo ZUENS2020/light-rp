@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { effectiveContextConfig, effectiveOutputTokens, STORY_OUTPUT_TOKEN_FLOOR } from "../../src/server/engine";
-import { DEFAULT_SETTINGS, resolveLlmMaxTokens } from "../../src/server/settings";
+import { cloneAppSettings, DEFAULT_SETTINGS } from "../../src/server/settings";
 import { DEFAULT_MODEL, type AiModelConfig } from "../../src/core/ai";
 
 const model: AiModelConfig = {
@@ -56,10 +56,19 @@ describe("runtime model limits", () => {
     expect(DEFAULT_MODEL.max_output_tokens).toBeGreaterThanOrEqual(STORY_OUTPUT_TOKEN_FLOOR);
   });
 
-  it("lifts stale 2048 settings onto the story floor", () => {
-    expect(resolveLlmMaxTokens(2_048)).toBe(STORY_OUTPUT_TOKEN_FLOOR);
-    expect(resolveLlmMaxTokens(undefined)).toBe(DEFAULT_SETTINGS.llm.max_tokens);
-    expect(resolveLlmMaxTokens(32_768)).toBe(32_768);
-    expect(DEFAULT_SETTINGS.llm.max_tokens).toBeGreaterThanOrEqual(STORY_OUTPUT_TOKEN_FLOOR);
+  it("keeps compact and OOC on the configured budget when settings are stale", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.llm.max_tokens = 2_048;
+    const glm: AiModelConfig = { ...DEFAULT_MODEL, max_output_tokens: 16_384 };
+    expect(effectiveOutputTokens(settings, glm, "compact")).toBe(2_048);
+    expect(effectiveOutputTokens(settings, glm, "tool")).toBe(2_048);
+  });
+
+  it("does not let callers mutate DEFAULT_SETTINGS through a clone", () => {
+    const cloned = cloneAppSettings(DEFAULT_SETTINGS);
+    cloned.nmem.space = "mutated";
+    cloned.llm.max_tokens = 1;
+    expect(DEFAULT_SETTINGS.nmem.space).not.toBe("mutated");
+    expect(DEFAULT_SETTINGS.llm.max_tokens).toBe(16_384);
   });
 });
