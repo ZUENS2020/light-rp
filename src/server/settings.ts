@@ -27,7 +27,8 @@ export type AppSettings = {
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  llm: { temperature: 1, max_tokens: 2048, timeout: 120, breach: true },
+  // 16384 covers ~2000 汉字 of RP body plus GLM/OpenRouter reasoning tokens.
+  llm: { temperature: 1, max_tokens: 16_384, timeout: 180, breach: true },
   nmem: { enabled: true, space: DEFAULT_NMEM_SPACE_ID },
   memory: { world_char_limit: 2500, player_char_limit: 1400, character_char_limit: 1200 },
   compact_after_turns: 40,

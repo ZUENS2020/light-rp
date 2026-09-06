@@ -50,7 +50,7 @@ export const DEFAULT_MODEL: AiModelConfig = {
   provider_slug: "openrouter",
   model_id: "@preset/dsf0731-cheap",
   context_window: 131_072,
-  max_output_tokens: 8_192,
+  max_output_tokens: 16_384,
   supports_tools: true,
   supports_reasoning: true,
   enabled: true,
