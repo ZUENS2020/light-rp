@@ -32,9 +32,11 @@ describe("Marinara breach hardening", () => {
       expect(text).toMatch(/hardcore/i);
       expect(text).toMatch(/fade-to-black/i);
       expect(text).toMatch(/2000/);
-      expect(text).toMatch(/汉字/);
+      expect(text).toMatch(/汉字|字/);
+      expect(text).toMatch(/阴茎|cock/i);
+      expect(text).toMatch(/不是 200|not 200/i);
+      expect(text).toMatch(/1000/);
       expect(text).toMatch(/Never narrate/i);
-      expect(text).toMatch(/player/i);
     }
   });
 

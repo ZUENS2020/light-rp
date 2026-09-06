@@ -71,7 +71,7 @@ import {
 } from "../adapters/nmem";
 import { memoryToolSpec, PromptLibrary, turnCommitToolSpec } from "../core/prompts";
 import type { R2Fs } from "../adapters/r2";
-import type { AppSettings } from "./settings";
+import { STORY_OUTPUT_TOKEN_FLOOR, type AppSettings } from "./settings";
 import { nowIso } from "../core/util";
 import { preparePrompt } from "./prompt-state";
 import { getCachedToolExecution, recordToolExecution } from "./tasks";
@@ -143,8 +143,7 @@ async function withinDeadline<T>(promise: Promise<T>, milliseconds: number, labe
   }
 }
 
-/** Story completions need headroom for ~2000 汉字 plus GLM/OpenRouter reasoning tokens. */
-export const STORY_OUTPUT_TOKEN_FLOOR = 12_288;
+export { STORY_OUTPUT_TOKEN_FLOOR };
 
 function isStoryOutputKind(kind?: AiRequestOptions["requestKind"]): boolean {
   return kind == null || kind === "story" || kind === "rewrite" || kind === "regenerate";

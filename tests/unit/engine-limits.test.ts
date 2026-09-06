@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { effectiveContextConfig, effectiveOutputTokens, STORY_OUTPUT_TOKEN_FLOOR } from "../../src/server/engine";
-import { DEFAULT_SETTINGS } from "../../src/server/settings";
+import { DEFAULT_SETTINGS, resolveLlmMaxTokens } from "../../src/server/settings";
 import { DEFAULT_MODEL, type AiModelConfig } from "../../src/core/ai";
 
 const model: AiModelConfig = {
@@ -54,5 +54,12 @@ describe("runtime model limits", () => {
     settings.llm.max_tokens = 32_768;
     expect(effectiveOutputTokens(settings, DEFAULT_MODEL, "story")).toBe(DEFAULT_MODEL.max_output_tokens);
     expect(DEFAULT_MODEL.max_output_tokens).toBeGreaterThanOrEqual(STORY_OUTPUT_TOKEN_FLOOR);
+  });
+
+  it("lifts stale 2048 settings onto the story floor", () => {
+    expect(resolveLlmMaxTokens(2_048)).toBe(STORY_OUTPUT_TOKEN_FLOOR);
+    expect(resolveLlmMaxTokens(undefined)).toBe(DEFAULT_SETTINGS.llm.max_tokens);
+    expect(resolveLlmMaxTokens(32_768)).toBe(32_768);
+    expect(DEFAULT_SETTINGS.llm.max_tokens).toBeGreaterThanOrEqual(STORY_OUTPUT_TOKEN_FLOOR);
   });
 });
