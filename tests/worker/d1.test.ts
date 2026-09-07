@@ -53,6 +53,7 @@ describe("D1 task and model integration", () => {
     const models = await listModels(env.DB);
     const glm = models.find((item) => item.id === "glm53-flash-cheap-openrouter");
     expect(glm?.model_id).toBe("@preset/glm53-flash-cheap");
+    expect(glm?.context_window).toBe(1_310_720);
     expect(glm?.max_output_tokens).toBe(32_768);
     expect(glm?.enabled).toBe(true);
   });
