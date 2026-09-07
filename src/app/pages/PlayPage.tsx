@@ -124,10 +124,10 @@ function CacheInspector({
           <div className="space-y-5 font-ui text-sm">
             <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
               <div>
-                <p className="text-xs uppercase tracking-[0.14em] text-secondary">Hermes memory lifecycle</p>
-                <p className="mt-1 font-medium">{memoryStatus?.sync?.space_id || state.nmem_space || "rp-mem"}</p>
+                <p className="text-xs uppercase tracking-[0.14em] text-secondary">Hermes memory</p>
+                <p className="mt-1 font-medium">R2 核心记忆 → D1 镜像</p>
               </div>
-              <span className="cache-status">{memoryStatus?.sync?.status || "ready"}</span>
+              <span className="cache-status">ready</span>
             </div>
             <Metric
               icon={BrainCircuit}
@@ -139,17 +139,10 @@ function CacheInspector({
               )}
               detail={`世界 ${memoryStatus?.core.world || 0} · 玩家 ${memoryStatus?.core.player || 0} · 角色 ${memoryStatus?.core.character || 0}`}
             />
-            <Metric
-              icon={DatabaseZap}
-              label="本轮召回"
-              value={String(memoryStatus?.recall?.recalled_count || 0)}
-              detail={memoryStatus?.recall ? `来自 ${memoryStatus.recall.space_id}` : "尚无召回记录"}
-            />
             <div className="border-t border-border pt-4">
-              <p className="text-xs text-secondary">核心记忆保持有界；nmem 只在每轮按需召回，生成提交后异步同步。</p>
-              {memoryStatus?.sync?.error ? (
-                <p className="mt-2 text-xs text-destructive">{memoryStatus.sync.error}</p>
-              ) : null}
+              <p className="text-xs text-secondary">
+                MEMORY.md / PLAYER_MEMORY.md / 角色记忆有界写入；PLAYER.md 仅玩家可改。压缩前会先 flush 耐久事实。
+              </p>
               <Button
                 type="button"
                 variant="secondary"
@@ -157,7 +150,7 @@ function CacheInspector({
                 disabled={memorySyncing}
                 onClick={onMemorySync}
               >
-                {memorySyncing ? "正在同步…" : "重新同步到 RP-mem"}
+                {memorySyncing ? "正在同步…" : "重新镜像核心记忆到 D1"}
               </Button>
             </div>
           </div>
@@ -338,7 +331,7 @@ export function PlayPage() {
   });
 
   const memorySyncMutation = useMutation({
-    mutationFn: () => api.syncMemory(worldId, state?.nmem_space || "rp-mem"),
+    mutationFn: () => api.syncMemory(worldId),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["play", worldId, sessionId] }),

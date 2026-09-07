@@ -17,10 +17,8 @@ export function WorldPane({
   const [name, setName] = useState(world.name);
   const [playerName, setPlayerName] = useState(world.player_name);
   const [primary, setPrimary] = useState(world.primary || "");
-  const [nmemSpace, setNmemSpace] = useState(world.nmem_space || "");
   const [worldText, setWorldText] = useState(world.world_text || "");
   const [playerText, setPlayerText] = useState(world.player_text || "");
-  const [spaces, setSpaces] = useState<{ id: string; name: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -29,17 +27,10 @@ export function WorldPane({
     setName(world.name);
     setPlayerName(world.player_name);
     setPrimary(world.primary || "");
-    setNmemSpace(world.nmem_space || "");
     setWorldText(world.world_text || "");
     setPlayerText(world.player_text || "");
   }, [world]);
 
-  useEffect(() => {
-    void api
-      .spaces()
-      .then((data) => setSpaces(data.spaces))
-      .catch(() => setSpaces([]));
-  }, []);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -50,7 +41,6 @@ export function WorldPane({
         name,
         player_name: playerName,
         primary: primary.trim() || null,
-        nmem_space: nmemSpace.trim() || "rp-mem",
         world_text: worldText,
         player_text: playerText,
       });
@@ -168,24 +158,6 @@ export function WorldPane({
           </select>
           <Hint>只影响新开的会话。对局里可在顶栏切换本局主卡。</Hint>
         </div>
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="world-nmem">默认 nmem 工作区</Label>
-        <Input
-          id="world-nmem"
-          list="world-nmem-spaces"
-          value={nmemSpace}
-          placeholder="留空则新会话不同步 Mem"
-          onChange={(event) => setNmemSpace(event.target.value)}
-        />
-        <datalist id="world-nmem-spaces">
-          {spaces.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}（{item.id}）
-            </option>
-          ))}
-        </datalist>
-        <Hint>填 id，例如 rp-mem。选中后对局正文会写入该空间。未选不会写入 default。</Hint>
       </div>
       <div className="space-y-2">
         <Label htmlFor="world-text">WORLD.md</Label>

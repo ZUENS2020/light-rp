@@ -218,7 +218,6 @@ export function assembleBudgeted(
   scene: SceneState,
   presentCards: CharacterCard[],
   loreEntries: LoreEntry[],
-  nmemRecall: string,
   historyMessages: { role: string; content: string }[],
   userInput: string,
   extraSystem = "",
@@ -269,7 +268,6 @@ export function assembleBudgeted(
     cards: cardsText,
     minis: miniEntries.join("\n\n"),
     lore: loreTexts.join("\n\n"),
-    nmem: nmemRecall,
     summary,
     player_name: userName,
     world_id: pack.id,
@@ -306,7 +304,6 @@ export function assembleBudgeted(
       budget: contextCfg.budget.memory,
       items: memoryItems,
     },
-    { name: "nmem", text: nmemRecall, budget: contextCfg.budget.nmem },
     { name: "summary", text: summary, budget: contextCfg.budget.summary },
   ];
 
@@ -342,7 +339,6 @@ export function assembleBudgeted(
     cards: texts.primary_card || "",
     minis: texts.mini_cards || "",
     lore: texts.lore || "",
-    nmem: texts.nmem || "",
     summary: texts.summary || "",
     player_name: userName,
     world_id: pack.id,
@@ -352,9 +348,8 @@ export function assembleBudgeted(
   const stable = library.render("layers/stable.md", values).trim();
   const contextLayer = library.render("layers/context.md", values).trim();
   const volatile = library.render("layers/volatile.md", values).trim();
-  const epochCheckpoint = library.render("layers/volatile.md", { ...values, nmem: "" }).trim();
-  const recallContext = values.nmem ? `## Nowledge Mem 召回\n${values.nmem}` : "";
-  const turnContext = [contextLayer, recallContext].filter(Boolean).join("\n\n");
+  const epochCheckpoint = library.render("layers/volatile.md", values).trim();
+  const turnContext = contextLayer;
   const system = [extraSystem.trim(), stable, contextLayer, volatile].filter(Boolean).join("\n\n");
 
   const sectionTokens = reports.reduce((sum, item) => sum + item.tokens, 0);
@@ -394,7 +389,6 @@ export function assembleSystem(
   scene: SceneState,
   presentCards: CharacterCard[],
   loreEntries: LoreEntry[],
-  nmemRecall: string,
   extraSystem = "",
   miniCards: MiniCard[] = [],
   summary = "",
@@ -408,7 +402,6 @@ export function assembleSystem(
     scene,
     presentCards,
     loreEntries,
-    nmemRecall,
     [],
     "",
     extraSystem,

@@ -62,7 +62,7 @@ async function desiredCoreRows(workspaceId: string, snapshot: MemorySnapshot): P
 }
 
 /**
- * Incrementally sync core memory rows for a workspace.
+ * Incrementally sync core memory rows for a workspace (R2 → D1 mirror).
  * Only forgets removed entries and upserts new/changed ones — never mass-forgets
  * then rewrites every active core row on an unchanged snapshot.
  * Identity remains `core:${hash}` derived from workspace+scope+character+content.
@@ -127,159 +127,19 @@ export async function mirrorCoreMemorySnapshot(
   return desired.length;
 }
 
-export async function recordMemoryRecall(
-  db: D1Database,
-  input: {
-    workspaceId: string;
-    sessionId: string;
-    taskId?: string | null;
-    spaceId: string;
-    query: string;
-    rows: Record<string, unknown>[];
-  },
-): Promise<void> {
-  const ts = nowIso();
-  const hashes = await Promise.all(
-    input.rows.map((row) => sha256(String(row.content || row.content_preview || row.title || ""))),
-  );
-  const statements: D1PreparedStatement[] = [
-    db
-      .prepare(
-        `INSERT INTO memory_recall_events (
-           id, workspace_id, session_id, task_id, provider, space_id, query_hash,
-           recalled_count, content_hashes_json, created_at
-         ) VALUES (?, ?, ?, ?, 'nmem', ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        crypto.randomUUID(),
-        input.workspaceId,
-        input.sessionId,
-        input.taskId || null,
-        input.spaceId,
-        await sha256(input.query),
-        input.rows.length,
-        stableStringify(hashes),
-        ts,
-      ),
-  ];
-  if (input.taskId) {
-    statements.push(
-      db
-        .prepare(`UPDATE generation_tasks SET nmem_recall_count = ?, updated_at = ? WHERE id = ?`)
-        .bind(input.rows.length, ts, input.taskId),
-    );
-  }
-  for (const row of input.rows) {
-    const externalId = String(row.id || row.memory_id || "");
-    if (!externalId) continue;
-    statements.push(
-      db
-        .prepare(
-          `UPDATE memories SET recall_count = recall_count + 1, last_recalled_at = ?, updated_at = ?
-           WHERE external_id = ?`,
-        )
-        .bind(ts, ts, externalId),
-    );
-  }
-  await db.batch(statements);
-}
-
-export async function beginNmemSync(
-  db: D1Database,
-  input: { taskId: string; workspaceId: string; sessionId: string; spaceId: string; attempt: number },
-): Promise<void> {
-  const ts = nowIso();
-  await db.batch([
-    db
-      .prepare(
-        `INSERT INTO memory_sync_runs (
-           task_id, workspace_id, session_id, provider, space_id, status, attempt_count, created_at, updated_at
-         ) VALUES (?, ?, ?, 'nmem', ?, 'running', ?, ?, ?)
-         ON CONFLICT(task_id) DO UPDATE SET
-           space_id = excluded.space_id, status = 'running', attempt_count = excluded.attempt_count,
-           error = NULL, updated_at = excluded.updated_at`,
-      )
-      .bind(input.taskId, input.workspaceId, input.sessionId, input.spaceId, input.attempt, ts, ts),
-    db
-      .prepare(
-        `UPDATE generation_tasks
-         SET nmem_sync_status = 'running', nmem_error = NULL, updated_at = ? WHERE id = ?`,
-      )
-      .bind(ts, input.taskId),
-  ]);
-}
-
-export async function completeNmemSync(
-  db: D1Database,
-  input: { taskId: string; coreMemoryCount: number; turnExternalId: string | null; threadId: string },
-): Promise<void> {
-  const ts = nowIso();
-  await db.batch([
-    db
-      .prepare(
-        `UPDATE memory_sync_runs SET
-           status = 'completed', core_memory_count = ?, turn_external_id = ?, thread_id = ?,
-           error = NULL, updated_at = ?, completed_at = ? WHERE task_id = ?`,
-      )
-      .bind(input.coreMemoryCount, input.turnExternalId, input.threadId, ts, ts, input.taskId),
-    db
-      .prepare(
-        `UPDATE generation_tasks SET
-           nmem_sync_status = 'completed', nmem_synced_at = ?, nmem_error = NULL,
-           nmem_memory_count = ?, updated_at = ? WHERE id = ?`,
-      )
-      .bind(ts, input.coreMemoryCount, ts, input.taskId),
-  ]);
-}
-
-export async function failNmemSync(db: D1Database, taskId: string, error: unknown, dead = false): Promise<void> {
-  const ts = nowIso();
-  const status = dead ? "dead" : "failed";
-  const message = (error instanceof Error ? error.message : String(error)).slice(0, 2_000);
-  await db.batch([
-    db
-      .prepare(`UPDATE memory_sync_runs SET status = ?, error = ?, updated_at = ? WHERE task_id = ?`)
-      .bind(status, message, ts, taskId),
-    db
-      .prepare(`UPDATE generation_tasks SET nmem_sync_status = ?, nmem_error = ?, updated_at = ? WHERE id = ?`)
-      .bind(status, message, ts, taskId),
-  ]);
-}
-
+/** Core-memory status for the play UI (Hermes R2 stores mirrored into D1). */
 export async function memoryStatus(db: D1Database, sessionId: string) {
-  const [counts, recall, sync] = await Promise.all([
-    db
-      .prepare(
-        `SELECT scope, COUNT(*) AS count FROM memories
-         WHERE workspace_id = (SELECT workspace_id FROM sessions WHERE id = ?) AND status = 'active'
-         GROUP BY scope`,
-      )
-      .bind(sessionId)
-      .all<{ scope: string; count: number }>(),
-    db
-      .prepare(
-        `SELECT space_id, recalled_count, created_at FROM memory_recall_events
-         WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`,
-      )
-      .bind(sessionId)
-      .first<{ space_id: string; recalled_count: number; created_at: string }>(),
-    db
-      .prepare(
-        `SELECT status, space_id, core_memory_count, error, updated_at FROM memory_sync_runs
-         WHERE session_id = ? ORDER BY updated_at DESC LIMIT 1`,
-      )
-      .bind(sessionId)
-      .first<{
-        status: string;
-        space_id: string;
-        core_memory_count: number;
-        error: string | null;
-        updated_at: string;
-      }>(),
-  ]);
+  const counts = await db
+    .prepare(
+      `SELECT scope, COUNT(*) AS count FROM memories
+       WHERE workspace_id = (SELECT workspace_id FROM sessions WHERE id = ?) AND status = 'active'
+       GROUP BY scope`,
+    )
+    .bind(sessionId)
+    .all<{ scope: string; count: number }>();
   return {
     core: Object.fromEntries((counts.results || []).map((row) => [row.scope, Number(row.count)])),
-    recall: recall || null,
-    sync: sync || null,
+    recall: null,
+    sync: null,
   };
 }

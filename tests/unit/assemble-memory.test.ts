@@ -41,11 +41,11 @@ describe("character memory assembly", () => {
     expect(result.text).not.toContain("摩托杂志");
   });
 
-  it("freezes core memory in the epoch checkpoint and keeps per-turn recall separate", () => {
+  it("freezes core memory in the epoch checkpoint and keeps turn context without nmem recall", () => {
     const pack: WorldPack = {
       id: "uma",
       name: "日常训练",
-      nmem_space: "rp-mem",
+      nmem_space: null,
       player_name: "训练员",
       cast: [],
       lore_token_budget: null,
@@ -60,16 +60,16 @@ describe("character memory assembly", () => {
       scene,
       [],
       [],
-      "铃鹿曾提到想吃早餐",
       [],
       "继续晨练",
     );
 
     expect(result.epoch_checkpoint).toContain("当前状态");
     expect(result.epoch_checkpoint).toContain("每周一与训练员晨练");
-    expect(result.epoch_checkpoint).not.toContain("想吃早餐");
-    expect(result.turn_context).toContain("想吃早餐");
-    expect(result.turn_context).not.toContain("每周一与训练员晨练");
+    expect(result.epoch_checkpoint).not.toContain("Nowledge Mem");
     expect(result.turn_context).not.toContain("当前状态");
+    expect(result.turn_context).not.toContain("每周一与训练员晨练");
+    expect(result.system).toContain("每周一与训练员晨练");
+    expect(result.system).not.toContain("Nowledge Mem");
   });
 });

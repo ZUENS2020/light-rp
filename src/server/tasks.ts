@@ -159,7 +159,7 @@ export async function createTurnTask(
         `INSERT INTO generation_tasks (
            id, workspace_id, session_id, kind, idempotency_key, user_text, target_message_id, status,
            model_snapshot_json, output_contract_tokens, nmem_sync_status, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 'pending', ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 'not_requested', ?, ?)`,
       )
       .bind(
         taskId,
@@ -226,7 +226,7 @@ export async function insertPending(
       `INSERT INTO generation_tasks (
          id, workspace_id, session_id, kind, idempotency_key, user_text, status,
          model_snapshot_json, output_contract_tokens, nmem_sync_status, created_at, updated_at
-       ) VALUES (?, ?, ?, 'turn', ?, ?, 'pending', ?, ?, 'pending', ?, ?)`,
+       ) VALUES (?, ?, ?, 'turn', ?, ?, 'pending', ?, ?, 'not_requested', ?, ?)`,
     )
     .bind(
       input.id,

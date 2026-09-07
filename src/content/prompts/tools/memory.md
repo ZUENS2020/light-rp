@@ -15,7 +15,7 @@ Actions:
 Targets:
 - world: shared world facts (MEMORY.md)
 - player: what the world has learned about the player (PLAYER_MEMORY.md), never the user's own setting
-- character: requires `character_id` from the cast
+- character: requires `character_id` from the cast; unknown ids are rejected
 
-Keep entries short. Prefer one `operations` batch when consolidating: remove/replace stale entries and add the new fact together; the final character budget is checked atomically. If a write fails, use the returned live entries to revise the batch, but stop after three failed attempts and continue the reply. Writes are durable immediately; the prompt epoch keeps a frozen core snapshot and receives later memory changes as append-only hidden events. nmem is an additive external recall provider, not a replacement for these curated stores.
+Keep entries short. Prefer one `operations` batch when consolidating: remove/replace stale entries and add the new fact together; the final character budget is checked atomically. If a write fails, use the returned live entries to revise the batch, but stop after three failed attempts and continue the reply. Writes are durable immediately; the prompt epoch keeps a frozen core snapshot and receives later memory changes as append-only hidden events.
 Duplicate or near-duplicate facts should not be added again.

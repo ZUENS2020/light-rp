@@ -1,6 +1,5 @@
 import { parseYaml, stringifyYaml } from "./util";
 import type { R2Fs } from "../adapters/r2";
-import { DEFAULT_NMEM_SPACE_ID, selectedNmemSpace } from "./memory";
 
 export type CastMember = {
   id: string;
@@ -887,7 +886,7 @@ export async function loadPack(fs: R2Fs, id: string): Promise<WorldPack> {
   return {
     id: asStr(merged.id || id),
     name: asStr(merged.name || id),
-    nmem_space: space ? asStr(space) : DEFAULT_NMEM_SPACE_ID,
+    nmem_space: space ? asStr(space) : null,
     player_name: asStr(merged.player_name || "你"),
     cast,
     lore_token_budget: merged.lore_token_budget != null ? Number(merged.lore_token_budget) : null,
@@ -1108,7 +1107,7 @@ export async function loadSession(
   return {
     messages,
     thread_id: meta.thread_id ? String(meta.thread_id) : null,
-    nmem_space: meta.nmem_space ? String(meta.nmem_space) : DEFAULT_NMEM_SPACE_ID,
+    nmem_space: meta.nmem_space ? String(meta.nmem_space) : null,
     primary_character: meta.primary_character ? String(meta.primary_character) : null,
     title: String(meta.title || ""),
     updated: String(meta.updated || ""),
@@ -1138,8 +1137,10 @@ export async function saveSession(
         thread_id: extra.thread_id !== undefined ? extra.thread_id : (previous?.thread_id ?? null),
         nmem_space:
           extra.nmem_space !== undefined
-            ? selectedNmemSpace(extra.nmem_space)
-            : selectedNmemSpace(previous?.nmem_space),
+            ? extra.nmem_space
+              ? String(extra.nmem_space)
+              : null
+            : previous?.nmem_space ?? null,
         primary_character:
           extra.primary_character !== undefined ? extra.primary_character : (previous?.primary_character ?? null),
         title,
@@ -1196,7 +1197,7 @@ export async function listSessions(fs: R2Fs): Promise<SessionInfo[]> {
         id,
         title: stored && stored !== "新会话" ? stored : String(meta.preview || "").slice(0, 32) || stored || "新会话",
         messages: Number(meta.message_count),
-        nmem_space: meta.nmem_space ? String(meta.nmem_space) : DEFAULT_NMEM_SPACE_ID,
+        nmem_space: meta.nmem_space ? String(meta.nmem_space) : null,
         updated: String(meta.updated || ""),
         preview: String(meta.preview || ""),
       });

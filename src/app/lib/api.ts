@@ -90,7 +90,6 @@ export type AppSettings = {
     timeout: number;
     breach: boolean;
   };
-  nmem: { enabled: boolean; space: string; binary: string };
   memory: { world_char_limit: number; player_char_limit: number; character_char_limit: number };
   worlds_dir: string;
   home: string;
@@ -117,7 +116,6 @@ export type SettingsPut = {
     timeout: number;
     breach: boolean;
   };
-  nmem: { enabled: boolean; space: string; binary: string };
   memory: { world_char_limit: number; player_char_limit: number; character_char_limit: number };
   worlds_dir: string;
   home: string;
@@ -136,7 +134,6 @@ export type PlayState = {
   session_title?: string;
   primary_character?: string | null;
   nmem_space: string | null;
-  nmem_available: boolean;
   warnings: string[];
   opening: string;
   scene: {
@@ -156,7 +153,6 @@ export type PlayState = {
   messages: { role: string; content: string; ts: string; task_id?: string }[];
   reply?: string;
   spotlight?: string[];
-  nmem_synced?: boolean;
   turn_warnings?: string[];
   remembered?: string[];
   state_updated?: boolean;
@@ -226,15 +222,9 @@ export type CacheReport = {
 };
 
 export type MemoryStatus = {
-  core: Partial<Record<"world" | "player" | "character" | "event" | "nmem", number>>;
-  recall: { space_id: string; recalled_count: number; created_at: string } | null;
-  sync: {
-    status: "pending" | "running" | "completed" | "failed" | "dead";
-    space_id: string;
-    core_memory_count: number;
-    error: string | null;
-    updated_at: string;
-  } | null;
+  core: Partial<Record<"world" | "player" | "character" | "event", number>>;
+  recall: null;
+  sync: null;
 };
 
 export type TurnAccepted = { task_id: string; status: GenerationTask["status"]; duplicate?: boolean };
@@ -288,10 +278,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   worlds: () => request<{ worlds: WorldSummary[] }>("/api/v2/worlds"),
   world: (id: string) => request<WorldSummary>(`/api/v2/worlds/${id}`),
-  spaces: () =>
-    request<{ available: boolean; error?: string; spaces: { id: string; name: string; key: string }[] }>(
-      "/api/v2/nmem/spaces",
-    ),
   open: (worldId: string, body: { new?: boolean; session_id?: string; space?: string | null }) =>
     request<PlayState>(`/api/v2/worlds/${worldId}/sessions`, { method: "POST", body: JSON.stringify(body) }),
   play: (worldId: string, sessionId: string) => request<PlayState>(`/api/v2/play/${worldId}/${sessionId}`),
@@ -334,10 +320,10 @@ export const api = {
     ),
   cache: (sessionId: string) => request<CacheReport>(`/api/v2/sessions/${sessionId}/cache`),
   memoryStatus: (sessionId: string) => request<MemoryStatus>(`/api/v2/sessions/${sessionId}/memory`),
-  syncMemory: (worldId: string, spaceId = "rp-mem") =>
-    request<{ ok: boolean; workspace_id: string; space_id: string; core_memory_count: number }>(
+  syncMemory: (worldId: string) =>
+    request<{ ok: boolean; workspace_id: string; space_id: string | null; core_memory_count: number }>(
       `/api/v2/worlds/${worldId}/memory/sync`,
-      { method: "POST", body: JSON.stringify({ space_id: spaceId }) },
+      { method: "POST", body: JSON.stringify({}) },
     ),
   registerModel: (model: Omit<AiModelConfig, "enabled" | "revision" | "source" | "metrics">) =>
     request<{ model: AiModelConfig; probe_required: boolean }>("/api/v2/models", {
