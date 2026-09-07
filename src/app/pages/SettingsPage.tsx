@@ -17,7 +17,6 @@ function settingsPayload(data: AppSettings): SettingsPut {
       timeout: data.llm.timeout,
       breach: data.llm.breach,
     },
-    nmem: { ...data.nmem },
     memory: { ...data.memory },
     worlds_dir: data.worlds_dir,
     home: data.home,
@@ -48,7 +47,6 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: api.models });
-  const spacesQuery = useQuery({ queryKey: ["nmem-spaces"], queryFn: api.spaces });
   const [form, setForm] = useState<SettingsPut | null>(null);
   const [modelDraft, setModelDraft] = useState<ModelDraft>(emptyModel);
   const [saved, setSaved] = useState("");
@@ -348,7 +346,7 @@ export function SettingsPage() {
             >
               R18G 成年虚构层
             </Checkbox>
-            <Hint>稳定规则会进入 prompt epoch 前缀；动态状态、世界书与 nmem 召回只追加为隐藏事件。</Hint>
+            <Hint>稳定规则会进入 prompt epoch 前缀；动态状态与世界书只追加为隐藏事件。</Hint>
             <div className="grid gap-4 sm:grid-cols-3">
               <NumberField
                 id="temperature"
@@ -375,35 +373,6 @@ export function SettingsPage() {
             </div>
           </fieldset>
 
-          <fieldset className="settings-section">
-            <legend>Nowledge Mem</legend>
-            <Checkbox
-              id="nmem-enabled"
-              checked={form.nmem.enabled}
-              onChange={(checked) => setForm({ ...form, nmem: { ...form.nmem, enabled: checked } })}
-            >
-              启用独立 nmem Queue
-            </Checkbox>
-            <Field
-              id="nmem-space"
-              label="默认空间"
-              hint={spacesQuery.data?.available ? "生成提交后异步同步。" : spacesQuery.data?.error || "nmem 未连通"}
-            >
-              <Input
-                id="nmem-space"
-                list="nmem-spaces"
-                value={form.nmem.space}
-                onChange={(event) => setForm({ ...form, nmem: { ...form.nmem, space: event.target.value } })}
-              />
-              <datalist id="nmem-spaces">
-                {(spacesQuery.data?.spaces || []).map((space) => (
-                  <option key={space.id} value={space.id}>
-                    {space.name}
-                  </option>
-                ))}
-              </datalist>
-            </Field>
-          </fieldset>
 
           <fieldset className="settings-section">
             <legend>预算与记忆</legend>

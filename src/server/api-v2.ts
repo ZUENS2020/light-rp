@@ -18,29 +18,16 @@ import {
   upsertModel,
 } from "./models";
 import { ActiveTaskConflict, createTurnTask, getActiveTask, getTask, getTaskByIdempotency, insertPending, listMessages, publishTask, replaceSessionTranscriptProjection } from "./tasks";
-import { memoryStatus } from "./memory";
-import { mirrorCoreMemorySnapshot } from "./memory";
+import { memoryStatus, mirrorCoreMemorySnapshot } from "./memory";
 import {
   loadLorebookText,
   loadMemory,
   loadPack,
   loadSession,
-  listSessions,
-  saveCast,
   saveSession,
-  saveWorldMeta,
   type WorldPack,
 } from "../core/domain";
-import {
-  listNmemSpaces,
-  loadNmemIndex,
-  resolveSpaceId,
-  saveNmemIndex,
-  syncMemorySnapshotToNmem,
-} from "../adapters/nmem";
 import { workspaceFs } from "../adapters/r2";
-import { loadSettings } from "./settings";
-import { selectedNmemSpace } from "../core/memory";
 import { isUnknownSlashCommand, parseSystemCommand } from "../core/commands";
 
 type App = Hono<{ Bindings: Env }>;
@@ -357,58 +344,18 @@ export function registerV2Routes(app: App): void {
   app.get("/api/v2/sessions/:sid/memory", async (c) => c.json(await memoryStatus(c.env.DB, c.req.param("sid"))));
 
   app.post("/api/v2/worlds/:id/memory/sync", async (c) => {
-    const input = await body(c, memorySyncSchema);
+    await body(c, memorySyncSchema);
     const workspaceId = c.req.param("id");
     const fs = workspaceFs(c.env.BUCKET, workspaceId);
-    const [pack, settings, listed] = await Promise.all([
-      loadPack(fs, workspaceId),
-      loadSettings(c.env.BUCKET),
-      listNmemSpaces(c.env),
-    ]);
-    if (!listed.available) throw new HTTPException(503, { message: listed.error || "nmem unavailable" });
-    const spaceId = resolveSpaceId(
-      selectedNmemSpace(input.space_id, pack.nmem_space, settings.nmem.space),
-      listed.spaces,
-    );
-    if (!spaceId || !listed.spaces.some((space) => space.id === spaceId)) {
-      throw new HTTPException(400, { message: `nmem space '${spaceId || ""}' is unavailable` });
-    }
-    pack.nmem_space = spaceId;
-    await Promise.all([saveWorldMeta(fs, pack), saveCast(fs, pack)]);
-    const sessions = await listSessions(fs);
-    for (const session of sessions) {
-      const loaded = await loadSession(fs, session.id);
-      await saveSession(fs, session.id, loaded.messages, {
-        thread_id: loaded.thread_id,
-        nmem_space: spaceId,
-        primary_character: loaded.primary_character,
-        title: loaded.title,
-      });
-    }
+    const pack = await loadPack(fs, workspaceId);
     const memory = await loadMemory(fs);
-    const synced = await syncMemorySnapshotToNmem(
-      c.env,
-      spaceId,
-      await loadNmemIndex((path) => fs.get(path)),
-      workspaceId,
-      memory,
-    );
-    await saveNmemIndex((path, text, type) => fs.put(path, text, type), synced.index);
     const mirrored = await mirrorCoreMemorySnapshot(c.env.DB, { workspaceId, snapshot: memory });
-    const ts = new Date().toISOString();
-    await c.env.DB.batch([
-      c.env.DB.prepare(`UPDATE workspaces SET nmem_space = ?, updated_at = ? WHERE id = ?`).bind(
-        spaceId,
-        ts,
-        workspaceId,
-      ),
-      c.env.DB.prepare(`UPDATE sessions SET nmem_space = ?, updated_at = ? WHERE workspace_id = ?`).bind(
-        spaceId,
-        ts,
-        workspaceId,
-      ),
-    ]);
-    return c.json({ ok: true, workspace_id: workspaceId, space_id: spaceId, core_memory_count: mirrored });
+    return c.json({
+      ok: true,
+      workspace_id: workspaceId,
+      space_id: pack.nmem_space,
+      core_memory_count: mirrored,
+    });
   });
 
   app.post("/api/v2/sessions/:sid/prompt-epoch", async (c) => {
@@ -448,7 +395,7 @@ export async function projectWorkspaceContent(env: Env, pack: WorldPack): Promis
     id: pack.id,
     name: pack.name,
     playerName: pack.player_name,
-    nmemSpace: selectedNmemSpace(pack.nmem_space),
+    nmemSpace: pack.nmem_space || null,
     primaryCharacterId: pack.primary,
   });
   const fs = workspaceFs(env.BUCKET, pack.id);

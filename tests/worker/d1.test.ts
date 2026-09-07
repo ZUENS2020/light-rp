@@ -21,11 +21,8 @@ import {
   replaceSessionTranscriptProjection,
 } from "../../src/server/tasks";
 import {
-  beginNmemSync,
-  completeNmemSync,
   memoryStatus,
   mirrorCoreMemorySnapshot,
-  recordMemoryRecall,
 } from "../../src/server/memory";
 import { appendToolCallEvent, preparePrompt } from "../../src/server/prompt-state";
 
@@ -279,7 +276,7 @@ describe("D1 task and model integration", () => {
     ]);
   });
 
-  it("keeps OOC visible without adding it to the RP prompt or nmem lifecycle", async () => {
+  it("keeps OOC visible without adding it to the RP prompt", async () => {
     const id = await seedSession();
     const created = await createTurnTask(env.DB, {
       workspaceId: "world-1",
@@ -364,7 +361,7 @@ describe("D1 task and model integration", () => {
     expect(count?.value).toBe(1);
   });
 
-  it("tracks the Hermes-style recall and asynchronous nmem lifecycle", async () => {
+  it("mirrors Hermes core memory into D1 without nmem lifecycle writes", async () => {
     const id = await seedSession();
     const created = await createTurnTask(env.DB, {
       workspaceId: "world-1",
@@ -372,43 +369,20 @@ describe("D1 task and model integration", () => {
       text: "还记得约定吗",
       idempotencyKey: "memory-turn",
     });
-    await recordMemoryRecall(env.DB, {
-      workspaceId: "world-1",
-      sessionId: id,
-      taskId: created.task.id,
-      spaceId: "rp-mem",
-      query: "还记得约定吗",
-      rows: [{ id: "remote-1", content: "约定在周末见面" }],
-    });
-    await beginNmemSync(env.DB, {
-      taskId: created.task.id,
-      workspaceId: "world-1",
-      sessionId: id,
-      spaceId: "rp-mem",
-      attempt: 1,
-    });
     const count = await mirrorCoreMemorySnapshot(env.DB, {
       workspaceId: "world-1",
       sessionId: id,
       taskId: created.task.id,
       snapshot: { world: ["港口仍封锁"], player: ["玩家不喝酒"], characters: { mei: ["记得周末约定"] } },
     });
-    await completeNmemSync(env.DB, {
-      taskId: created.task.id,
-      coreMemoryCount: count,
-      turnExternalId: "turn-1",
-      threadId: "thread-1",
-    });
-
+    expect(count).toBe(3);
     expect(await memoryStatus(env.DB, id)).toMatchObject({
       core: { world: 1, player: 1, character: 1 },
-      recall: { space_id: "rp-mem", recalled_count: 1 },
-      sync: { status: "completed", space_id: "rp-mem", core_memory_count: 3 },
+      recall: null,
+      sync: null,
     });
     expect(await getTask(env.DB, created.task.id)).toMatchObject({
-      nmem_sync_status: "completed",
-      nmem_memory_count: 3,
-      nmem_recall_count: 1,
+      nmem_sync_status: "not_requested",
     });
   });
 

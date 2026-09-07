@@ -1,6 +1,5 @@
 import { workspaceFs } from "../adapters/r2";
 import { stringifyYaml, workspaceIdOk } from "../core/util";
-import { DEFAULT_NMEM_SPACE_ID } from "../core/memory";
 
 export async function createWorkspace(bucket: R2Bucket, id: string, name: string, playerName = "你"): Promise<void> {
   if (!workspaceIdOk(id)) throw new Error("工作区 id 只能用小写字母、数字和连字符");
@@ -13,7 +12,6 @@ export async function createWorkspace(bucket: R2Bucket, id: string, name: string
       id,
       name,
       primary: null,
-      nmem_space: DEFAULT_NMEM_SPACE_ID,
       lore_token_budget: 1024,
       lore_scan_depth: 4,
     }),

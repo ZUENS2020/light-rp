@@ -1,6 +1,5 @@
 import { DEFAULT_MODEL, affinityKey, type AiModelConfig } from "../core/ai";
 import { nowIso } from "../core/util";
-import { selectedNmemSpace } from "../core/memory";
 
 type ModelRow = Omit<AiModelConfig, "supports_tools" | "supports_reasoning" | "enabled" | "source"> & {
   supports_tools: number;
@@ -164,7 +163,7 @@ export async function ensureWorkspaceProjection(
       workspace.id,
       workspace.name,
       workspace.playerName,
-      selectedNmemSpace(workspace.nmemSpace),
+      workspace.nmemSpace || null,
       workspace.primaryCharacterId || null,
       `v2/workspaces/${workspace.id}`,
       ts,
@@ -201,7 +200,7 @@ export async function ensureSessionProjection(
       session.id,
       session.workspaceId,
       session.title,
-      selectedNmemSpace(session.nmemSpace),
+      session.nmemSpace || null,
       session.primaryCharacterId || null,
       affinity,
       ts,

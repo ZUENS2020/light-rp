@@ -66,9 +66,7 @@ describe("runtime model limits", () => {
 
   it("does not let callers mutate DEFAULT_SETTINGS through a clone", () => {
     const cloned = cloneAppSettings(DEFAULT_SETTINGS);
-    cloned.nmem.space = "mutated";
     cloned.llm.max_tokens = 1;
-    expect(DEFAULT_SETTINGS.nmem.space).not.toBe("mutated");
     expect(DEFAULT_SETTINGS.llm.max_tokens).toBe(16_384);
   });
 });

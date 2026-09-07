@@ -57,26 +57,12 @@ import {
   type AiUsage,
   type ResponseCacheStatus,
 } from "../core/ai";
-import {
-  formatNmemRecall,
-  listNmemSpaces,
-  loadNmemIndex,
-  resolveSpaceId,
-  saveNmemIndex,
-  searchNmem,
-  sessionThreadId,
-  syncFactToNmem,
-  syncThreadTurn,
-  syncTurnBodyToNmem,
-} from "../adapters/nmem";
 import { memoryToolSpec, PromptLibrary, turnCommitToolSpec } from "../core/prompts";
 import type { R2Fs } from "../adapters/r2";
 import { STORY_OUTPUT_TOKEN_FLOOR, type AppSettings } from "./settings";
 import { nowIso } from "../core/util";
 import { preparePrompt } from "./prompt-state";
 import { getCachedToolExecution, recordToolExecution } from "./tasks";
-import { selectedNmemSpace, shouldRecallMemory } from "../core/memory";
-import { recordMemoryRecall } from "./memory";
 import { parseSystemCommand, roleplayOnlyMessages } from "../core/commands";
 
 export type TurnOut = {
@@ -85,8 +71,6 @@ export type TurnOut = {
   messages: ChatMessage[];
   spotlight_ids: string[];
   warnings: string[];
-  nmem_synced: boolean;
-  nmem_available: boolean;
   truncated?: boolean;
   context_report?: ContextReport;
   ai_usage?: AiUsage;
@@ -100,7 +84,6 @@ export type TurnOut = {
 
 export type RunTurnOptions = {
   persistUser?: boolean;
-  deferNmemWrites?: boolean;
   ai?: {
     db: D1Database;
     taskId: string;
@@ -124,24 +107,7 @@ const OOC_SYSTEM = `你是 Light RP 的系统助手。当前请求明确处于 O
 直接、清楚地回答用户关于当前故事、角色关系、设定、玩法或应用操作的问题；可以讨论 RP，但不要扮演角色或继续叙事。
 不得推进时间、地点、人物行动或状态，不得虚构已发生事件，不得生成状态块，也不得提出或执行任何记忆修改。`;
 
-const NMEM_RECALL_DEADLINE_MS = 8_000;
 
-async function withinDeadline<T>(promise: Promise<T>, milliseconds: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`${label} 超时（${Math.round(milliseconds / 1_000)}s）`)),
-          milliseconds,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
 
 export { STORY_OUTPUT_TOKEN_FLOOR };
 
@@ -617,7 +583,7 @@ async function extractTurnCommit(
     },
   ];
   const commitMaxTokens = Math.min(1_536, effectiveOutputTokens(settings, options.model, "tool"));
-  const requestKind = memoryFeedback ? "correction" : "memory";
+  const requestKind = (memoryFeedback ? "correction" : "memory") as "correction" | "memory";
   const commitOptions = {
     ...options,
     requestKind,
@@ -694,48 +660,6 @@ export async function runTurn(
   const scene = await ensureSessionState(fs, sessionId, pack);
   const memory = await loadMemory(fs);
   const library = new PromptLibrary(overlays);
-  let listed: Awaited<ReturnType<typeof listNmemSpaces>> = { available: false, spaces: [] };
-  let spaceId: string | null = null;
-  let recall = "";
-  if (settings.nmem.enabled) {
-    try {
-      const outcome = await withinDeadline(
-        (async () => {
-          const registry = await listNmemSpaces(env);
-          const resolvedSpaceId = resolveSpaceId(
-            selectedNmemSpace(loaded.nmem_space, pack.nmem_space, settings.nmem.space),
-            registry.spaces,
-          );
-          const rows =
-            resolvedSpaceId && registry.available && shouldRecallMemory(userText)
-              ? await searchNmem(env, resolvedSpaceId, userText, 8, ["light-rp", `world:${pack.id}`])
-              : [];
-          return { registry, resolvedSpaceId, rows };
-        })(),
-        NMEM_RECALL_DEADLINE_MS,
-        "nmem 召回",
-      );
-      listed = outcome.registry;
-      spaceId = outcome.resolvedSpaceId;
-      recall = formatNmemRecall(outcome.rows);
-      if (opts?.ai && spaceId && outcome.rows.length) {
-        await recordMemoryRecall(opts.ai.db, {
-          workspaceId: pack.id,
-          sessionId,
-          taskId: opts.ai.taskId,
-          spaceId,
-          query: userText,
-          rows: outcome.rows,
-        });
-      }
-    } catch (err) {
-      listed = { available: false, spaces: [], error: err instanceof Error ? err.message : String(err) };
-      warnings.push(`nmem 召回失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  if (settings.nmem.enabled && !listed.available && !warnings.some((warning) => warning.startsWith("nmem 召回失败"))) {
-    warnings.push(`nmem 不可用: ${listed.error || "连接失败"}`);
-  }
   const mentionIds = parseMentions(userText, aliasMap(pack.cast));
   const primaryId = resolvePrimaryId(pack, scene, primaryCharacter);
   const primaryMember = primaryId ? pack.cast.find((item) => item.id === primaryId) : undefined;
@@ -779,7 +703,6 @@ export async function runTurn(
     scene,
     primaryCards,
     lore,
-    recall,
     historyMessages
       .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
       .map((m) => ({ role: m.role, content: m.content })),
@@ -818,17 +741,6 @@ export async function runTurn(
     stablePrefixTokens = prepared.stablePrefixTokens;
     volatileTokens = prepared.volatileTokens;
   }
-  let nmemIndex = await loadNmemIndex((path) => fs.get(path));
-  const syncNmem = async (target: string, characterId: string | null, live: string[]) => {
-    if (opts?.deferNmemWrites) return;
-    if (!spaceId) return;
-    try {
-      nmemIndex = await syncFactToNmem(env, spaceId, nmemIndex, pack.id, target, characterId, live);
-      await saveNmemIndex((path, text, type) => fs.put(path, text, type), nmemIndex);
-    } catch (err) {
-      warnings.push(`nmem 记忆同步失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
   const gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, {
     model: opts?.ai?.model,
     affinityKey: affinity,
@@ -894,15 +806,6 @@ export async function runTurn(
     if (batch.success) {
       appliedMemoryOps = batch.applied;
       await persistMemoryChanges(fs, memory, batch.touched);
-      for (const touched of batch.touched) {
-        const live =
-          touched.target === "world"
-            ? memory.world
-            : touched.target === "player"
-              ? memory.player
-              : memory.characters[touched.characterId || ""] || [];
-        await syncNmem(touched.target, touched.characterId, live);
-      }
       remembered.push(
         ...batch.applied
           .filter((operation) => operation.action !== "remove")
@@ -1014,34 +917,7 @@ export async function runTurn(
     warnings,
     ts: nowIso(),
   });
-  let threadId = loaded.thread_id;
-  let nmemSynced = false;
-  if (spaceId && listed.available && !opts?.deferNmemWrites) {
-    threadId = threadId || sessionThreadId(pack.id, sessionId);
-    try {
-      await syncTurnBodyToNmem(env, spaceId, pack.id, sessionId, userText, replyText);
-      nmemSynced = true;
-    } catch (err) {
-      warnings.push(`nmem 正文写入失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    const threadJob = syncThreadTurn(
-      env,
-      spaceId,
-      loaded.thread_id,
-      threadId,
-      `Light RP / ${pack.name} / ${sessionId}`,
-      [
-        { role: "user", content: userText },
-        { role: "assistant", content: replyText },
-      ],
-      `${sessionId}:${turnNumber}`,
-    ).catch((err) => {
-      warnings.push(`nmem thread 同步失败: ${err instanceof Error ? err.message : String(err)}`);
-    });
-    const willCompact = turnNumber >= settings.compact_after_turns;
-    if (waitUntil && !willCompact) waitUntil(threadJob);
-    else await threadJob;
-  }
+  const threadId = loaded.thread_id;
   await saveSession(fs, sessionId, nextMessages, {
     thread_id: threadId,
     nmem_space: loaded.nmem_space,
@@ -1059,10 +935,9 @@ export async function runTurn(
         { ...loaded, thread_id: threadId, primary_character: primaryCharacter },
         library,
         settings,
-        pack.id,
+        pack,
         waitUntil,
         opts?.ai ? { model: opts.ai.model, affinityKey: affinity, requestKind: "compact" } : undefined,
-        opts?.deferNmemWrites === true,
       );
       if (opts?.ai) rotatePromptEpochReason = "context_compacted";
     } catch (err) {
@@ -1097,8 +972,6 @@ export async function runTurn(
     messages: nextMessages,
     spotlight_ids: spotlightIds,
     warnings,
-    nmem_synced: nmemSynced,
-    nmem_available: listed.available,
     truncated,
     context_report: assembled.report,
     ai_usage: addUsage(gm.usage, commitUsage),
@@ -1121,19 +994,48 @@ function withPhiMsgs(messages: LlmMessage[], phi: string): LlmMessage[] {
   return phi ? [...messages, { role: "system", content: phi }] : messages;
 }
 
+function resolveMemoryCharacterId(
+  pack: WorldPack | null | undefined,
+  raw: string | null,
+): { ok: true; characterId: string | null } | { ok: false; message: string } {
+  if (!raw) return { ok: false, message: "character target requires character_id" };
+  if (!pack) return { ok: true, characterId: raw };
+  const member = pack.cast.find(
+    (item) => item.id === raw || item.name === raw || item.aliases.some((alias) => alias === raw),
+  );
+  if (!member) return { ok: false, message: `unknown character_id '${raw}' — use an id from the cast` };
+  return { ok: true, characterId: member.id };
+}
+
 async function runMemoryTool(
   fs: R2Fs,
   memory: MemoryStore,
   settings: AppSettings,
   name: string,
   args: Record<string, unknown>,
-  onChange?: (target: string, characterId: string | null, live: string[]) => Promise<void>,
+  pack?: WorldPack | null,
 ): Promise<string> {
   if (name !== "memory") return JSON.stringify({ success: false, error: `unknown tool: ${name}` });
   const target = String(args.target || "");
-  const characterId = args.character_id ? String(args.character_id) : null;
+  if (target === "user_setting" || target === "player_setting" || target === "PLAYER.md") {
+    return JSON.stringify({
+      success: false,
+      message: "PLAYER.md is player-authored and cannot be modified by the memory tool",
+      current_entries: [],
+    });
+  }
   if (target !== "world" && target !== "player" && target !== "character") {
     return JSON.stringify({ success: false, message: `unknown target: ${target}`, current_entries: [] });
+  }
+  let characterId = args.character_id ? String(args.character_id) : null;
+  if (target === "character") {
+    const resolved = resolveMemoryCharacterId(pack, characterId);
+    if (!resolved.ok) {
+      return JSON.stringify({ success: false, message: resolved.message, current_entries: [] });
+    }
+    characterId = resolved.characterId;
+  } else {
+    characterId = null;
   }
   const typedTarget = target as MemoryTarget;
   const limits = {
@@ -1161,20 +1063,7 @@ async function runMemoryTool(
         oldText: String(operation.old_text || ""),
       }));
     const batch = applyMemoryBatch(memory, operations, limits);
-    if (batch.success) {
-      await persistMemoryChanges(fs, memory, batch.touched);
-      if (onChange) {
-        for (const touched of batch.touched) {
-          const live =
-            touched.target === "world"
-              ? memory.world
-              : touched.target === "player"
-                ? memory.player
-                : memory.characters[touched.characterId || ""] || [];
-          await onChange(touched.target, touched.characterId, live);
-        }
-      }
-    }
+    if (batch.success) await persistMemoryChanges(fs, memory, batch.touched);
     return JSON.stringify({
       success: batch.success,
       done: batch.success,
@@ -1195,10 +1084,7 @@ async function runMemoryTool(
     characterId,
     limits,
   );
-  if (result.success) {
-    await persistMemory(fs, memory, target, characterId);
-    if (onChange) await onChange(target, characterId, result.live);
-  }
+  if (result.success) await persistMemory(fs, memory, target, characterId);
   return JSON.stringify({ success: result.success, message: result.message, target, live: result.live });
 }
 
@@ -1211,10 +1097,9 @@ export async function runCompact(
   loaded: { thread_id: string | null; nmem_space: string | null; primary_character?: string | null },
   library: PromptLibrary,
   settings: AppSettings,
-  worldId = "",
-  waitUntil?: (job: Promise<unknown>) => void,
+  pack: WorldPack,
+  _waitUntil?: (job: Promise<unknown>) => void,
   aiOptions?: AiRequestOptions,
-  deferNmemWrites = false,
 ): Promise<string> {
   const outputTokens = effectiveOutputTokens(settings, aiOptions?.model, "compact");
   const roleplayMessages = roleplayOnlyMessages(messages);
@@ -1228,13 +1113,7 @@ export async function runCompact(
   const phi = breachPhi(library, settings.llm.breach);
   let flushSystem = library.render("memory_flush.md", values);
   if (extra) flushSystem = `${extra}\n\n${flushSystem}`;
-  const listed =
-    settings.nmem.enabled && !deferNmemWrites ? await listNmemSpaces(env) : { available: false, spaces: [] };
-  const spaceId =
-    settings.nmem.enabled && !deferNmemWrites
-      ? resolveSpaceId(selectedNmemSpace(loaded.nmem_space, settings.nmem.space), listed.spaces)
-      : null;
-  let nmemIndex = await loadNmemIndex((path) => fs.get(path));
+  // Before compact: flush durable facts into bounded MemoryStore (Hermes).
   await toolLoop(
     env,
     [
@@ -1242,12 +1121,7 @@ export async function runCompact(
       { role: "user", content: library.render("memory_flush_user.md", values) },
     ],
     [memoryToolSpec(library)],
-    (name, args) =>
-      runMemoryTool(fs, memory, settings, name, args, async (target, characterId, live) => {
-        if (!spaceId) return;
-        nmemIndex = await syncFactToNmem(env, spaceId, nmemIndex, worldId || "world", target, characterId, live);
-        await saveNmemIndex((path, text, type) => fs.put(path, text, type), nmemIndex);
-      }),
+    (name, args) => runMemoryTool(fs, memory, settings, name, args, pack),
     settings.max_tool_rounds,
     phi,
     settings.llm.temperature,
@@ -1281,29 +1155,7 @@ export async function runCompact(
   const next = [{ role: "system", content: summary, ts: nowIso() }, ...kept];
   await saveSession(fs, sessionId, next, loaded);
   if (summary) await fs.put(`sessions/${sessionId}/summary.md`, `${summary}\n`);
-  if (spaceId && listed.available && summary) {
-    const job = addSummaryToNmem(env, spaceId, worldId || "world", sessionId, summary, loaded.thread_id).catch(
-      () => undefined,
-    );
-    if (waitUntil) waitUntil(job);
-    else await job;
-  }
   return summary;
-}
-
-async function addSummaryToNmem(
-  env: Env,
-  spaceId: string,
-  worldId: string,
-  sessionId: string,
-  summary: string,
-  threadId: string | null,
-): Promise<void> {
-  await syncTurnBodyToNmem(env, spaceId, worldId, sessionId, "（压缩摘要）", summary);
-  if (!threadId) return;
-  await syncThreadTurn(env, spaceId, threadId, threadId, `Light RP / ${worldId} / ${sessionId}`, [
-    { role: "system", content: summary },
-  ]);
 }
 
 function asIdList(value: unknown): string[] {

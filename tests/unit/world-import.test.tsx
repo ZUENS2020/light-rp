@@ -22,7 +22,6 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("SillyTavern import", () => {
   it("uploads JSON cards through the V2 import API and reports imported assets", async () => {
-    vi.spyOn(api, "spaces").mockResolvedValue({ available: true, spaces: [] });
     vi.spyOn(api, "importFiles").mockResolvedValue({
       ...world,
       imported: { cards: ["mei"], lorebooks: [], warnings: [] },

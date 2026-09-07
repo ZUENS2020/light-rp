@@ -6,7 +6,6 @@ import {
   type ContextConfig,
   type MiniSelectConfig,
 } from "../core/budget";
-import { DEFAULT_NMEM_SPACE_ID, selectedNmemSpace } from "../core/memory";
 
 export type AppSettings = {
   llm: {
@@ -15,7 +14,6 @@ export type AppSettings = {
     timeout: number;
     breach: boolean;
   };
-  nmem: { enabled: boolean; space: string };
   memory: { world_char_limit: number; player_char_limit: number; character_char_limit: number };
   compact_after_turns: number;
   lore_scan_depth: number;
@@ -32,7 +30,6 @@ export const STORY_OUTPUT_TOKEN_FLOOR = 12_288;
 export const DEFAULT_SETTINGS: AppSettings = {
   // 16384 covers ~2000 汉字 of RP body plus GLM/OpenRouter reasoning tokens.
   llm: { temperature: 1, max_tokens: 16_384, timeout: 180, breach: true },
-  nmem: { enabled: true, space: DEFAULT_NMEM_SPACE_ID },
   memory: { world_char_limit: 2500, player_char_limit: 1400, character_char_limit: 1200 },
   compact_after_turns: 40,
   lore_scan_depth: 4,
@@ -47,7 +44,6 @@ export function cloneAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
     llm: { ...settings.llm },
-    nmem: { ...settings.nmem },
     memory: { ...settings.memory },
     context: parseContextConfig(settings.context),
     mini: parseMiniConfig(settings.mini),
@@ -58,19 +54,15 @@ export async function loadSettings(bucket: R2Bucket): Promise<AppSettings> {
   const obj = await bucket.get("v2/config/settings.json");
   if (!obj) return cloneAppSettings(DEFAULT_SETTINGS);
   try {
-    const raw = JSON.parse(await obj.text()) as Partial<AppSettings>;
+    const raw = JSON.parse(await obj.text()) as Partial<AppSettings> & { nmem?: unknown };
+    const { nmem: _ignoredNmem, ...rest } = raw;
     return cloneAppSettings({
       ...DEFAULT_SETTINGS,
-      ...raw,
-      llm: { ...DEFAULT_SETTINGS.llm, ...(raw.llm || {}) },
-      nmem: {
-        ...DEFAULT_SETTINGS.nmem,
-        ...(raw.nmem || {}),
-        space: selectedNmemSpace(raw.nmem?.space),
-      },
-      memory: { ...DEFAULT_SETTINGS.memory, ...(raw.memory || {}) },
-      context: parseContextConfig(raw.context || DEFAULT_CONTEXT),
-      mini: parseMiniConfig(raw.mini || DEFAULT_MINI),
+      ...rest,
+      llm: { ...DEFAULT_SETTINGS.llm, ...(rest.llm || {}) },
+      memory: { ...DEFAULT_SETTINGS.memory, ...(rest.memory || {}) },
+      context: parseContextConfig(rest.context || DEFAULT_CONTEXT),
+      mini: parseMiniConfig(rest.mini || DEFAULT_MINI),
     });
   } catch {
     return cloneAppSettings(DEFAULT_SETTINGS);
@@ -96,7 +88,6 @@ export function publicSettings(env: Env, settings: AppSettings, defaultModelConf
       timeout: settings.llm.timeout,
       breach: settings.llm.breach,
     },
-    nmem: { enabled: settings.nmem.enabled, space: settings.nmem.space, binary: "nmem" },
     memory: settings.memory,
     worlds_dir: "r2://lightrp/v2/workspaces",
     home: "r2://lightrp/v2",

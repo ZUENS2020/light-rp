@@ -40,7 +40,6 @@ const play = {
   session_title: "雨夜",
   primary_character: "mei",
   nmem_space: null,
-  nmem_available: true,
   warnings: [],
   opening: "",
   scene: { location: "钟表铺", time: "深夜", weather: "雨", present: ["mei"], scene: "铜灯微亮", notes: "" },

@@ -29,16 +29,6 @@ import {
 import { openingFor, runCompact, runOoc, runTurn, type TurnOut } from "./engine";
 import { turnErrorStatus } from "../adapters/ai-gateway";
 import { importStFiles, type ImportFile } from "../core/sillytavern-import";
-import {
-  listNmemSpaces,
-  loadNmemIndex,
-  resolveSpaceId,
-  saveNmemIndex,
-  sessionThreadId,
-  syncMemorySnapshotToNmem,
-  syncThreadTurn,
-  syncTurnBodyToNmem,
-} from "../adapters/nmem";
 import { PromptLibrary } from "../core/prompts";
 import { listWorkspaceIds, workspaceFs } from "../adapters/r2";
 import { createWorkspace } from "./seed";
@@ -58,9 +48,7 @@ import { MAX_GENERATION_ATTEMPTS } from "./generation-recovery";
 import { nowIso, parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "../core/util";
 import { projectWorkspaceAndSession, projectWorkspaceContent, registerV2Routes } from "./api-v2";
 import type { AiModelConfig, AiUsage, ResponseCacheStatus } from "../core/ai";
-import { sha256 } from "../core/ai";
-import { selectedNmemSpace } from "../core/memory";
-import { beginNmemSync, completeNmemSync, failNmemSync, mirrorCoreMemorySnapshot } from "./memory";
+import { mirrorCoreMemorySnapshot } from "./memory";
 import { getApplicationDefaultModel, sessionRuntime } from "./models";
 import { isOocMessage } from "../core/commands";
 import { createPromptEpoch } from "./prompt-state";
@@ -196,7 +184,6 @@ async function playState(
     session_title: sessionInfoFrom(sessionId, loaded).title,
     primary_character: primaryCharacter,
     nmem_space: loaded.nmem_space,
-    nmem_available: extra.nmem_available != null ? Boolean(extra.nmem_available) : false,
     warnings: Array.isArray(lastTurn?.warnings) ? lastTurn.warnings.map(String) : [],
     opening: openingFor(cards, pack.player_name, primaryCharacter),
     scene,
@@ -228,31 +215,22 @@ app.get("/api/v2/health", (c) => c.json({ status: "ok" }));
 
 app.get("/api/v2/settings", async (c) => {
   const settings = await loadSettings(c.env.BUCKET);
-  const listed = await listNmemSpaces(c.env);
   const defaultModel = await getApplicationDefaultModel(c.env.DB);
-  settings.nmem.space = resolveSpaceId(settings.nmem.space, listed.spaces) || "";
   return c.json(publicSettings(c.env, settings, defaultModel.id));
 });
 
 app.put("/api/v2/settings", async (c) => {
   const body = (await c.req.json()) as Partial<AppSettings> & {
     llm?: Partial<AppSettings["llm"]>;
-    nmem?: Partial<AppSettings["nmem"]>;
     memory?: Partial<AppSettings["memory"]>;
   };
   const previous = await loadSettings(c.env.BUCKET);
-  const listed = await listNmemSpaces(c.env);
-  const requestedSpace = body.nmem?.space ?? previous.nmem.space;
   const next: AppSettings = {
     llm: {
       temperature: Number(body.llm?.temperature ?? previous.llm.temperature),
       max_tokens: Number(body.llm?.max_tokens ?? previous.llm.max_tokens),
       timeout: Number(body.llm?.timeout ?? previous.llm.timeout),
       breach: body.llm?.breach != null ? Boolean(body.llm.breach) : previous.llm.breach,
-    },
-    nmem: {
-      enabled: body.nmem?.enabled != null ? Boolean(body.nmem.enabled) : previous.nmem.enabled,
-      space: resolveSpaceId(requestedSpace, listed.spaces) || "",
     },
     memory: {
       world_char_limit: Number(body.memory?.world_char_limit ?? previous.memory.world_char_limit),
@@ -271,8 +249,6 @@ app.put("/api/v2/settings", async (c) => {
   const defaultModel = await getApplicationDefaultModel(c.env.DB);
   return c.json(publicSettings(c.env, next, defaultModel.id));
 });
-
-app.get("/api/v2/nmem/spaces", async (c) => c.json(await listNmemSpaces(c.env)));
 
 app.get("/api/v2/worlds", async (c) => {
   const ids = await listWorkspaceIds(c.env.BUCKET);
@@ -606,17 +582,16 @@ app.post("/api/v2/worlds/:id/sessions", async (c) => {
     session_id?: string;
     space?: string | null;
   };
-  const listed = await listNmemSpaces(c.env);
-  const settings = await loadSettings(c.env.BUCKET);
-  const requested = body.space === undefined ? pack.nmem_space || settings.nmem.space : body.space;
-  const space = resolveSpaceId(requested, listed.spaces);
   let sessionId = body.session_id;
   if (!sessionId || body.new) {
     sessionId = sessionIdNow();
-    await saveSession(fs, sessionId, [], { nmem_space: space, primary_character: pack.primary });
+    await saveSession(fs, sessionId, [], {
+      nmem_space: body.space ?? pack.nmem_space,
+      primary_character: pack.primary,
+    });
     await ensureSessionState(fs, sessionId, pack);
   }
-  return c.json(await playState(c.env, fs, pack, sessionId, { nmem_available: listed.available }));
+  return c.json(await playState(c.env, fs, pack, sessionId));
 });
 
 app.get("/api/v2/worlds/:id/sessions", async (c) => {
@@ -682,11 +657,9 @@ app.post("/api/v2/play/:id/:sid/turn", async (c) => {
       return c.json({
         ...(await playState(c.env, fs, pack, sid, {
           context_report: result.context_report,
-          nmem_available: result.nmem_available,
         })),
         reply: result.text,
         spotlight: result.spotlight_ids,
-        nmem_synced: result.nmem_synced,
         turn_warnings: result.warnings,
         context_report: result.context_report,
       });
@@ -775,11 +748,9 @@ app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
       return c.json({
         ...(await playState(c.env, fs, pack, sid, {
           context_report: result.context_report,
-          nmem_available: result.nmem_available,
         })),
         reply: result.text,
         spotlight: result.spotlight_ids,
-        nmem_synced: result.nmem_synced,
         turn_warnings: result.warnings,
         context_report: result.context_report,
       });
@@ -836,14 +807,23 @@ app.post("/api/v2/play/:id/:sid/compact", async (c) => {
   const id = c.req.param("id");
   const sid = c.req.param("sid");
   const fs = workspaceFs(c.env.BUCKET, id);
+  const pack = await loadPack(fs, id);
   const loaded = await loadSession(fs, sid);
   const memory = await loadMemory(fs);
   const settings = await loadSettings(c.env.BUCKET);
   const library = new PromptLibrary(await overlays(fs));
-  const summaryText = await runCompact(c.env, fs, memory, loaded.messages, sid, loaded, library, settings, id, (job) =>
-    c.executionCtx.waitUntil(job),
+  const summaryText = await runCompact(
+    c.env,
+    fs,
+    memory,
+    loaded.messages,
+    sid,
+    loaded,
+    library,
+    settings,
+    pack,
+    (job) => c.executionCtx.waitUntil(job),
   );
-  const pack = await loadPack(fs, id);
   return c.json({ ...(await playState(c.env, fs, pack, sid)), summary: summaryText });
 });
 
@@ -851,8 +831,7 @@ app.post("/api/v2/play/:id/:sid/space", async (c) => {
   const body = (await c.req.json()) as { space?: string };
   const fs = workspaceFs(c.env.BUCKET, c.req.param("id"));
   const loaded = await loadSession(fs, c.req.param("sid"));
-  const listed = await listNmemSpaces(c.env);
-  const space = resolveSpaceId(body.space || null, listed.spaces);
+  const space = (body.space || "").trim() || null;
   await saveSession(fs, c.req.param("sid"), loaded.messages, { thread_id: loaded.thread_id, nmem_space: space });
   const pack = await loadPack(fs, c.req.param("id"));
   return c.json(await playState(c.env, fs, pack, c.req.param("sid")));
@@ -865,7 +844,7 @@ export default {
   },
   async queue(
     batch: MessageBatch<{
-      kind?: "generation" | "nmem";
+      kind?: "generation";
       taskId: string;
       workspaceId?: string;
       worldId?: string;
@@ -876,136 +855,6 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ) {
-    if (batch.queue === "lightrp-v2-nmem") {
-      for (const msg of batch.messages) {
-        try {
-          const payload = msg.body;
-          const workspaceId = payload.workspaceId || payload.worldId || "";
-          if (!workspaceId || !payload.userText || !payload.assistantText) {
-            msg.ack();
-            continue;
-          }
-          const fs = workspaceFs(env.BUCKET, workspaceId);
-          const loaded = await loadSession(fs, payload.sessionId);
-          const settings = await loadSettings(env.BUCKET);
-          if (!settings.nmem.enabled) {
-            msg.ack();
-            continue;
-          }
-          const listed = await listNmemSpaces(env);
-          if (!listed.available) throw new Error(listed.error || "nmem unavailable");
-          const spaceId = resolveSpaceId(selectedNmemSpace(loaded.nmem_space, settings.nmem.space), listed.spaces);
-          if (!spaceId || !listed.spaces.some((space) => space.id === spaceId)) {
-            throw new Error(`nmem space '${spaceId || ""}' is unavailable`);
-          }
-          await beginNmemSync(env.DB, {
-            taskId: payload.taskId,
-            workspaceId,
-            sessionId: payload.sessionId,
-            spaceId,
-            attempt: msg.attempts,
-          });
-          const threadId = loaded.thread_id || sessionThreadId(workspaceId, payload.sessionId);
-          const externalMemoryId = await syncTurnBodyToNmem(
-            env,
-            spaceId,
-            workspaceId,
-            payload.sessionId,
-            payload.userText,
-            payload.assistantText,
-            payload.taskId,
-          );
-          await syncThreadTurn(
-            env,
-            spaceId,
-            loaded.thread_id,
-            threadId,
-            `Light RP / ${workspaceId} / ${payload.sessionId}`,
-            [
-              { role: "user", content: payload.userText },
-              { role: "assistant", content: payload.assistantText },
-            ],
-            payload.taskId,
-          );
-          const memory = await loadMemory(fs);
-          const synced = await syncMemorySnapshotToNmem(
-            env,
-            spaceId,
-            await loadNmemIndex((path) => fs.get(path)),
-            workspaceId,
-            memory,
-          );
-          await saveNmemIndex((path, text, type) => fs.put(path, text, type), synced.index);
-          const mirroredCount = await mirrorCoreMemorySnapshot(env.DB, {
-            workspaceId,
-            sessionId: payload.sessionId,
-            taskId: payload.taskId,
-            snapshot: memory,
-          });
-          await saveSession(fs, payload.sessionId, loaded.messages, {
-            thread_id: threadId,
-            nmem_space: spaceId,
-            primary_character: loaded.primary_character,
-            title: loaded.title,
-          });
-          const ts = nowIso();
-          const content = `${payload.userText}\n\n${payload.assistantText}`;
-          await env.DB.batch([
-            env.DB.prepare(`UPDATE workspaces SET nmem_space = ?, updated_at = ? WHERE id = ?`).bind(
-              spaceId,
-              ts,
-              workspaceId,
-            ),
-            env.DB.prepare(`UPDATE sessions SET nmem_space = ?, updated_at = ? WHERE id = ?`).bind(
-              spaceId,
-              ts,
-              payload.sessionId,
-            ),
-            env.DB.prepare(
-              `INSERT INTO memories (
-                 id, workspace_id, session_id, character_id, scope, content, content_hash,
-                 importance, source, created_at, updated_at, memory_type, status, external_id,
-                 source_task_id, provenance_json
-               ) VALUES (?, ?, ?, NULL, 'nmem', ?, ?, 0.45, ?, ?, ?, 'event', 'active', ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                 content = excluded.content, content_hash = excluded.content_hash,
-                 source = excluded.source, updated_at = excluded.updated_at, status = 'active',
-                 external_id = excluded.external_id, source_task_id = excluded.source_task_id,
-                 provenance_json = excluded.provenance_json`,
-            ).bind(
-              `nmem:${payload.taskId}`,
-              workspaceId,
-              payload.sessionId,
-              content,
-              await sha256(content),
-              externalMemoryId ? `nmem:${externalMemoryId}` : "nmem",
-              ts,
-              ts,
-              externalMemoryId,
-              payload.taskId,
-              JSON.stringify({ origin: "sync_turn", space_id: spaceId, thread_id: threadId }),
-            ),
-          ]);
-          await completeNmemSync(env.DB, {
-            taskId: payload.taskId,
-            coreMemoryCount: mirroredCount,
-            turnExternalId: externalMemoryId,
-            threadId,
-          });
-          msg.ack();
-        } catch (error) {
-          await failNmemSync(env.DB, msg.body.taskId, error, msg.attempts >= 4).catch(() => undefined);
-          console.error("nmem queue sync failed", {
-            taskId: msg.body.taskId,
-            sessionId: msg.body.sessionId,
-            attempt: msg.attempts,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          msg.retry();
-        }
-      }
-      return;
-    }
     for (const msg of batch.messages) {
       let taskId = "";
       try {
@@ -1041,20 +890,12 @@ export default {
           .find((message) => message.role === "assistant" && message.task_id === taskId);
         if (persistedAssistant) {
           const diagnostics = await loadTurnDiagnostics(fs, sessionId);
-          await mirrorCoreMemorySnapshot(env.DB, {
-            workspaceId,
-            sessionId,
-            taskId,
-            snapshot: await loadMemory(fs),
-          });
           if (!ooc) {
-            await env.NMEM_QUEUE.send({
-              kind: "nmem",
-              taskId,
+            await mirrorCoreMemorySnapshot(env.DB, {
               workspaceId,
               sessionId,
-              userText: leased.user_text,
-              assistantText: persistedAssistant.content,
+              taskId,
+              snapshot: await loadMemory(fs),
             });
           }
           await completeTask(env.DB, taskId, {
@@ -1104,7 +945,6 @@ export default {
               (job) => ctx.waitUntil(job),
               {
                 persistUser: false,
-                deferNmemWrites: true,
                 ai: {
                   db: env.DB,
                   taskId,
@@ -1120,14 +960,6 @@ export default {
             sessionId,
             taskId,
             snapshot: await loadMemory(fs),
-          });
-          await env.NMEM_QUEUE.send({
-            kind: "nmem",
-            taskId,
-            workspaceId,
-            sessionId,
-            userText: leased.user_text,
-            assistantText: result.text,
           });
         }
         await completeTask(env.DB, taskId, {

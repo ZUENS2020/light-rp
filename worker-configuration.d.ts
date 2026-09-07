@@ -5,12 +5,9 @@ interface __BaseEnv_Env {
 	BUCKET: R2Bucket;
 	DB: D1Database;
 	GENERATE_QUEUE: Queue;
-	NMEM_QUEUE: Queue;
 	AI: Ai;
 	ASSETS: Fetcher;
 	AI_GATEWAY_ID: "sillytavern";
-	NMEM_API_URL: "https://necmem.zuens2020.work/remote-api";
-	NMEM_API_KEY: string;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
@@ -23,7 +20,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "AI_GATEWAY_ID" | "NMEM_API_URL" | "NMEM_API_KEY">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "AI_GATEWAY_ID">> {}
 }
 
 // Begin runtime types

@@ -7,7 +7,6 @@ export type SectionBudget = {
   lore: number;
   state: number;
   memory: number;
-  nmem: number;
   summary: number;
 };
 
@@ -77,7 +76,6 @@ export const DEFAULT_SECTION_BUDGET: SectionBudget = {
   lore: 3000,
   state: 800,
   memory: 2500,
-  nmem: 2500,
   summary: 2500,
 };
 
@@ -101,7 +99,7 @@ export const DEFAULT_MINI: MiniSelectConfig = {
   max_characters: 6,
 };
 
-export const TRIM_ORDER = ["lore", "memory", "mini_cards", "summary", "nmem", "world"] as const;
+export const TRIM_ORDER = ["lore", "memory", "mini_cards", "summary", "world"] as const;
 export const CARD_DROP_FIRST = ["mes_example", "first_mes", "backstory", "likes", "dislikes", "age"] as const;
 export const CARD_SECONDARY = ["description", "scenario"] as const;
 
@@ -226,7 +224,9 @@ export function fitMemorySections(
 
 export function parseContextConfig(raw: Partial<ContextConfig> | null | undefined): ContextConfig {
   const data = raw || {};
-  const budget = { ...DEFAULT_SECTION_BUDGET, ...(data.budget || {}) };
+  const mergedBudget = { ...DEFAULT_SECTION_BUDGET, ...(data.budget || {}) } as SectionBudget & { nmem?: number };
+  const { nmem: _legacyNmem, ...budgetRest } = mergedBudget;
+  const budget: SectionBudget = { ...DEFAULT_SECTION_BUDGET, ...budgetRest };
   const history = { ...DEFAULT_CONTEXT.history, ...(data.history || {}) };
   return {
     max_tokens: Number(data.max_tokens ?? DEFAULT_CONTEXT.max_tokens),

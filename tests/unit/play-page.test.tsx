@@ -61,7 +61,6 @@ const playState: PlayState = {
   session_title: "雨夜",
   primary_character: "mei",
   nmem_space: null,
-  nmem_available: true,
   warnings: [],
   opening: "",
   scene: { location: "钟表铺", time: "深夜", weather: "雨", present: ["mei"], scene: "铜灯微亮", notes: "" },
@@ -112,19 +111,13 @@ function stubApi() {
   });
   vi.spyOn(api, "memoryStatus").mockResolvedValue({
     core: { world: 1, player: 0, character: 0 },
-    recall: { space_id: "rp-mem", recalled_count: 2, created_at: "2026-08-30T00:00:00Z" },
-    sync: {
-      status: "completed",
-      space_id: "rp-mem",
-      core_memory_count: 1,
-      error: null,
-      updated_at: "2026-08-30T00:00:00Z",
-    },
+    recall: null,
+    sync: null,
   });
   vi.spyOn(api, "syncMemory").mockResolvedValue({
     ok: true,
     workspace_id: "world-1",
-    space_id: "rp-mem",
+    space_id: null,
     core_memory_count: 1,
   });
   vi.spyOn(api, "activeTask").mockResolvedValue({ task: null });
@@ -173,16 +166,16 @@ describe("Play Studio", () => {
     await waitFor(() => expect(screen.getByRole("combobox", { name: "选择下一条消息使用的模型" })).toBeDisabled());
   });
 
-  it("shows Hermes-style memory recall and synchronization status", async () => {
+  it("shows Hermes core memory status and D1 mirror sync", async () => {
     stubApi();
     const user = userEvent.setup();
     renderPlay();
 
     await user.click(await screen.findByRole("button", { name: "记忆" }));
-    expect(await screen.findByText("Hermes memory lifecycle")).toBeInTheDocument();
-    expect(screen.getByText("来自 rp-mem")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "重新同步到 RP-mem" }));
-    await waitFor(() => expect(api.syncMemory).toHaveBeenCalledWith("world-1", "rp-mem"));
+    expect(await screen.findByText("Hermes memory")).toBeInTheDocument();
+    expect(screen.getByText("R2 核心记忆 → D1 镜像")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重新镜像核心记忆到 D1" }));
+    await waitFor(() => expect(api.syncMemory).toHaveBeenCalledWith("world-1"));
   });
 
   it("executes local slash commands and sends OOC through the task API", async () => {

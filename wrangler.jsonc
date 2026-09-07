@@ -20,7 +20,6 @@
   },
   "vars": {
     "AI_GATEWAY_ID": "sillytavern",
-    "NMEM_API_URL": "https://necmem.zuens2020.work/remote-api",
   },
   "r2_buckets": [
     {
@@ -46,7 +45,6 @@
   "queues": {
     "producers": [
       { "binding": "GENERATE_QUEUE", "queue": "lightrp-v2-generate" },
-      { "binding": "NMEM_QUEUE", "queue": "lightrp-v2-nmem" },
     ],
     "consumers": [
       {
@@ -54,12 +52,6 @@
         "max_batch_size": 1,
         "max_retries": 3,
         "dead_letter_queue": "lightrp-v2-generate-dlq",
-      },
-      {
-        "queue": "lightrp-v2-nmem",
-        "max_batch_size": 5,
-        "max_retries": 3,
-        "dead_letter_queue": "lightrp-v2-nmem-dlq",
       },
     ],
   },
