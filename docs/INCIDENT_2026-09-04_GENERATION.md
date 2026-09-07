@@ -8,7 +8,7 @@ Worker Queue 消费者拿到租约后中途取消，D1 任务长期停在 `runni
 
 ## 防复发（已合入 main 的最小集）
 
-- 每分钟 cron 回收过期租约，以及超过三分钟仍未取得租约的 `pending`/`running` 任务。
+- 每 5 分钟 cron（`*/5 * * * *`）回收过期租约，以及超过三分钟仍未取得租约的 `pending`/`running` 任务；空闲 tick 不写 D1。
 - 同一 D1 batch 中重置 outbox `published_at` 与任务状态；健康租约不会被回收。
 - 占用中租约的重复投递直接 `ack`，由 D1 定时恢复兜底，不再空耗 Queue 重试。
 - 最多四次真实执行（`attempt_count`），耗尽后标 `dead` 并释放会话占用。

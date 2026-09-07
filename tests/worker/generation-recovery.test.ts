@@ -132,3 +132,32 @@ it("rolls back the outbox reset if task recovery cannot commit", async () => {
     await env.DB.prepare("DROP TRIGGER fail_recovery").run();
   }
 });
+
+it("writes nothing when flush finds no stale or unpublished work", async () => {
+  const task = await turn();
+  await leaseTask(env.DB, task.id, "healthy-owner");
+  await markOutboxPublished(env.DB, task.id);
+  const stamp = "2011-01-01T00:00:00.000Z";
+  await env.DB.prepare("UPDATE generation_tasks SET updated_at = ? WHERE id = ?").bind(stamp, task.id).run();
+  const publishedAt = await env.DB.prepare(
+    "SELECT published_at FROM outbox_events WHERE aggregate_id = ? AND event_type = 'generation.requested'",
+  )
+    .bind(task.id)
+    .first<string>("published_at");
+  const { runtime, send } = queueEnv();
+  await flushGenerationOutbox(runtime);
+  await recoverGenerationTasks(env.DB);
+  expect(send).not.toHaveBeenCalled();
+  expect(await getTask(env.DB, task.id)).toMatchObject({
+    status: "running",
+    lease_owner: "healthy-owner",
+    updated_at: stamp,
+  });
+  expect(
+    await env.DB.prepare(
+      "SELECT published_at FROM outbox_events WHERE aggregate_id = ? AND event_type = 'generation.requested'",
+    )
+      .bind(task.id)
+      .first("published_at"),
+  ).toBe(publishedAt);
+});
