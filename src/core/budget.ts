@@ -67,7 +67,8 @@ export type SectionBlock = {
   entry_labels?: string[];
 };
 
-export const DEFAULT_SECTION_BUDGET: SectionBudget = {
+/** Pre-GLM 32k-era section caps; used to detect stale R2 settings.json. */
+export const LEGACY_SECTION_BUDGET: SectionBudget = {
   system: 1500,
   world: 2500,
   user_setting: 1500,
@@ -79,25 +80,55 @@ export const DEFAULT_SECTION_BUDGET: SectionBudget = {
   summary: 2500,
 };
 
+/**
+ * Working prompt window for GLM-class models.
+ * Prefer 128k over the full ~1.3M provider window: full-window prompts are
+ * slow/expensive for RP turns, while 128k (4× the old 32k default) gives lore,
+ * memory, mini cards, summary, and history meaningful headroom.
+ */
+export const WORKING_CONTEXT_CAP = 131_072;
+export const LEGACY_DEFAULT_CONTEXT_MAX_TOKENS = 32_768;
+export const LEGACY_MINI_MAX_TOKENS = 1_200;
+
+/** Scaled ~4× from the 32k-era caps so section room tracks WORKING_CONTEXT_CAP. */
+export const DEFAULT_SECTION_BUDGET: SectionBudget = {
+  system: 6_000,
+  world: 10_000,
+  user_setting: 6_000,
+  primary_card: 16_000,
+  mini_cards: 4_800,
+  lore: 12_000,
+  state: 3_200,
+  memory: 10_000,
+  summary: 10_000,
+};
+
 export const DEFAULT_MEMORY_SPLIT: MemorySplitConfig = {
   world: 0.6,
   player: 0.4,
 };
 
 export const DEFAULT_CONTEXT: ContextConfig = {
-  max_tokens: 32768,
+  max_tokens: WORKING_CONTEXT_CAP,
+  // Runtime raises this to max(reserve, story output floor / llm max_tokens).
   generation_reserve: 4096,
   tool_reserve: 1500,
   budget: { ...DEFAULT_SECTION_BUDGET },
   memory_split: { ...DEFAULT_MEMORY_SPLIT },
-  history: { use_remaining: true, protect_recent_turns: 6 },
+  history: { use_remaining: true, protect_recent_turns: 10 },
 };
 
 export const DEFAULT_MINI: MiniSelectConfig = {
-  max_tokens: 1200,
+  max_tokens: 4_800,
   recent_turns: 4,
   max_characters: 6,
 };
+
+export function isLegacySectionBudget(budget: SectionBudget): boolean {
+  return (Object.keys(LEGACY_SECTION_BUDGET) as (keyof SectionBudget)[]).every(
+    (key) => Number(budget[key]) === LEGACY_SECTION_BUDGET[key],
+  );
+}
 
 export const TRIM_ORDER = ["lore", "memory", "mini_cards", "summary", "world"] as const;
 export const CARD_DROP_FIRST = ["mes_example", "first_mes", "backstory", "likes", "dislikes", "age"] as const;

@@ -8,11 +8,20 @@ import {
   type LlmMessage,
 } from "../core/assemble";
 import {
+  DEFAULT_CONTEXT,
+  DEFAULT_MINI,
+  DEFAULT_SECTION_BUDGET,
+  LEGACY_DEFAULT_CONTEXT_MAX_TOKENS,
+  LEGACY_MINI_MAX_TOKENS,
+  WORKING_CONTEXT_CAP,
+  isLegacySectionBudget,
   memoryIsDuplicate,
   parseContextConfig,
   parseMiniConfig,
   routeMemoryCandidate,
+  type ContextConfig,
   type ContextReport,
+  type MiniSelectConfig,
 } from "../core/budget";
 import {
   aliasMap,
@@ -59,7 +68,7 @@ import {
 } from "../core/ai";
 import { memoryToolSpec, PromptLibrary, turnCommitToolSpec } from "../core/prompts";
 import type { R2Fs } from "../adapters/r2";
-import { STORY_OUTPUT_TOKEN_FLOOR, type AppSettings } from "./settings";
+import { LEGACY_LORE_TOKEN_BUDGET, STORY_OUTPUT_TOKEN_FLOOR, type AppSettings } from "./settings";
 import { nowIso } from "../core/util";
 import { preparePrompt } from "./prompt-state";
 import { getCachedToolExecution, recordToolExecution } from "./tasks";
@@ -129,13 +138,64 @@ export function effectiveContextConfig(settings: AppSettings, model?: AiModelCon
   const outputTokens = effectiveOutputTokens(settings, model);
   const configuredWindow = Math.max(1, Math.floor(settings.context.max_tokens));
   const modelWindow = model ? Math.max(1, Math.floor(model.context_window)) : configuredWindow;
+  // Stale R2 settings still at the old 32k default should not pin GLM (~1.3M) to 32k.
+  // Cap the auto-raise at WORKING_CONTEXT_CAP (128k) — full provider windows are too costly.
+  const staleSmallWindow =
+    configuredWindow <= LEGACY_DEFAULT_CONTEXT_MAX_TOKENS &&
+    modelWindow > LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;
+  const raisedWindow = staleSmallWindow
+    ? Math.min(WORKING_CONTEXT_CAP, DEFAULT_CONTEXT.max_tokens, modelWindow)
+    : configuredWindow;
+  const budget =
+    staleSmallWindow && isLegacySectionBudget(settings.context.budget)
+      ? { ...DEFAULT_SECTION_BUDGET }
+      : settings.context.budget;
+  const history =
+    staleSmallWindow && settings.context.history.protect_recent_turns <= 6
+      ? {
+          ...settings.context.history,
+          protect_recent_turns: DEFAULT_CONTEXT.history.protect_recent_turns,
+        }
+      : settings.context.history;
   const reserved = Math.max(settings.context.generation_reserve, outputTokens);
   const modelOutputCap = model ? Math.max(1, Math.floor(model.max_output_tokens)) : reserved;
   return parseContextConfig({
     ...settings.context,
-    max_tokens: Math.min(configuredWindow, modelWindow),
+    budget,
+    history,
+    max_tokens: Math.min(raisedWindow, modelWindow),
     generation_reserve: Math.min(reserved, modelOutputCap),
   });
+}
+
+/** Raise mini select budget when context was auto-raised from the legacy 32k defaults. */
+export function effectiveMiniConfig(
+  settings: AppSettings,
+  contextCfg?: ContextConfig,
+  model?: AiModelConfig,
+): MiniSelectConfig {
+  const cfg = contextCfg ?? effectiveContextConfig(settings, model);
+  const mini = parseMiniConfig(settings.mini);
+  const configuredWindow = Math.max(1, Math.floor(settings.context.max_tokens));
+  const staleSmallWindow =
+    configuredWindow <= LEGACY_DEFAULT_CONTEXT_MAX_TOKENS &&
+    cfg.max_tokens > LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;
+  if (staleSmallWindow && mini.max_tokens <= LEGACY_MINI_MAX_TOKENS) {
+    return parseMiniConfig({ ...mini, max_tokens: DEFAULT_MINI.max_tokens });
+  }
+  return mini;
+}
+
+/** Prefer scaled section lore when settings still carry the old 2048 default. */
+export function effectiveLoreTokenBudget(
+  packLore: number | null | undefined,
+  settings: AppSettings,
+  contextCfg: ContextConfig,
+): number {
+  if (packLore) return packLore;
+  const configured = Number(settings.lore_token_budget) || 0;
+  if (configured > 0 && configured !== LEGACY_LORE_TOKEN_BUDGET) return configured;
+  return contextCfg.budget.lore;
 }
 
 export async function runOoc(
@@ -224,10 +284,10 @@ async function triggered(
   extra: string,
   settings: AppSettings,
   cards: CharacterCard[],
+  contextCfg: ContextConfig,
 ) {
   const depth = pack.lore_scan_depth || settings.lore_scan_depth;
-  const context = parseContextConfig(settings.context);
-  const budget = pack.lore_token_budget || settings.lore_token_budget || context.budget.lore;
+  const budget = effectiveLoreTokenBudget(pack.lore_token_budget, settings, contextCfg);
   const recent = messages.slice(-depth);
   const haystack = `${recent.map((m) => `${m.role}: ${m.content}`).join("\n")}\n${extra}`;
   return triggerLore(await loadAllLore(fs, cards), haystack, sceneLoreHaystack(pack, scene), budget);
@@ -251,11 +311,10 @@ async function loadMinisForTurn(
   haystack: string,
   mentionIds: string[],
   primaryId: string | null,
-  settings: AppSettings,
+  miniCfg: MiniSelectConfig,
   recentHaystack: string,
   userText = "",
 ): Promise<{ minis: MiniCard[]; loreCards: CharacterCard[] }> {
-  const miniCfg = parseMiniConfig(settings.mini);
   const members = selectMiniMembers(pack, scene, haystack, mentionIds, primaryId, miniCfg, recentHaystack, userText);
   const minis: MiniCard[] = [];
   const loreCards: CharacterCard[] = [];
@@ -664,8 +723,8 @@ export async function runTurn(
   const primaryId = resolvePrimaryId(pack, scene, primaryCharacter);
   const primaryMember = primaryId ? pack.cast.find((item) => item.id === primaryId) : undefined;
   const primaryCards = primaryMember ? await loadMemberCards(fs, [primaryMember]) : [];
-  const miniCfg = parseMiniConfig(settings.mini);
   const contextCfg = effectiveContextConfig(settings, opts?.ai?.model);
+  const miniCfg = effectiveMiniConfig(settings, contextCfg, opts?.ai?.model);
   const outputTokens = effectiveOutputTokens(settings, opts?.ai?.model, opts?.ai?.requestKind || "story");
   const recentSlice = roleplayMessages.slice(-Math.max(8, miniCfg.recent_turns * 2));
   const recentHaystack = recentSlice.map((m) => m.content).join("\n");
@@ -677,14 +736,14 @@ export async function runTurn(
     haystack,
     mentionIds,
     primaryId,
-    settings,
+    miniCfg,
     recentHaystack,
     userText,
   );
-  const lore = await triggered(fs, pack, scene, roleplayMessages, userText, settings, [...primaryCards, ...loreCards]);
+  const lore = await triggered(fs, pack, scene, roleplayMessages, userText, settings, [...primaryCards, ...loreCards], contextCfg);
   const promptUser = mentionPrompt(pack, userText, mentionIds);
   const breach = settings.llm.breach;
-  const loreBudget = pack.lore_token_budget || settings.lore_token_budget || contextCfg.budget.lore;
+  const loreBudget = effectiveLoreTokenBudget(pack.lore_token_budget, settings, contextCfg);
   const cardPhi = primaryCards
     .map((card) => {
       const filled = substituteCard(card, pack.player_name);

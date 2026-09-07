@@ -7,6 +7,9 @@ import {
   type MiniSelectConfig,
 } from "../core/budget";
 
+/** Pre-GLM default; stale R2 settings still carrying this should not cap lore below the scaled section budget. */
+export const LEGACY_LORE_TOKEN_BUDGET = 2_048;
+
 export type AppSettings = {
   llm: {
     temperature: number;
@@ -33,7 +36,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   memory: { world_char_limit: 2500, player_char_limit: 1400, character_char_limit: 1200 },
   compact_after_turns: 40,
   lore_scan_depth: 4,
-  lore_token_budget: 2048,
+  lore_token_budget: 8_192,
   max_tool_rounds: 4,
   transcript_keep_after_compact: 8,
   context: structuredClone(DEFAULT_CONTEXT),
