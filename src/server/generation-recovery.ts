@@ -5,6 +5,9 @@ const DELIVERY_GRACE_MS = 180_000;
 /**
  * Recover orphaned generation work even when its Queue delivery was already exhausted.
  * Compatible with current schema (no execution_phase / commit journal yet).
+ *
+ * SELECT stale ids first; UPDATE/batch only runs when there is at least one stale id.
+ * Quiet cron ticks with zero stale tasks perform zero D1 writes.
  */
 export async function recoverGenerationTasks(db: D1Database): Promise<void> {
   const now = new Date();
@@ -17,7 +20,10 @@ export async function recoverGenerationTasks(db: D1Database): Promise<void> {
     .prepare(`SELECT id FROM generation_tasks WHERE ${stale} ORDER BY updated_at LIMIT 25`)
     .bind(timestamp, cutoff)
     .all<{ id: string }>();
-  for (const { id } of rows.results) {
+  const staleIds = rows.results || [];
+  if (!staleIds.length) return;
+
+  for (const { id } of staleIds) {
     // Both writes are atomic and recheck liveness. A heartbeat or competing recovery
     // must not resurrect work or lose its durable delivery marker incorrectly.
     const results = await db.batch([

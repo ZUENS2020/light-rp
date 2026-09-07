@@ -9,6 +9,11 @@ type CoreMemoryRow = {
   memoryType: "fact" | "preference" | "promise" | "relationship" | "goal" | "important_event";
 };
 
+type DesiredCoreRow = CoreMemoryRow & {
+  id: string;
+  contentHash: string;
+};
+
 function inferMemoryType(content: string, fallback: CoreMemoryRow["memoryType"]): CoreMemoryRow["memoryType"] {
   const match = content.match(
     /(?:^\[(promise|relationship|fact|preference|goal|important_event)\])|(?:^|\n)type:\s*(promise|relationship|fact|preference|goal|important_event)\s*(?:\n|$)/i,
@@ -41,23 +46,56 @@ function coreRows(snapshot: MemorySnapshot): CoreMemoryRow[] {
   ];
 }
 
+async function desiredCoreRows(workspaceId: string, snapshot: MemorySnapshot): Promise<DesiredCoreRow[]> {
+  const rows = coreRows(snapshot);
+  return Promise.all(
+    rows.map(async (row) => {
+      const contentHash = await sha256(row.content);
+      const identityHash = await sha256(`${workspaceId}:${row.scope}:${row.characterId || ""}:${contentHash}`);
+      return {
+        ...row,
+        id: `core:${identityHash.slice(0, 56)}`,
+        contentHash,
+      };
+    }),
+  );
+}
+
+/**
+ * Incrementally sync core memory rows for a workspace.
+ * Only forgets removed entries and upserts new/changed ones — never mass-forgets
+ * then rewrites every active core row on an unchanged snapshot.
+ * Identity remains `core:${hash}` derived from workspace+scope+character+content.
+ */
 export async function mirrorCoreMemorySnapshot(
   db: D1Database,
   input: { workspaceId: string; sessionId?: string | null; taskId?: string | null; snapshot: MemorySnapshot },
 ): Promise<number> {
-  const rows = coreRows(input.snapshot);
+  const desired = await desiredCoreRows(input.workspaceId, input.snapshot);
+  const desiredIds = new Set(desired.map((row) => row.id));
+  const existing = await db
+    .prepare(
+      `SELECT id FROM memories
+       WHERE workspace_id = ? AND scope IN ('world', 'player', 'character') AND status = 'active'`,
+    )
+    .bind(input.workspaceId)
+    .all<{ id: string }>();
+  const existingIds = new Set((existing.results || []).map((row) => row.id));
+
+  const toForget = [...existingIds].filter((id) => !desiredIds.has(id));
+  const toUpsert = desired.filter((row) => !existingIds.has(row.id));
+  if (!toForget.length && !toUpsert.length) return desired.length;
+
   const ts = nowIso();
-  const statements: D1PreparedStatement[] = [
-    db
-      .prepare(
-        `UPDATE memories SET status = 'forgotten', updated_at = ?
-         WHERE workspace_id = ? AND scope IN ('world', 'player', 'character') AND status = 'active'`,
-      )
-      .bind(ts, input.workspaceId),
-  ];
-  for (const row of rows) {
-    const contentHash = await sha256(row.content);
-    const identityHash = await sha256(`${input.workspaceId}:${row.scope}:${row.characterId || ""}:${contentHash}`);
+  const statements: D1PreparedStatement[] = [];
+  for (const id of toForget) {
+    statements.push(
+      db
+        .prepare(`UPDATE memories SET status = 'forgotten', updated_at = ? WHERE id = ? AND status = 'active'`)
+        .bind(ts, id),
+    );
+  }
+  for (const row of toUpsert) {
     statements.push(
       db
         .prepare(
@@ -70,13 +108,13 @@ export async function mirrorCoreMemorySnapshot(
              updated_at = excluded.updated_at, memory_type = excluded.memory_type, status = 'active'`,
         )
         .bind(
-          `core:${identityHash.slice(0, 56)}`,
+          row.id,
           input.workspaceId,
           input.sessionId || null,
           row.characterId,
           row.scope,
           row.content,
-          contentHash,
+          row.contentHash,
           ts,
           ts,
           row.memoryType,
@@ -86,7 +124,7 @@ export async function mirrorCoreMemorySnapshot(
     );
   }
   await db.batch(statements);
-  return rows.length;
+  return desired.length;
 }
 
 export async function recordMemoryRecall(

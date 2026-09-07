@@ -313,7 +313,12 @@ export async function publishTask(env: Env, task: GenerationTaskRow): Promise<vo
   await markOutboxPublished(env.DB, task.id);
 }
 
-/** Recover expired leases as well as sends lost after the input transaction. */
+/**
+ * Recover expired leases as well as sends lost after the input transaction.
+ * Quiet ticks: recoverGenerationTasks early-returns with zero writes when nothing is
+ * stale; the outbox SELECT only drives publishTask/markOutboxPublished for unpublished
+ * rows (published_at IS NULL), so idle minutes do not touch updated_at.
+ */
 export async function flushGenerationOutbox(env: Env): Promise<void> {
   await recoverGenerationTasks(env.DB);
   const rows = await env.DB.prepare(
@@ -321,7 +326,7 @@ export async function flushGenerationOutbox(env: Env): Promise<void> {
      WHERE o.event_type = 'generation.requested' AND o.published_at IS NULL AND g.status IN ('pending', 'running')
      ORDER BY o.created_at LIMIT 25`,
   ).all<{ id: string }>();
-  for (const row of rows.results) {
+  for (const row of rows.results || []) {
     const task = await getTask(env.DB, row.id);
     if (task && (task.status === "pending" || task.status === "running")) await publishTask(env, task);
   }

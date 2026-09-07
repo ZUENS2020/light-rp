@@ -412,6 +412,60 @@ describe("D1 task and model integration", () => {
     });
   });
 
+  it("mirrors core memory incrementally without mass-forget", async () => {
+    const id = await seedSession();
+    const snapshot = {
+      world: ["港口仍封锁"],
+      player: ["玩家不喝酒"],
+      characters: { mei: ["记得周末约定"] },
+    };
+    await mirrorCoreMemorySnapshot(env.DB, { workspaceId: "world-1", sessionId: id, snapshot });
+    const before = await env.DB.prepare(
+      `SELECT id, content, status, updated_at FROM memories
+       WHERE workspace_id = 'world-1' AND scope IN ('world', 'player', 'character')
+       ORDER BY id`,
+    ).all<{ id: string; content: string; status: string; updated_at: string }>();
+    expect(before.results).toHaveLength(3);
+    expect(before.results.every((row) => row.status === "active")).toBe(true);
+    expect(before.results.every((row) => row.id.startsWith("core:"))).toBe(true);
+
+    await mirrorCoreMemorySnapshot(env.DB, { workspaceId: "world-1", sessionId: id, snapshot });
+    const unchanged = await env.DB.prepare(
+      `SELECT id, status, updated_at FROM memories
+       WHERE workspace_id = 'world-1' AND scope IN ('world', 'player', 'character')
+       ORDER BY id`,
+    ).all<{ id: string; status: string; updated_at: string }>();
+    expect(unchanged.results).toEqual(before.results.map(({ id, status, updated_at }) => ({ id, status, updated_at })));
+
+    await mirrorCoreMemorySnapshot(env.DB, {
+      workspaceId: "world-1",
+      sessionId: id,
+      snapshot: {
+        world: ["港口仍封锁"],
+        player: ["玩家改喝茶"],
+        characters: { mei: ["记得周末约定"] },
+      },
+    });
+    const after = await env.DB.prepare(
+      `SELECT id, content, status FROM memories
+       WHERE workspace_id = 'world-1' AND scope IN ('world', 'player', 'character')
+       ORDER BY content`,
+    ).all<{ id: string; content: string; status: string }>();
+    const byContent = Object.fromEntries(after.results.map((row) => [row.content, row.status]));
+    expect(byContent["港口仍封锁"]).toBe("active");
+    expect(byContent["记得周末约定"]).toBe("active");
+    expect(byContent["玩家不喝酒"]).toBe("forgotten");
+    expect(byContent["玩家改喝茶"]).toBe("active");
+    const kept = after.results.filter((row) => row.content === "港口仍封锁" || row.content === "记得周末约定");
+    const beforeById = Object.fromEntries(before.results.map((row) => [row.id, row.updated_at]));
+    for (const row of kept) {
+      const stamped = await env.DB.prepare(`SELECT updated_at FROM memories WHERE id = ?`)
+        .bind(row.id)
+        .first<{ updated_at: string }>();
+      expect(stamped?.updated_at).toBe(beforeById[row.id]);
+    }
+  });
+
   it("never creates a reasoning column or persisted reasoning payload", async () => {
     const columns = await env.DB.prepare(`PRAGMA table_info(llm_events)`).all<{ name: string }>();
     expect((columns.results || []).map((column: { name: string }) => column.name)).not.toContain("reasoning_content");
