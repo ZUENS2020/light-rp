@@ -20,6 +20,7 @@ import {
 import { ActiveTaskConflict, createTurnTask, getActiveTask, getTask, getTaskByIdempotency, insertPending, listMessages, publishTask, replaceSessionTranscriptProjection } from "./tasks";
 import { memoryStatus, mirrorCoreMemorySnapshot } from "./memory";
 import {
+  invalidateSessionSceneState,
   loadLorebookText,
   loadMemory,
   loadPack,
@@ -266,6 +267,9 @@ export function registerV2Routes(app: App): void {
         nmem_space: loaded.nmem_space,
         primary_character: loaded.primary_character,
         title: loaded.title,
+      });
+      await invalidateSessionSceneState(fs, sid, {
+        present: loaded.primary_character ? [loaded.primary_character] : [],
       });
     }
     await replaceSessionTranscriptProjection(c.env.DB, sid, truncated, "regenerated");
