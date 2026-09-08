@@ -9,11 +9,13 @@ import {
   deleteSession,
   ensembleActing,
   freezeMemory,
+  invalidateSessionSceneState,
   loadLorebookText,
   normalizeLore,
   parseMentions,
   parseScene,
   parseTrailer,
+  sceneYaml,
   substituteCard,
   triggerLore,
   type CastMember,
@@ -224,6 +226,47 @@ describe("ported session and memory behavior", () => {
       time: "黄昏",
       weather: "雨",
     }));
+  it("invalidates session scene state after rewrite/regenerate truncation", async () => {
+    const files = new Map<string, string>();
+    files.set(
+      "sessions/s1/state.yaml",
+      sceneYaml({
+        location: "浴室",
+        time: "夜里",
+        season: "夏",
+        weather: "雨",
+        present: ["caoshangfei", "xiaowu"],
+        scene: "浴室里雾气很重",
+        ongoing: ["洗澡"],
+        notes: "浴室里雾气很重",
+      }),
+    );
+    const fs = {
+      async get(rel: string) {
+        return files.get(rel) ?? null;
+      },
+      async put(rel: string, text: string) {
+        files.set(rel, text);
+      },
+    };
+    const next = await invalidateSessionSceneState(fs as never, "s1", { present: ["caoshangfei"] });
+    expect(next).toMatchObject({
+      location: "",
+      time: "",
+      season: "",
+      weather: "",
+      present: ["caoshangfei"],
+      ongoing: [],
+      notes: "",
+    });
+    expect(next.scene).toContain("编辑后场景状态已作废");
+    const stored = parseScene(files.get("sessions/s1/state.yaml")!);
+    expect(stored.location).toBe("");
+    expect(stored.present).toEqual(["caoshangfei"]);
+    expect(stored.scene).toContain("必须以最近正文为准重建");
+    const emptyPresent = await invalidateSessionSceneState(fs as never, "s1");
+    expect(emptyPresent.present).toEqual([]);
+  });
 
   const store = (): MemoryStore => ({
     world: [],

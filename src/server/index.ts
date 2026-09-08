@@ -4,6 +4,7 @@ import {
   cardFromObj,
   cardToExport,
   ensureSessionState,
+  invalidateSessionSceneState,
   findMember,
   generateMini,
   loadCard,
@@ -717,6 +718,9 @@ app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
     nmem_space: loaded.nmem_space,
     primary_character: loaded.primary_character,
     title: loaded.title,
+  });
+  await invalidateSessionSceneState(fs, sid, {
+    present: loaded.primary_character ? [loaded.primary_character] : [],
   });
   if (c.env.DB) {
     await replaceSessionTranscriptProjection(c.env.DB, sid, messages, "message_edited");

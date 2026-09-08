@@ -540,6 +540,26 @@ export async function ensureSessionState(fs: R2Fs, sessionId: string, pack: Worl
   return scene;
 }
 
+/** After rewrite/regenerate truncates transcript, drop stale location/present so next turn rebuilds from text. */
+export async function invalidateSessionSceneState(
+  fs: R2Fs,
+  sessionId: string,
+  opts?: { present?: string[] },
+): Promise<SceneState> {
+  const scene: SceneState = {
+    location: "",
+    time: "",
+    season: "",
+    weather: "",
+    present: opts?.present ?? [],
+    scene: "（编辑后场景状态已作废；必须以最近正文为准重建地点、时间与在场人物，禁止沿用编辑前的地点/在场名单。）",
+    ongoing: [],
+    notes: "",
+  };
+  await fs.put(`sessions/${sessionId}/state.yaml`, sceneYaml(scene));
+  return scene;
+}
+
 export function miniPath(characterId: string): string {
   return `characters/${characterId}.mini.yaml`;
 }
