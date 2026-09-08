@@ -66,6 +66,7 @@ import {
   type AiUsage,
   type ResponseCacheStatus,
 } from "../core/ai";
+import { gateMemoryWrite } from "../core/memory";
 import { memoryToolSpec, PromptLibrary, turnCommitToolSpec } from "../core/prompts";
 import type { R2Fs } from "../adapters/r2";
 import { LEGACY_LORE_TOKEN_BUDGET, STORY_OUTPUT_TOKEN_FLOOR, type AppSettings } from "./settings";
@@ -373,7 +374,7 @@ type PlannedMemoryChanges = {
   mutations: MemoryMutation[];
 };
 
-function planMemoryChanges(
+export function planMemoryChanges(
   pack: WorldPack,
   scene: SceneState,
   candidates: Record<string, unknown>[],
@@ -401,6 +402,8 @@ function planMemoryChanges(
     const storedText = /^\[(?:promise|relationship|fact|preference|goal|important_event)\]\s*/i.test(text)
       ? text
       : `[${memoryType}] ${text}`;
+    const gated = gateMemoryWrite(action, action === "remove" ? text : storedText);
+    if (!gated.ok) continue;
     mutations.push({
       action,
       target,
@@ -1112,15 +1115,29 @@ async function runMemoryTool(
           : [];
   const rawOperations = Array.isArray(args.operations) ? args.operations : [];
   if (rawOperations.length) {
-    const operations = rawOperations
-      .filter((operation): operation is Record<string, unknown> => Boolean(operation) && typeof operation === "object")
-      .map((operation) => ({
-        action: String(operation.action || "") as MemoryMutation["action"],
+    const operations: MemoryMutation[] = [];
+    for (const operation of rawOperations) {
+      if (!operation || typeof operation !== "object") continue;
+      const action = String(operation.action || "") as MemoryMutation["action"];
+      const content = String(operation.content || "");
+      const gated = gateMemoryWrite(action, content);
+      if (!gated.ok) {
+        return JSON.stringify({
+          success: false,
+          done: false,
+          message: gated.reason,
+          target,
+          current_entries: existing,
+        });
+      }
+      operations.push({
+        action,
         target: typedTarget,
         characterId,
-        content: String(operation.content || ""),
+        content,
         oldText: String(operation.old_text || ""),
-      }));
+      });
+    }
     const batch = applyMemoryBatch(memory, operations, limits);
     if (batch.success) await persistMemoryChanges(fs, memory, batch.touched);
     return JSON.stringify({
@@ -1131,14 +1148,20 @@ async function runMemoryTool(
       current_entries: batch.success ? undefined : batch.currentEntries || existing,
     });
   }
-  if (String(args.action || "") === "add" && memoryIsDuplicate(String(args.content || ""), existing)) {
+  const singleAction = String(args.action || "");
+  const singleContent = String(args.content || "");
+  const singleGate = gateMemoryWrite(singleAction, singleContent);
+  if (!singleGate.ok) {
+    return JSON.stringify({ success: false, message: singleGate.reason, target, live: existing });
+  }
+  if (singleAction === "add" && memoryIsDuplicate(singleContent, existing)) {
     return JSON.stringify({ success: true, message: "duplicate memory skipped", target, live: existing });
   }
   const result = applyMemory(
     memory,
-    String(args.action || ""),
+    singleAction,
     target,
-    String(args.content || ""),
+    singleContent,
     String(args.old_text || ""),
     characterId,
     limits,
