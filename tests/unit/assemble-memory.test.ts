@@ -72,4 +72,33 @@ describe("character memory assembly", () => {
     expect(result.system).toContain("每周一与训练员晨练");
     expect(result.system).not.toContain("Nowledge Mem");
   });
+
+  it("documents that the character card outranks core memory for personality", () => {
+    const pack: WorldPack = {
+      id: "uma",
+      name: "日常训练",
+      nmem_space: null,
+      player_name: "训练员",
+      cast: [],
+      lore_token_budget: null,
+      lore_scan_depth: null,
+      world_text: "特雷森学园的日常。",
+      primary: null,
+    };
+    const result = assembleBudgeted(
+      new PromptLibrary({}),
+      pack,
+      memory,
+      scene,
+      [],
+      [],
+      [],
+      "继续晨练",
+    );
+
+    expect(result.epoch_checkpoint).toContain("角色卡是性格与口吻的正典");
+    expect(result.epoch_checkpoint).toContain("若冲突，以角色卡为准");
+    expect(result.system).toContain("角色卡是性格与口吻的正典");
+    expect(result.system).toContain("不得用记忆改写角色卡性格或说话方式");
+  });
 });
