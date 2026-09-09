@@ -18,6 +18,7 @@ import type { CastMember, CharacterCard, LoreEntry, MemoryStore, MiniCard, Scene
 import { ensembleActing, sceneYaml, substituteCard } from "./domain";
 import type { PromptLibrary } from "./prompts";
 
+/** Last non-empty system message (typically compact GM summary). Rewrite/regenerate void it via invalidateSessionSummary. */
 export function storySummary(messages: { role: string; content: string }[]): string {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const item = messages[i];

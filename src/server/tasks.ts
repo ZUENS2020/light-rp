@@ -7,7 +7,7 @@ import {
   type AiUsage,
   type ResponseCacheStatus,
 } from "../core/ai";
-import { estimateTokens } from "../core/budget";
+import { DEFAULT_CONTEXT, estimateTokens } from "../core/budget";
 import { nowIso } from "../core/util";
 import { resolveSessionModel, sessionRuntime } from "./models";
 import { MAX_GENERATION_ATTEMPTS, recoverGenerationTasks } from "./generation-recovery";
@@ -243,6 +243,15 @@ export async function insertPending(
 }
 
 
+/** How many tip user/assistant turns to re-seed into llm_events after epoch rotate. */
+const TRANSCRIPT_RESEED_EVENTS = Math.max(20, DEFAULT_CONTEXT.history.protect_recent_turns * 2);
+
+/**
+ * Replace D1 messages projection after rewrite/regenerate, rotate prompt epoch, and
+ * re-seed the truncated transcript tip into llm_events so preparePrompt still sees dorm/scene
+ * context (DELETE alone left the AI path with only stale summary/memory).
+ * Trailing user is omitted from llm_events — preparePrompt appends the current task user.
+ */
 export async function replaceSessionTranscriptProjection(
   db: D1Database,
   sessionId: string,
@@ -255,6 +264,10 @@ export async function replaceSessionTranscriptProjection(
   const nextEpoch = runtime.prompt_epoch + 1;
   const nextAffinity = await affinityKey(sessionId, model, nextEpoch);
   const ts = nowIso();
+  let seed = projected.slice(-TRANSCRIPT_RESEED_EVENTS);
+  if (seed.length && seed[seed.length - 1]!.role === "user") {
+    seed = seed.slice(0, -1);
+  }
   const statements = [
     db.prepare(`DELETE FROM messages WHERE session_id = ?`).bind(sessionId),
     db.prepare(`DELETE FROM llm_events WHERE session_id = ?`).bind(sessionId),
@@ -277,19 +290,44 @@ export async function replaceSessionTranscriptProjection(
         ),
     );
   }
+  for (const [index, message] of seed.entries()) {
+    const payload: Record<string, unknown> = { content: message.content };
+    if (message.task_id) payload.task_id = message.task_id;
+    const payloadJson = stableStringify(payload);
+    const contentHash = await sha256(payloadJson);
+    const kind = message.role === "assistant" ? "assistant" : "user";
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO llm_events (id, session_id, prompt_epoch, sequence, kind, role, payload_json, content_hash, stable, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          sessionId,
+          nextEpoch,
+          index + 1,
+          kind,
+          message.role,
+          payloadJson,
+          contentHash,
+          message.ts || ts,
+        ),
+    );
+  }
   statements.push(
     db
       .prepare(
         `UPDATE sessions
          SET next_message_sequence = ?,
-             next_event_sequence = 1,
+             next_event_sequence = ?,
              prompt_epoch = ?,
              prompt_epoch_reason = ?,
              affinity_key = ?,
              updated_at = ?
          WHERE id = ?`,
       )
-      .bind(projected.length + 1, nextEpoch, reason, nextAffinity, ts, sessionId),
+      .bind(projected.length + 1, seed.length + 1, nextEpoch, reason, nextAffinity, ts, sessionId),
   );
   await db.batch(statements);
 }

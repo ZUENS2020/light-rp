@@ -560,6 +560,39 @@ export async function invalidateSessionSceneState(
   return scene;
 }
 
+/** Stub written when rewrite/regenerate voids a compact GM summary. */
+export const INVALIDATED_SUMMARY_STUB =
+  "（摘要已因编辑/重新生成作废；请以最近正文与当前场景状态为准推进，禁止沿用编辑前的地点或进行中情节，如厨房/操场/食堂等。）";
+
+/**
+ * After rewrite/regenerate truncates transcript, void summary.md and any system GM
+ * summary message so storySummary/{{summary}} cannot revive a pre-edit location.
+ * Returns a new messages array when a system summary was rewritten; otherwise the input.
+ */
+export async function invalidateSessionSummary(
+  fs: R2Fs,
+  sessionId: string,
+  messages: ChatMessage[],
+): Promise<ChatMessage[]> {
+  const stub = INVALIDATED_SUMMARY_STUB;
+  await fs.put(`sessions/${sessionId}/summary.md`, `${stub}\n`);
+  let summaryIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const item = messages[i];
+    if (item?.role === "system" && item.content.trim()) {
+      summaryIdx = i;
+      break;
+    }
+  }
+  if (summaryIdx < 0 && messages[0]?.role === "system" && messages[0].content.trim()) {
+    summaryIdx = 0;
+  }
+  if (summaryIdx < 0) return messages;
+  const current = messages[summaryIdx]!;
+  if (current.content.trim() === stub) return messages;
+  return messages.map((item, index) => (index === summaryIdx ? { ...item, content: stub } : item));
+}
+
 export function miniPath(characterId: string): string {
   return `characters/${characterId}.mini.yaml`;
 }
