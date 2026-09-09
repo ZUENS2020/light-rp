@@ -21,6 +21,7 @@ import { ActiveTaskConflict, createTurnTask, getActiveTask, getTask, getTaskById
 import { memoryStatus, mirrorCoreMemorySnapshot } from "./memory";
 import {
   invalidateSessionSceneState,
+  invalidateSessionSummary,
   loadLorebookText,
   loadMemory,
   loadPack,
@@ -260,7 +261,7 @@ export function registerV2Routes(app: App): void {
       }
     }
     if (lastUserIdx < 0) throw new HTTPException(409, { message: "session has no user message to regenerate" });
-    const truncated = loaded.messages.slice(0, lastUserIdx + 1);
+    let truncated = loaded.messages.slice(0, lastUserIdx + 1);
     if (truncated.length < loaded.messages.length) {
       await saveSession(fs, sid, truncated, {
         thread_id: loaded.thread_id,
@@ -271,6 +272,16 @@ export function registerV2Routes(app: App): void {
       await invalidateSessionSceneState(fs, sid, {
         present: loaded.primary_character ? [loaded.primary_character] : [],
       });
+      const summaryMessages = await invalidateSessionSummary(fs, sid, truncated);
+      if (summaryMessages !== truncated) {
+        truncated = summaryMessages;
+        await saveSession(fs, sid, truncated, {
+          thread_id: loaded.thread_id,
+          nmem_space: loaded.nmem_space,
+          primary_character: loaded.primary_character,
+          title: loaded.title,
+        });
+      }
     }
     await replaceSessionTranscriptProjection(c.env.DB, sid, truncated, "regenerated");
     const taskId = crypto.randomUUID();

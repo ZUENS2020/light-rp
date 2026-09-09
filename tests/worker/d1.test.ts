@@ -133,7 +133,7 @@ describe("D1 task and model integration", () => {
     expect(page.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
   });
 
-  it("replaceSessionTranscriptProjection clears trailing D1 messages and llm_events", async () => {
+  it("replaceSessionTranscriptProjection replaces messages and reseeds tip llm_events", async () => {
     const id = await seedSession();
     const created = await createTurnTask(env.DB, {
       workspaceId: "world-1",
@@ -148,6 +148,7 @@ describe("D1 task and model integration", () => {
       .bind(id)
       .first<{ prompt_epoch: number }>();
 
+    // Trailing-only user: nothing to reseed into llm_events (preparePrompt adds task user).
     await replaceSessionTranscriptProjection(env.DB, id, [{ role: "user", content: "hello edited" }], "message_edited");
 
     const after = await listMessages(env.DB, id);
@@ -172,6 +173,37 @@ describe("D1 task and model integration", () => {
     expect(session?.prompt_epoch_reason).toBe("message_edited");
     expect(session?.next_message_sequence).toBe(2);
     expect(session?.next_event_sequence).toBe(1);
+
+    // Tip with prior turns: reseed user+assistant, omit trailing user for preparePrompt.
+    await replaceSessionTranscriptProjection(
+      env.DB,
+      id,
+      [
+        { role: "user", content: "我回到宿舍" },
+        { role: "assistant", content: "宿舍台灯亮着，窗外操场很远。" },
+        { role: "user", content: "继续" },
+      ],
+      "regenerated",
+    );
+    const seeded = await env.DB.prepare(
+      `SELECT sequence, kind, role, payload_json FROM llm_events WHERE session_id = ? ORDER BY sequence`,
+    )
+      .bind(id)
+      .all<{ sequence: number; kind: string; role: string; payload_json: string }>();
+    expect((seeded.results || []).map((row) => ({ sequence: row.sequence, kind: row.kind, role: row.role }))).toEqual([
+      { sequence: 1, kind: "user", role: "user" },
+      { sequence: 2, kind: "assistant", role: "assistant" },
+    ]);
+    expect(seeded.results?.[0]?.payload_json).toContain("我回到宿舍");
+    expect(seeded.results?.[1]?.payload_json).toContain("宿舍台灯亮着");
+    const afterSeed = await env.DB.prepare(
+      `SELECT prompt_epoch, next_message_sequence, next_event_sequence FROM sessions WHERE id = ?`,
+    )
+      .bind(id)
+      .first<{ prompt_epoch: number; next_message_sequence: number; next_event_sequence: number }>();
+    expect(afterSeed?.next_message_sequence).toBe(4);
+    expect(afterSeed?.next_event_sequence).toBe(3);
+    expect(afterSeed?.prompt_epoch).toBe((epochBefore?.prompt_epoch || 1) + 2);
   });
 
   it("commits assistant, state, and memory deltas in append-only prompt order", async () => {

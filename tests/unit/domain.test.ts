@@ -10,6 +10,8 @@ import {
   ensembleActing,
   freezeMemory,
   invalidateSessionSceneState,
+  invalidateSessionSummary,
+  INVALIDATED_SUMMARY_STUB,
   loadLorebookText,
   normalizeLore,
   parseMentions,
@@ -266,6 +268,38 @@ describe("ported session and memory behavior", () => {
     expect(stored.scene).toContain("必须以最近正文为准重建");
     const emptyPresent = await invalidateSessionSceneState(fs as never, "s1");
     expect(emptyPresent.present).toEqual([]);
+  });
+
+  it("invalidates session summary stub and rewrites system GM summary", async () => {
+    const files = new Map<string, string>();
+    files.set("sessions/s1/summary.md", "厨房傍晚，曹尚飞在切菜。\n");
+    const fs = {
+      async get(rel: string) {
+        return files.get(rel) ?? null;
+      },
+      async put(rel: string, text: string) {
+        files.set(rel, text);
+      },
+    };
+    const messages = [
+      { role: "system", content: "厨房傍晚，操场与食堂的旧摘要。", ts: "2026-01-01T00:00:00.000Z" },
+      { role: "user", content: "我回到宿舍", ts: "2026-01-01T00:01:00.000Z" },
+      { role: "assistant", content: "宿舍台灯亮着。", ts: "2026-01-01T00:02:00.000Z" },
+    ];
+    const next = await invalidateSessionSummary(fs as never, "s1", messages);
+    expect(files.get("sessions/s1/summary.md")).toBe(`${INVALIDATED_SUMMARY_STUB}\n`);
+    expect(next).not.toBe(messages);
+    expect(next[0]).toMatchObject({ role: "system", ts: "2026-01-01T00:00:00.000Z", content: INVALIDATED_SUMMARY_STUB });
+    expect(next[0]!.content).toContain("摘要已因编辑/重新生成作废");
+    expect(next[0]!.content).toContain("厨房");
+    expect(next[1]).toEqual(messages[1]);
+    const again = await invalidateSessionSummary(fs as never, "s1", next);
+    expect(again).toBe(next);
+    const noSystem = await invalidateSessionSummary(fs as never, "s1", [
+      { role: "user", content: "hi", ts: "t" },
+    ]);
+    expect(noSystem).toHaveLength(1);
+    expect(noSystem[0]!.role).toBe("user");
   });
 
   const store = (): MemoryStore => ({

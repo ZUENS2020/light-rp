@@ -5,6 +5,7 @@ import {
   cardToExport,
   ensureSessionState,
   invalidateSessionSceneState,
+  invalidateSessionSummary,
   findMember,
   generateMini,
   loadCard,
@@ -712,7 +713,7 @@ app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
     throw new HTTPException(400, { message: "index out of range" });
   }
   const kept = { ...loaded.messages[index], content };
-  const messages = [...loaded.messages.slice(0, index), kept];
+  let messages = [...loaded.messages.slice(0, index), kept];
   await saveSession(fs, sid, messages, {
     thread_id: loaded.thread_id,
     nmem_space: loaded.nmem_space,
@@ -722,6 +723,16 @@ app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
   await invalidateSessionSceneState(fs, sid, {
     present: loaded.primary_character ? [loaded.primary_character] : [],
   });
+  const summaryMessages = await invalidateSessionSummary(fs, sid, messages);
+  if (summaryMessages !== messages) {
+    messages = summaryMessages;
+    await saveSession(fs, sid, messages, {
+      thread_id: loaded.thread_id,
+      nmem_space: loaded.nmem_space,
+      primary_character: loaded.primary_character,
+      title: loaded.title,
+    });
+  }
   if (c.env.DB) {
     await replaceSessionTranscriptProjection(c.env.DB, sid, messages, "message_edited");
   }
