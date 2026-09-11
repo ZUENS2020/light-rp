@@ -7,6 +7,7 @@ import {
   storySummary,
   type LlmMessage,
 } from "../core/assemble";
+import { stripBreachAssistantPrefill, withBreachAssistantPrefill } from "../core/breach";
 import {
   DEFAULT_CONTEXT,
   DEFAULT_MINI,
@@ -818,6 +819,8 @@ export async function runTurn(
     stablePrefixTokens = prepared.stablePrefixTokens;
     volatileTokens = prepared.volatileTokens;
   }
+  // Prefill AFTER preparePrompt so the final chat() list ends with an in-character stub.
+  messages = withBreachAssistantPrefill(messages, breach);
   const gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, {
     model: opts?.ai?.model,
     affinityKey: affinity,
@@ -827,7 +830,8 @@ export async function runTurn(
   const { visible, trailer } = parseTrailer(gm.text);
   const truncated = gm.finish_reason === "length";
   if (truncated) warnings.push("回复在 max_tokens 处被截断");
-  let replyText = visible;
+  // Strip echoed prefill if the model included it in the completion.
+  let replyText = stripBreachAssistantPrefill(visible);
   if (truncated && replyText.trim()) replyText = `${replyText.trimEnd()}\n\n${TRUNCATION_NOTE}`;
   if (!replyText.trim()) throw new LlmEmptyError();
   let nextScene = scene;
