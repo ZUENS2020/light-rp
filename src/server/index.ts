@@ -827,7 +827,7 @@ app.post("/api/v2/play/:id/:sid/compact", async (c) => {
   const memory = await loadMemory(fs);
   const settings = await loadSettings(c.env.BUCKET);
   const library = new PromptLibrary(await overlays(fs));
-  const summaryText = await runCompact(
+  const compactResult = await runCompact(
     c.env,
     fs,
     memory,
@@ -839,7 +839,12 @@ app.post("/api/v2/play/:id/:sid/compact", async (c) => {
     pack,
     (job) => c.executionCtx.waitUntil(job),
   );
-  return c.json({ ...(await playState(c.env, fs, pack, sid)), summary: summaryText });
+  return c.json({
+    ...(await playState(c.env, fs, pack, sid)),
+    summary: compactResult.summary,
+    compact_applied: compactResult.applied,
+    warnings: compactResult.warnings,
+  });
 });
 
 app.post("/api/v2/play/:id/:sid/space", async (c) => {

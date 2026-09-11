@@ -74,6 +74,14 @@ import { nowIso } from "../core/util";
 import { preparePrompt } from "./prompt-state";
 import { getCachedToolExecution, recordToolExecution } from "./tasks";
 import { parseSystemCommand, roleplayOnlyMessages } from "../core/commands";
+import {
+  buildIncrementalCompactInput,
+  formatCompactSummaryForStorage,
+  isBadCompactSummary,
+  roleplayUserAssistant,
+  sliceRoleplayHistoryForAssemble,
+  upsertCompactSummaryMessage,
+} from "../core/compact";
 
 export type TurnOut = {
   text: string;
@@ -117,8 +125,6 @@ const OOC_SYSTEM = `你是 Light RP 的系统助手。当前请求明确处于 O
 直接、清楚地回答用户关于当前故事、角色关系、设定、玩法或应用操作的问题；可以讨论 RP，但不要扮演角色或继续叙事。
 不得推进时间、地点、人物行动或状态，不得虚构已发生事件，不得生成状态块，也不得提出或执行任何记忆修改。`;
 
-
-
 export { STORY_OUTPUT_TOKEN_FLOOR };
 
 function isStoryOutputKind(kind?: AiRequestOptions["requestKind"]): boolean {
@@ -142,8 +148,7 @@ export function effectiveContextConfig(settings: AppSettings, model?: AiModelCon
   // Stale R2 settings still at the old 32k default should not pin GLM (~1.3M) to 32k.
   // Cap the auto-raise at WORKING_CONTEXT_CAP (128k) — full provider windows are too costly.
   const staleSmallWindow =
-    configuredWindow <= LEGACY_DEFAULT_CONTEXT_MAX_TOKENS &&
-    modelWindow > LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;
+    configuredWindow <= LEGACY_DEFAULT_CONTEXT_MAX_TOKENS && modelWindow > LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;
   const raisedWindow = staleSmallWindow
     ? Math.min(WORKING_CONTEXT_CAP, DEFAULT_CONTEXT.max_tokens, modelWindow)
     : configuredWindow;
@@ -179,8 +184,7 @@ export function effectiveMiniConfig(
   const mini = parseMiniConfig(settings.mini);
   const configuredWindow = Math.max(1, Math.floor(settings.context.max_tokens));
   const staleSmallWindow =
-    configuredWindow <= LEGACY_DEFAULT_CONTEXT_MAX_TOKENS &&
-    cfg.max_tokens > LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;
+    configuredWindow <= LEGACY_DEFAULT_CONTEXT_MAX_TOKENS && cfg.max_tokens > LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;
   if (staleSmallWindow && mini.max_tokens <= LEGACY_MINI_MAX_TOKENS) {
     return parseMiniConfig({ ...mini, max_tokens: DEFAULT_MINI.max_tokens });
   }
@@ -743,7 +747,16 @@ export async function runTurn(
     recentHaystack,
     userText,
   );
-  const lore = await triggered(fs, pack, scene, roleplayMessages, userText, settings, [...primaryCards, ...loreCards], contextCfg);
+  const lore = await triggered(
+    fs,
+    pack,
+    scene,
+    roleplayMessages,
+    userText,
+    settings,
+    [...primaryCards, ...loreCards],
+    contextCfg,
+  );
   const promptUser = mentionPrompt(pack, userText, mentionIds);
   const breach = settings.llm.breach;
   const loreBudget = effectiveLoreTokenBudget(pack.lore_token_budget, settings, contextCfg);
@@ -758,6 +771,10 @@ export async function runTurn(
     .join("\n\n");
   const extraSystem = breachSystem(library, breach);
   const phi = [breachPhi(library, breach), cardPhi].filter(Boolean).join("\n\n");
+  const historyForAssemble = sliceRoleplayHistoryForAssemble(
+    historyMessages,
+    settings.transcript_keep_after_compact,
+  ).map((m) => ({ role: m.role, content: m.content }));
   const assembled = assembleBudgeted(
     library,
     pack,
@@ -765,9 +782,7 @@ export async function runTurn(
     scene,
     primaryCards,
     lore,
-    historyMessages
-      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
-      .map((m) => ({ role: m.role, content: m.content })),
+    historyForAssemble,
     promptUser,
     extraSystem,
     minis,
@@ -988,7 +1003,7 @@ export async function runTurn(
   let rotatePromptEpochReason: TurnOut["rotate_prompt_epoch_reason"];
   if (turnNumber >= settings.compact_after_turns) {
     try {
-      await runCompact(
+      const compactResult = await runCompact(
         env,
         fs,
         memory,
@@ -1001,7 +1016,8 @@ export async function runTurn(
         waitUntil,
         opts?.ai ? { model: opts.ai.model, affinityKey: affinity, requestKind: "compact" } : undefined,
       );
-      if (opts?.ai) rotatePromptEpochReason = "context_compacted";
+      for (const warning of compactResult.warnings) warnings.push(warning);
+      if (compactResult.applied && opts?.ai) rotatePromptEpochReason = "context_compacted";
     } catch (err) {
       warnings.push(`compact failed: ${String(err)}`);
     }
@@ -1170,24 +1186,47 @@ async function runMemoryTool(
   return JSON.stringify({ success: result.success, message: result.message, target, live: result.live });
 }
 
+export type CompactResult = { summary: string; warnings: string[]; applied: boolean };
+
 export async function runCompact(
   env: Env,
   fs: R2Fs,
   memory: MemoryStore,
   messages: ChatMessage[],
   sessionId: string,
-  loaded: { thread_id: string | null; nmem_space: string | null; primary_character?: string | null },
+  loaded: {
+    thread_id: string | null;
+    nmem_space: string | null;
+    primary_character?: string | null;
+    compact_roleplay_count?: number | null;
+  },
   library: PromptLibrary,
   settings: AppSettings,
   pack: WorldPack,
   _waitUntil?: (job: Promise<unknown>) => void,
   aiOptions?: AiRequestOptions,
-): Promise<string> {
+): Promise<CompactResult> {
+  const warnings: string[] = [];
   const outputTokens = effectiveOutputTokens(settings, aiOptions?.model, "compact");
   const roleplayMessages = roleplayOnlyMessages(messages);
-  const transcript = roleplayMessages.map((m) => `${m.role}: ${m.content}`).join("\n");
+  const roleplayUa = roleplayUserAssistant(roleplayMessages);
+
+  const summaryFile = ((await fs.get(`sessions/${sessionId}/summary.md`)) || "").trim();
+  const previousFromMessages = storySummary(roleplayMessages);
+  const previousSummary =
+    summaryFile && !summaryFile.startsWith("（摘要已因编辑")
+      ? summaryFile
+      : previousFromMessages && !previousFromMessages.startsWith("（摘要已因编辑")
+        ? previousFromMessages
+        : "";
+
+  const sessionMeta = await loadSession(fs, sessionId).catch(() => null);
+  const compactRoleplayCount = loaded.compact_roleplay_count ?? sessionMeta?.compact_roleplay_count ?? null;
+
+  const incremental = buildIncrementalCompactInput(roleplayUa, previousSummary, compactRoleplayCount);
   const values: Record<string, string> = {
-    transcript,
+    transcript: incremental.transcript,
+    previous_summary: incremental.previous_summary || "（无）",
     memory: memory.world.join("\n§\n"),
     player: memory.player.join("\n§\n"),
   };
@@ -1216,28 +1255,54 @@ export async function runCompact(
   values.player = memory.snapPlayer;
   let compactSystem = library.render("compact.md", values);
   if (extra) compactSystem = `${extra}\n\n${compactSystem}`;
-  const result = await chat(
-    env,
-    withPhiMsgs(
-      [
-        { role: "system", content: compactSystem },
-        { role: "user", content: library.render("compact_user.md", values) },
-      ],
-      phi,
-    ),
-    null,
-    0.3,
-    outputTokens,
-    settings.llm.timeout,
-    aiOptions,
-  );
-  const summary = result.text.trim();
-  const keep = settings.transcript_keep_after_compact;
-  const kept = keep ? roleplayMessages.slice(-keep) : [];
-  const next = [{ role: "system", content: summary, ts: nowIso() }, ...kept];
-  await saveSession(fs, sessionId, next, loaded);
-  if (summary) await fs.put(`sessions/${sessionId}/summary.md`, `${summary}\n`);
-  return summary;
+
+  const askSummary = async (userPrompt: string) => {
+    const result = await chat(
+      env,
+      withPhiMsgs(
+        [
+          { role: "system", content: compactSystem },
+          { role: "user", content: userPrompt },
+        ],
+        phi,
+      ),
+      null,
+      0.3,
+      outputTokens,
+      settings.llm.timeout,
+      aiOptions,
+    );
+    return result.text.trim();
+  };
+
+  let summary = await askSummary(library.render("compact_user.md", values));
+  if (!summary || isBadCompactSummary(formatCompactSummaryForStorage(summary))) {
+    warnings.push("compact summary failed validation; retrying with stricter schema prompt");
+    const strictUser =
+      library.render("compact_user.md", values) +
+      "\n\n【校验失败·重试】必须保留标记【压缩摘要·时间线】与全部必填小节标题；只许短子弹；禁止对白与场景散文；不超过2000汉字。";
+    summary = await askSummary(strictUser);
+  }
+
+  if (!summary || isBadCompactSummary(formatCompactSummaryForStorage(summary))) {
+    warnings.push("compact summary still invalid after retry; kept previous summary.md and full transcript");
+    // Do not wipe transcript; do not overwrite a good previous summary with garbage.
+    return { summary: previousSummary || summary || "", warnings, applied: false };
+  }
+
+  const formatted = formatCompactSummaryForStorage(summary);
+  // Keep ALL user/assistant history; only replace the compact system summary message.
+  const next = upsertCompactSummaryMessage(messages, formatted, nowIso());
+  await saveSession(fs, sessionId, next, {
+    thread_id: loaded.thread_id,
+    nmem_space: loaded.nmem_space,
+    primary_character: loaded.primary_character ?? null,
+    compact_roleplay_count: roleplayUa.length,
+    compact_at_message_count: next.length,
+    last_compact_summary_chars: formatted.length,
+  });
+  await fs.put(`sessions/${sessionId}/summary.md`, `${formatted}\n`);
+  return { summary: formatted, warnings, applied: true };
 }
 
 function asIdList(value: unknown): string[] {

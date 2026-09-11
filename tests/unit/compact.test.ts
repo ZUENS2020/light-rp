@@ -1,0 +1,166 @@
+import { describe, expect, it } from "vitest";
+import {
+  COMPACT_REQUIRED_SECTIONS,
+  COMPACT_SUMMARY_MARKER,
+  buildIncrementalCompactInput,
+  formatCompactSummaryForStorage,
+  isBadCompactSummary,
+  sliceRoleplayHistoryForAssemble,
+  stripCompactSummaryMessages,
+  upsertCompactSummaryMessage,
+} from "../../src/core/compact";
+import { invalidateSessionSummary, INVALIDATED_SUMMARY_STUB } from "../../src/core/domain";
+import { storySummary } from "../../src/core/assemble";
+import { PromptLibrary } from "../../src/core/prompts";
+import { DEFAULT_SETTINGS } from "../../src/server/settings";
+
+function validSummary(extra = ""): string {
+  const sections = COMPACT_REQUIRED_SECTIONS.map((name) => `## ${name}\n- 事实一条`).join("\n");
+  return `${COMPACT_SUMMARY_MARKER}\n${sections}${extra}`;
+}
+
+describe("isBadCompactSummary", () => {
+  it("accepts structured marked summary with all sections", () => {
+    expect(isBadCompactSummary(validSummary())).toBe(false);
+  });
+
+  it("rejects missing marker", () => {
+    expect(isBadCompactSummary("## 时间线要点\n- x")).toBe(true);
+  });
+
+  it("rejects missing required section", () => {
+    const text = `${COMPACT_SUMMARY_MARKER}\n## 时间线要点\n- a\n## 在场与地点\n- b`;
+    expect(isBadCompactSummary(text)).toBe(true);
+  });
+
+  it("rejects too many dialogue lines", () => {
+    const dialogue = "\n- 「你好」\n- 「再见」\n- 「再来」\n- 「还要」";
+    expect(isBadCompactSummary(validSummary(dialogue))).toBe(true);
+  });
+
+  it("rejects overlong hanzi dumps", () => {
+    const dump = "啊".repeat(2100);
+    expect(isBadCompactSummary(`${validSummary()}\n${dump}`)).toBe(true);
+  });
+});
+
+describe("upsert / strip compact summary", () => {
+  it("strips prior compact system messages and prepends one marked summary", () => {
+    const messages = [
+      { role: "system", content: `${COMPACT_SUMMARY_MARKER}\nold`, ts: "t0" },
+      { role: "user", content: "hi", ts: "t1" },
+      { role: "assistant", content: "yo", ts: "t2" },
+      { role: "system", content: INVALIDATED_SUMMARY_STUB, ts: "t3" },
+    ];
+    const next = upsertCompactSummaryMessage(messages, validSummary(), "t4");
+    expect(next).toHaveLength(3);
+    expect(next[0]!.role).toBe("system");
+    expect(next[0]!.content.startsWith(COMPACT_SUMMARY_MARKER)).toBe(true);
+    expect(next[1]).toMatchObject({ role: "user", content: "hi" });
+    expect(next[2]).toMatchObject({ role: "assistant", content: "yo" });
+    expect(stripCompactSummaryMessages(next)).toHaveLength(2);
+  });
+
+  it("formatCompactSummaryForStorage adds marker when missing", () => {
+    expect(formatCompactSummaryForStorage("## 时间线要点")).toContain(COMPACT_SUMMARY_MARKER);
+  });
+});
+
+describe("incremental compact input", () => {
+  it("uses previous summary plus only messages since compact cursor", () => {
+    const ua = [
+      { role: "user", content: "old1" },
+      { role: "assistant", content: "old2" },
+      { role: "user", content: "new1" },
+      { role: "assistant", content: "new2" },
+    ];
+    const input = buildIncrementalCompactInput(ua, validSummary(), 2);
+    expect(input.incremental).toBe(true);
+    expect(input.previous_summary).toContain(COMPACT_SUMMARY_MARKER);
+    expect(input.transcript).toContain("new1");
+    expect(input.transcript).not.toContain("old1");
+  });
+
+  it("falls back to bounded full transcript when previous is invalidated", () => {
+    const ua = Array.from({ length: 4 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: `m${i}`,
+    }));
+    const input = buildIncrementalCompactInput(ua, INVALIDATED_SUMMARY_STUB, 2);
+    expect(input.incremental).toBe(false);
+    expect(input.previous_summary).toBe("");
+    expect(input.transcript).toContain("m0");
+  });
+});
+
+describe("assemble history keep window", () => {
+  it("slices last N user/assistant messages", () => {
+    const messages = [
+      { role: "system", content: validSummary() },
+      ...Array.from({ length: 10 }, (_, i) => ({
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `t${i}`,
+      })),
+    ];
+    const kept = sliceRoleplayHistoryForAssemble(messages, 4);
+    expect(kept).toHaveLength(4);
+    expect(kept[0]!.content).toBe("t6");
+    expect(kept.every((m) => m.role === "user" || m.role === "assistant")).toBe(true);
+  });
+});
+
+describe("settings + prompts", () => {
+  it("defaults transcript_keep_after_compact to 20", () => {
+    expect(DEFAULT_SETTINGS.transcript_keep_after_compact).toBe(20);
+  });
+
+  it("compact prompts include structured schema keywords", () => {
+    const library = new PromptLibrary({});
+    const system = library.text("compact.md");
+    const user = library.text("compact_user.md");
+    expect(system).toContain(COMPACT_SUMMARY_MARKER);
+    for (const section of COMPACT_REQUIRED_SECTIONS) {
+      expect(system).toContain(section);
+    }
+    expect(system).toMatch(/800|1500|2000/);
+    expect(user).toContain("previous_summary");
+    expect(user).toContain("transcript");
+    expect(library.text("memory_flush.md")).toMatch(/原文|禁止美化|未成年|零点/);
+  });
+});
+
+describe("invalidateSessionSummary with new marker", () => {
+  it("voids marked compact summary and clears compact meta cursors", async () => {
+    const files = new Map<string, string>();
+    files.set("sessions/s1/summary.md", `${validSummary()}\n`);
+    files.set(
+      "sessions/s1/meta.json",
+      JSON.stringify({
+        compact_roleplay_count: 12,
+        compact_at_message_count: 13,
+        last_compact_summary_chars: 400,
+      }),
+    );
+    const fs = {
+      async get(rel: string) {
+        return files.get(rel) ?? null;
+      },
+      async put(rel: string, text: string) {
+        files.set(rel, text);
+      },
+    };
+    const messages = [
+      { role: "system", content: validSummary(), ts: "t0" },
+      { role: "user", content: "go", ts: "t1" },
+      { role: "assistant", content: "ok", ts: "t2" },
+    ];
+    expect(storySummary(messages).startsWith(COMPACT_SUMMARY_MARKER)).toBe(true);
+    const next = await invalidateSessionSummary(fs as never, "s1", messages);
+    expect(files.get("sessions/s1/summary.md")).toBe(`${INVALIDATED_SUMMARY_STUB}\n`);
+    expect(next[0]!.content).toBe(INVALIDATED_SUMMARY_STUB);
+    const meta = JSON.parse(files.get("sessions/s1/meta.json")!);
+    expect(meta.compact_roleplay_count).toBeNull();
+    expect(meta.compact_at_message_count).toBeNull();
+    expect(meta.last_compact_summary_chars).toBeNull();
+  });
+});
