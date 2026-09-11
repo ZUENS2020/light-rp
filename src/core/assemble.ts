@@ -18,8 +18,12 @@ import type { CastMember, CharacterCard, LoreEntry, MemoryStore, MiniCard, Scene
 import { ensembleActing, sceneYaml, substituteCard } from "./domain";
 import type { PromptLibrary } from "./prompts";
 
-/** Last non-empty system message (typically compact GM summary). Rewrite/regenerate void it via invalidateSessionSummary. */
+/** Prefer marked compact GM summary; else last non-empty system. Rewrite/regenerate voids it via invalidateSessionSummary. */
 export function storySummary(messages: { role: string; content: string }[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const item = messages[i];
+    if (item.role === "system" && item.content.trim().startsWith("【压缩摘要")) return item.content.trim();
+  }
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const item = messages[i];
     if (item.role === "system" && item.content.trim()) return item.content.trim();

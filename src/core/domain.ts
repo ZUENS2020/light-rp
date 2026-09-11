@@ -564,9 +564,18 @@ export async function invalidateSessionSceneState(
 export const INVALIDATED_SUMMARY_STUB =
   "（摘要已因编辑/重新生成作废；请以最近正文与当前场景状态为准推进，禁止沿用编辑前的地点或进行中情节，如厨房/操场/食堂等。）";
 
+function looksLikeCompactSummaryMessage(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("【压缩摘要")) return true;
+  if (trimmed === INVALIDATED_SUMMARY_STUB.trim() || trimmed.startsWith("（摘要已因编辑")) return true;
+  return false;
+}
+
 /**
  * After rewrite/regenerate truncates transcript, void summary.md and any system GM
  * summary message so storySummary/{{summary}} cannot revive a pre-edit location.
+ * Also clears compact incremental cursors in meta.json.
  * Returns a new messages array when a system summary was rewritten; otherwise the input.
  */
 export async function invalidateSessionSummary(
@@ -576,12 +585,33 @@ export async function invalidateSessionSummary(
 ): Promise<ChatMessage[]> {
   const stub = INVALIDATED_SUMMARY_STUB;
   await fs.put(`sessions/${sessionId}/summary.md`, `${stub}\n`);
+  const metaRaw = await fs.get(`sessions/${sessionId}/meta.json`);
+  if (metaRaw) {
+    try {
+      const meta = JSON.parse(metaRaw) as Record<string, unknown>;
+      meta.compact_roleplay_count = null;
+      meta.compact_at_message_count = null;
+      meta.last_compact_summary_chars = null;
+      await fs.put(`sessions/${sessionId}/meta.json`, JSON.stringify(meta, null, 2));
+    } catch {
+      /* ignore corrupt meta */
+    }
+  }
   let summaryIdx = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const item = messages[i];
-    if (item?.role === "system" && item.content.trim()) {
+    if (item?.role === "system" && looksLikeCompactSummaryMessage(item.content)) {
       summaryIdx = i;
       break;
+    }
+  }
+  if (summaryIdx < 0) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const item = messages[i];
+      if (item?.role === "system" && item.content.trim()) {
+        summaryIdx = i;
+        break;
+      }
     }
   }
   if (summaryIdx < 0 && messages[0]?.role === "system" && messages[0].content.trim()) {
@@ -1135,6 +1165,9 @@ export async function loadSession(
   primary_character: string | null;
   title: string;
   updated: string;
+  compact_roleplay_count: number | null;
+  compact_at_message_count: number | null;
+  last_compact_summary_chars: number | null;
 }> {
   const metaRaw = await fs.get(`sessions/${sessionId}/meta.json`);
   let meta: Record<string, unknown> = {};
@@ -1157,6 +1190,8 @@ export async function loadSession(
       ...(raw.task_id ? { task_id: raw.task_id } : {}),
     });
   }
+  const numOrNull = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
   return {
     messages,
     thread_id: meta.thread_id ? String(meta.thread_id) : null,
@@ -1164,6 +1199,9 @@ export async function loadSession(
     primary_character: meta.primary_character ? String(meta.primary_character) : null,
     title: String(meta.title || ""),
     updated: String(meta.updated || ""),
+    compact_roleplay_count: numOrNull(meta.compact_roleplay_count),
+    compact_at_message_count: numOrNull(meta.compact_at_message_count),
+    last_compact_summary_chars: numOrNull(meta.last_compact_summary_chars),
   };
 }
 
@@ -1176,6 +1214,9 @@ export async function saveSession(
     nmem_space?: string | null;
     title?: string | null;
     primary_character?: string | null;
+    compact_roleplay_count?: number | null;
+    compact_at_message_count?: number | null;
+    last_compact_summary_chars?: number | null;
   } = {},
 ): Promise<void> {
   const previous = await loadSession(fs, sessionId).catch(() => null);
@@ -1193,13 +1234,25 @@ export async function saveSession(
             ? extra.nmem_space
               ? String(extra.nmem_space)
               : null
-            : previous?.nmem_space ?? null,
+            : (previous?.nmem_space ?? null),
         primary_character:
           extra.primary_character !== undefined ? extra.primary_character : (previous?.primary_character ?? null),
         title,
         updated: new Date().toISOString(),
         message_count: messages.length,
         preview: sessionPreview(messages),
+        compact_roleplay_count:
+          extra.compact_roleplay_count !== undefined
+            ? extra.compact_roleplay_count
+            : (previous?.compact_roleplay_count ?? null),
+        compact_at_message_count:
+          extra.compact_at_message_count !== undefined
+            ? extra.compact_at_message_count
+            : (previous?.compact_at_message_count ?? null),
+        last_compact_summary_chars:
+          extra.last_compact_summary_chars !== undefined
+            ? extra.last_compact_summary_chars
+            : (previous?.last_compact_summary_chars ?? null),
       },
       null,
       2,

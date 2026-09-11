@@ -38,7 +38,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lore_scan_depth: 4,
   lore_token_budget: 8_192,
   max_tool_rounds: 4,
-  transcript_keep_after_compact: 8,
+  transcript_keep_after_compact: 20, // last N UA messages kept in LLM context after compact (full transcript stays on R2)
   context: structuredClone(DEFAULT_CONTEXT),
   mini: { ...DEFAULT_MINI },
 };
