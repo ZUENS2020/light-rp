@@ -73,7 +73,7 @@ import { memoryToolSpec, PromptLibrary, turnCommitToolSpec } from "../core/promp
 import type { R2Fs } from "../adapters/r2";
 import { LEGACY_LORE_TOKEN_BUDGET, STORY_OUTPUT_TOKEN_FLOOR, type AppSettings } from "./settings";
 import { nowIso } from "../core/util";
-import { preparePrompt } from "./prompt-state";
+import { createPromptEpoch, preparePrompt } from "./prompt-state";
 import { getCachedToolExecution, recordToolExecution } from "./tasks";
 import { parseSystemCommand, roleplayOnlyMessages } from "../core/commands";
 import {
@@ -82,6 +82,7 @@ import {
   isBadCompactSummary,
   roleplayUserAssistant,
   sliceRoleplayHistoryForAssemble,
+  shouldCompactAfterTurn,
   upsertCompactSummaryMessage,
 } from "../core/compact";
 
@@ -99,6 +100,9 @@ export type TurnOut = {
   stable_prefix_tokens?: number;
   volatile_tokens?: number;
   hidden_prompt_events?: Array<{ kind: "context" | "memory"; content: string; hashSeed?: string }>;
+  /** Set when post-turn background compact should run (pressure or rare turn fallback). */
+  should_compact?: boolean;
+  /** Legacy: only set if compact applied inline (no longer used on the story critical path). */
   rotate_prompt_epoch_reason?: "context_compacted";
 };
 
@@ -702,19 +706,19 @@ export async function runTurn(
   userText: string,
   settings: AppSettings,
   overlays: Record<string, string>,
-  waitUntil?: (job: Promise<unknown>) => void,
+  _waitUntil?: (job: Promise<unknown>) => void,
   opts?: RunTurnOptions,
 ): Promise<TurnOut> {
   const warnings: string[] = [];
   const persistUser = opts?.persistUser !== false;
-  let loaded = await loadSession(fs, sessionId);
+  const loaded = await loadSession(fs, sessionId);
   const lastLoaded = loaded.messages[loaded.messages.length - 1];
   const userAlreadyPersisted =
     !persistUser &&
     lastLoaded?.role === "user" &&
     (lastLoaded.task_id === opts?.ai?.taskId || lastLoaded.content === userText);
-  let roleplayMessages = roleplayOnlyMessages(loaded.messages);
-  let historyMessages = userAlreadyPersisted ? roleplayMessages.slice(0, -1) : roleplayMessages;
+  const roleplayMessages = roleplayOnlyMessages(loaded.messages);
+  const historyMessages = userAlreadyPersisted ? roleplayMessages.slice(0, -1) : roleplayMessages;
   let primaryCharacter = loaded.primary_character;
   if (!primaryCharacter && pack.primary) {
     primaryCharacter = pack.primary;
@@ -1010,28 +1014,18 @@ export async function runTurn(
     nmem_space: loaded.nmem_space,
     primary_character: primaryCharacter,
   });
-  let rotatePromptEpochReason: TurnOut["rotate_prompt_epoch_reason"];
-  if (turnNumber >= settings.compact_after_turns) {
-    try {
-      const compactResult = await runCompact(
-        env,
-        fs,
-        memory,
-        nextMessages,
-        sessionId,
-        { ...loaded, thread_id: threadId, primary_character: primaryCharacter },
-        library,
-        settings,
-        pack,
-        waitUntil,
-        opts?.ai ? { model: opts.ai.model, affinityKey: affinity, requestKind: "compact" } : undefined,
-      );
-      for (const warning of compactResult.warnings) warnings.push(warning);
-      if (compactResult.applied && opts?.ai) rotatePromptEpochReason = "context_compacted";
-    } catch (err) {
-      warnings.push(`compact failed: ${String(err)}`);
-    }
-  }
+  const aiUsage = addUsage(gm.usage, commitUsage);
+  const pressureCompact = shouldCompactAfterTurn({
+    promptTokens: aiUsage.prompt_tokens,
+    estimatedTotal: assembled.report.total,
+    contextMax: assembled.report.max_tokens,
+    threshold: settings.compression_threshold,
+  });
+  // Rare safety fallback when turn count is very high even if estimates stay under threshold.
+  const turnFallback = turnNumber >= settings.compact_after_turns;
+  const shouldCompact = pressureCompact || turnFallback;
+  // Do NOT await runCompact here — it blocks the generation lease/UI. Callers schedule
+  // background compact via waitUntil after the reply is completed/persisted.
   await fs.put(
     `sessions/${sessionId}/last_turn.json`,
     JSON.stringify(
@@ -1040,9 +1034,19 @@ export async function runTurn(
         remembered,
         state_updated: stateUpdated,
         hidden_prompt_events: hiddenPromptEvents,
-        rotate_prompt_epoch_reason: rotatePromptEpochReason || null,
+        should_compact: shouldCompact,
+        compact_pressure: {
+          prompt_tokens: aiUsage.prompt_tokens,
+          estimated_total: assembled.report.total,
+          context_max: assembled.report.max_tokens,
+          threshold: settings.compression_threshold,
+          pressure_hit: pressureCompact,
+          turn_fallback: turnFallback,
+          turn_number: turnNumber,
+        },
+        rotate_prompt_epoch_reason: null,
         task_id: opts?.ai?.taskId || null,
-        ai_usage: addUsage(gm.usage, commitUsage),
+        ai_usage: aiUsage,
         response_cache_status: gm.response_cache_status,
         request_hash: gm.request_body ? await sha256(gm.request_body) : null,
         stable_prefix_tokens: stablePrefixTokens,
@@ -1062,13 +1066,13 @@ export async function runTurn(
     warnings,
     truncated,
     context_report: assembled.report,
-    ai_usage: addUsage(gm.usage, commitUsage),
+    ai_usage: aiUsage,
     response_cache_status: gm.response_cache_status,
     request_hash: gm.request_body ? await sha256(gm.request_body) : undefined,
     stable_prefix_tokens: stablePrefixTokens,
     volatile_tokens: volatileTokens,
     hidden_prompt_events: hiddenPromptEvents,
-    rotate_prompt_epoch_reason: rotatePromptEpochReason,
+    should_compact: shouldCompact,
   };
 }
 
@@ -1313,6 +1317,97 @@ export async function runCompact(
   });
   await fs.put(`sessions/${sessionId}/summary.md`, `${formatted}\n`);
   return { summary: formatted, warnings, applied: true };
+}
+
+export type DeferredPostTurnCompactInput = {
+  env: Env;
+  fs: R2Fs;
+  pack: WorldPack;
+  sessionId: string;
+  settings: AppSettings;
+  overlays: Record<string, string>;
+  waitUntil?: (job: Promise<unknown>) => void;
+  db?: D1Database;
+  ai?: AiRequestOptions;
+};
+
+/**
+ * Background post-turn compact for the *next* turn's lean window.
+ * Failures are logged into last_turn warnings and must not fail the completed story turn.
+ */
+export async function runDeferredPostTurnCompact(input: DeferredPostTurnCompactInput): Promise<CompactResult> {
+  const loaded = await loadSession(input.fs, input.sessionId);
+  const memory = await loadMemory(input.fs);
+  const library = new PromptLibrary(input.overlays);
+  let compactResult: CompactResult;
+  try {
+    compactResult = await runCompact(
+      input.env,
+      input.fs,
+      memory,
+      loaded.messages,
+      input.sessionId,
+      loaded,
+      library,
+      input.settings,
+      input.pack,
+      input.waitUntil,
+      input.ai,
+    );
+  } catch (err) {
+    compactResult = { summary: "", warnings: [`background compact failed: ${String(err)}`], applied: false };
+  }
+  if (compactResult.applied && input.db) {
+    try {
+      await createPromptEpoch(input.db, input.sessionId, "context_compacted");
+    } catch (err) {
+      compactResult.warnings.push(`prompt epoch rotate after compact failed: ${String(err)}`);
+    }
+  }
+  try {
+    const raw = await input.fs.get(`sessions/${input.sessionId}/last_turn.json`);
+    const prev = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    const prevWarnings = Array.isArray(prev.warnings) ? (prev.warnings as string[]) : [];
+    await input.fs.put(
+      `sessions/${input.sessionId}/last_turn.json`,
+      JSON.stringify(
+        {
+          ...prev,
+          warnings: [...prevWarnings, ...compactResult.warnings],
+          should_compact: false,
+          rotate_prompt_epoch_reason: compactResult.applied ? "context_compacted" : null,
+          compact_applied: compactResult.applied,
+          background_compact_completed_at: nowIso(),
+        },
+        null,
+        2,
+      ),
+      "application/json",
+    );
+  } catch {
+    // Diagnostics-only; story turn already completed.
+  }
+  return compactResult;
+}
+
+/** Schedule deferred compact after the reply is done; never blocks the caller. */
+export function schedulePostTurnCompact(
+  waitUntil: ((job: Promise<unknown>) => void) | undefined,
+  shouldCompact: boolean,
+  job: () => Promise<unknown>,
+): void {
+  if (!shouldCompact) return;
+  if (!waitUntil) {
+    console.warn("post-turn compact needed but waitUntil unavailable; skipping");
+    return;
+  }
+  waitUntil(
+    Promise.resolve()
+      .then(() => job())
+      .catch((err) => {
+        console.warn("background post-turn compact failed:", err);
+      }),
+  );
 }
 
 function asIdList(value: unknown): string[] {

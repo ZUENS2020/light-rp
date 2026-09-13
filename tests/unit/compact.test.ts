@@ -6,6 +6,7 @@ import {
   buildIncrementalCompactInput,
   formatCompactSummaryForStorage,
   isBadCompactSummary,
+  shouldCompactAfterTurn,
   sliceRoleplayHistoryByTokenBudget,
   sliceRoleplayHistoryForAssemble,
   stripCompactSummaryMessages,
@@ -205,5 +206,71 @@ describe("Hermes lean assemble slice", () => {
     const kept = sliceRoleplayHistoryForAssemble(messages, 12, budget);
     expect(kept.length).toBeLessThanOrEqual(12);
     expect(kept.at(-1)?.content).toBe("短消息29");
+  });
+});
+
+describe("shouldCompactAfterTurn pressure gate", () => {
+  const contextMax = 65_536;
+  const threshold = 0.5;
+
+  it("is false below threshold", () => {
+    expect(
+      shouldCompactAfterTurn({
+        promptTokens: Math.floor(contextMax * threshold) - 1,
+        estimatedTotal: 100,
+        contextMax,
+        threshold,
+      }),
+    ).toBe(false);
+  });
+
+  it("is true at exact threshold boundary (prompt tokens)", () => {
+    expect(
+      shouldCompactAfterTurn({
+        promptTokens: Math.floor(contextMax * threshold),
+        estimatedTotal: 0,
+        contextMax,
+        threshold,
+      }),
+    ).toBe(true);
+  });
+
+  it("is true when estimated total alone crosses threshold", () => {
+    expect(
+      shouldCompactAfterTurn({
+        promptTokens: 0,
+        estimatedTotal: Math.ceil(contextMax * threshold),
+        contextMax,
+        threshold,
+      }),
+    ).toBe(true);
+  });
+
+  it("uses max of promptTokens and estimatedTotal", () => {
+    expect(
+      shouldCompactAfterTurn({
+        promptTokens: 10,
+        estimatedTotal: Math.ceil(contextMax * threshold),
+        contextMax,
+        threshold,
+      }),
+    ).toBe(true);
+    expect(
+      shouldCompactAfterTurn({
+        promptTokens: Math.ceil(contextMax * threshold),
+        estimatedTotal: 10,
+        contextMax,
+        threshold,
+      }),
+    ).toBe(true);
+  });
+
+  it("is false for invalid contextMax or threshold", () => {
+    expect(shouldCompactAfterTurn({ promptTokens: 99_999, estimatedTotal: 99_999, contextMax: 0, threshold })).toBe(
+      false,
+    );
+    expect(shouldCompactAfterTurn({ promptTokens: 99_999, estimatedTotal: 99_999, contextMax, threshold: 0 })).toBe(
+      false,
+    );
   });
 });

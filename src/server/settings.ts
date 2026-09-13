@@ -19,7 +19,7 @@ export type AppSettings = {
   };
   memory: { world_char_limit: number; player_char_limit: number; character_char_limit: number };
   compact_after_turns: number;
-  /** Fraction of context window; retained for settings UI / future cheap pressure hooks (not in-turn runCompact). */
+  /** Fraction of context window; post-turn background compact when pressure ≥ threshold × window. */
   compression_threshold: number;
   lore_scan_depth: number;
   lore_token_budget: number;
