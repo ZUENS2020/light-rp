@@ -51,9 +51,9 @@ describe("ported budget behavior", () => {
 
   it("parses context defaults", () => {
     const value = parseContextConfig(null);
-    expect(value.max_tokens).toBe(131_072);
-    expect(value.budget.lore).toBe(12_000);
-    expect(value.budget.memory).toBe(10_000);
+    expect(value.max_tokens).toBe(WORKING_CONTEXT_CAP);
+    expect(value.budget.lore).toBe(6_000);
+    expect(value.budget.memory).toBe(5_000);
     expect(value.history.protect_recent_turns).toBe(6);
     expect(value.tool_reserve).toBe(1_500);
   });
@@ -135,7 +135,7 @@ describe("ported budget behavior", () => {
   });
   it("reserves model output and phi", () => {
     const value = sectionSoftCap(DEFAULT_CONTEXT, "你好", 8_192, 2_500, 0);
-    expect(value).toBe(131_072 - 8_192 - 2_500 - estimateTokens("你好"));
+    expect(value).toBe(WORKING_CONTEXT_CAP - 8_192 - 2_500 - estimateTokens("你好"));
   });
   it("reduces history when phi grows", () => {
     const without = historyTokenBudget(DEFAULT_CONTEXT, 2_000, "hi", 1_000, 0);
