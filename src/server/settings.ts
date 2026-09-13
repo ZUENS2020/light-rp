@@ -19,7 +19,7 @@ export type AppSettings = {
   };
   memory: { world_char_limit: number; player_char_limit: number; character_char_limit: number };
   compact_after_turns: number;
-  /** Fraction of context window; preflight compact when pressure ≥ this (Hermes). */
+  /** Fraction of context window; retained for settings UI / future cheap pressure hooks (not in-turn runCompact). */
   compression_threshold: number;
   lore_scan_depth: number;
   lore_token_budget: number;

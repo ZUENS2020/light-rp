@@ -82,11 +82,12 @@ export const LEGACY_SECTION_BUDGET: SectionBudget = {
 
 /**
  * Working prompt window for GLM-class models.
- * Prefer 128k over the full ~1.3M provider window: full-window prompts are
- * slow/expensive for RP turns, while 128k (4× the old 32k default) gives lore,
- * memory, mini cards, summary, and history meaningful headroom.
+ * Prefer 64k over the full ~1.3M provider window: larger prompts are
+ * slow/expensive for RP turns, while 64k (2× the old 32k default) still gives lore,
+ * memory, mini cards, summary, and history meaningful headroom — and forces
+ * section+history trim hard enough that live story prompts stay lean.
  */
-export const WORKING_CONTEXT_CAP = 131_072;
+export const WORKING_CONTEXT_CAP = 65_536;
 export const LEGACY_DEFAULT_CONTEXT_MAX_TOKENS = 32_768;
 export const LEGACY_MINI_MAX_TOKENS = 1_200;
 
@@ -103,17 +104,17 @@ export function leanTailTokenBudget(contextWindow: number): number {
   return Math.min(LEAN_TAIL_CAP_TOKENS, Math.max(LEAN_TAIL_FLOOR_TOKENS, raw));
 }
 
-/** Scaled ~4× from the 32k-era caps so section room tracks WORKING_CONTEXT_CAP. */
+/** Scaled ~2× from the 32k-era caps so section room tracks WORKING_CONTEXT_CAP (64k). */
 export const DEFAULT_SECTION_BUDGET: SectionBudget = {
-  system: 6_000,
-  world: 10_000,
-  user_setting: 6_000,
-  primary_card: 16_000,
-  mini_cards: 4_800,
-  lore: 12_000,
-  state: 3_200,
-  memory: 10_000,
-  summary: 10_000,
+  system: 3_000,
+  world: 5_000,
+  user_setting: 3_000,
+  primary_card: 8_000,
+  mini_cards: 2_400,
+  lore: 6_000,
+  state: 1_600,
+  memory: 5_000,
+  summary: 5_000,
 };
 
 export const DEFAULT_MEMORY_SPLIT: MemorySplitConfig = {
@@ -132,7 +133,7 @@ export const DEFAULT_CONTEXT: ContextConfig = {
 };
 
 export const DEFAULT_MINI: MiniSelectConfig = {
-  max_tokens: 4_800,
+  max_tokens: 2_400,
   recent_turns: 4,
   max_characters: 6,
 };

@@ -40,7 +40,7 @@ describe("runtime model limits", () => {
 
     const context = effectiveContextConfig(settings, model);
 
-    expect(context.max_tokens).toBe(131_072);
+    expect(context.max_tokens).toBe(WORKING_CONTEXT_CAP);
     expect(context.generation_reserve).toBe(8_192);
   });
 
@@ -71,7 +71,7 @@ describe("runtime model limits", () => {
   });
 
 
-  it("auto-raises stale 32k settings toward 128k when the model window is larger", () => {
+  it("auto-raises stale 32k settings toward WORKING_CONTEXT_CAP when the model window is larger", () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
     settings.context.max_tokens = LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;
     settings.context.budget = { ...LEGACY_SECTION_BUDGET };
@@ -99,15 +99,22 @@ describe("runtime model limits", () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
     settings.context.max_tokens = LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;
     const glm: AiModelConfig = { ...DEFAULT_MODEL, context_window: 1_310_720 };
-    expect(effectiveContextConfig(settings, glm).max_tokens).toBe(131_072);
+    expect(effectiveContextConfig(settings, glm).max_tokens).toBe(WORKING_CONTEXT_CAP);
     expect(effectiveContextConfig(settings, glm).max_tokens).toBeLessThan(glm.context_window);
   });
 
   it("still honors an explicit mid-size window above the legacy default", () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
-    settings.context.max_tokens = 64_000;
+    settings.context.max_tokens = 48_000;
     const glm: AiModelConfig = { ...DEFAULT_MODEL, context_window: 1_310_720 };
-    expect(effectiveContextConfig(settings, glm).max_tokens).toBe(64_000);
+    expect(effectiveContextConfig(settings, glm).max_tokens).toBe(48_000);
+  });
+
+  it("hard-caps configured windows above WORKING_CONTEXT_CAP", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.context.max_tokens = 131_072;
+    const glm: AiModelConfig = { ...DEFAULT_MODEL, context_window: 1_310_720 };
+    expect(effectiveContextConfig(settings, glm).max_tokens).toBe(WORKING_CONTEXT_CAP);
   });
 
   it("keeps custom lore budgets when they are not the legacy 2048 default", () => {

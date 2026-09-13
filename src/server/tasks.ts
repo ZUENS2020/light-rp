@@ -374,7 +374,8 @@ export async function leaseTask(
   db: D1Database,
   id: string,
   owner: string,
-  seconds = 180,
+  /** GLM story turns often take 500–700s; 180s caused false TASK_LEASE_EXPIRED mid-flight. */
+  seconds = 1200,
 ): Promise<GenerationTaskRow | null> {
   const now = new Date();
   const expires = new Date(now.getTime() + seconds * 1000).toISOString();
