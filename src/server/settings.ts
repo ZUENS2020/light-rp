@@ -19,6 +19,8 @@ export type AppSettings = {
   };
   memory: { world_char_limit: number; player_char_limit: number; character_char_limit: number };
   compact_after_turns: number;
+  /** Fraction of context window; preflight compact when pressure ≥ this (Hermes). */
+  compression_threshold: number;
   lore_scan_depth: number;
   lore_token_budget: number;
   max_tool_rounds: number;
@@ -35,10 +37,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   llm: { temperature: 1, max_tokens: 16_384, timeout: 180, breach: true },
   memory: { world_char_limit: 2500, player_char_limit: 1400, character_char_limit: 1200 },
   compact_after_turns: 40,
+  compression_threshold: 0.5,
   lore_scan_depth: 4,
   lore_token_budget: 8_192,
   max_tool_rounds: 4,
-  transcript_keep_after_compact: 20, // last N UA messages kept in LLM context after compact (full transcript stays on R2)
+  // Message ceiling only; Hermes lean token budget is the primary assemble bound.
+  transcript_keep_after_compact: 12,
   context: structuredClone(DEFAULT_CONTEXT),
   mini: { ...DEFAULT_MINI },
 };
@@ -95,6 +99,7 @@ export function publicSettings(env: Env, settings: AppSettings, defaultModelConf
     worlds_dir: "r2://lightrp/v2/workspaces",
     home: "r2://lightrp/v2",
     compact_after_turns: settings.compact_after_turns,
+    compression_threshold: settings.compression_threshold,
     lore_scan_depth: settings.lore_scan_depth,
     lore_token_budget: settings.lore_token_budget,
     max_tool_rounds: settings.max_tool_rounds,

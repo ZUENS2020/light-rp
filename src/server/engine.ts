@@ -15,7 +15,9 @@ import {
   LEGACY_DEFAULT_CONTEXT_MAX_TOKENS,
   LEGACY_MINI_MAX_TOKENS,
   WORKING_CONTEXT_CAP,
+  estimateTokens,
   isLegacySectionBudget,
+  leanTailTokenBudget,
   memoryIsDuplicate,
   parseContextConfig,
   parseMiniConfig,
@@ -158,7 +160,8 @@ export function effectiveContextConfig(settings: AppSettings, model?: AiModelCon
       ? { ...DEFAULT_SECTION_BUDGET }
       : settings.context.budget;
   const history =
-    staleSmallWindow && settings.context.history.protect_recent_turns <= 6
+    staleSmallWindow &&
+    settings.context.history.protect_recent_turns < DEFAULT_CONTEXT.history.protect_recent_turns
       ? {
           ...settings.context.history,
           protect_recent_turns: DEFAULT_CONTEXT.history.protect_recent_turns,
@@ -693,6 +696,29 @@ async function extractTurnCommit(
   return commit;
 }
 
+
+async function loadLastPromptPressureTokens(fs: R2Fs, sessionId: string): Promise<number> {
+  try {
+    const raw = await fs.get(`sessions/${sessionId}/last_turn.json`);
+    if (!raw) return 0;
+    const data = JSON.parse(raw) as {
+      ai_usage?: { prompt_tokens?: number };
+      token_usage?: { estimated_total?: number };
+    };
+    const prompt = Number(data.ai_usage?.prompt_tokens || 0);
+    const estimated = Number(data.token_usage?.estimated_total || 0);
+    return Math.max(0, prompt, estimated);
+  } catch {
+    return 0;
+  }
+}
+
+function estimateRoleplayHistoryTokens(messages: { role: string; content: string }[]): number {
+  const ua = roleplayUserAssistant(messages);
+  if (!ua.length) return 0;
+  return estimateTokens(ua.map((m) => `${m.role}: ${m.content}`).join("\n"));
+}
+
 export async function runTurn(
   env: Env,
   fs: R2Fs,
@@ -706,14 +732,14 @@ export async function runTurn(
 ): Promise<TurnOut> {
   const warnings: string[] = [];
   const persistUser = opts?.persistUser !== false;
-  const loaded = await loadSession(fs, sessionId);
+  let loaded = await loadSession(fs, sessionId);
   const lastLoaded = loaded.messages[loaded.messages.length - 1];
   const userAlreadyPersisted =
     !persistUser &&
     lastLoaded?.role === "user" &&
     (lastLoaded.task_id === opts?.ai?.taskId || lastLoaded.content === userText);
-  const roleplayMessages = roleplayOnlyMessages(loaded.messages);
-  const historyMessages = userAlreadyPersisted ? roleplayMessages.slice(0, -1) : roleplayMessages;
+  let roleplayMessages = roleplayOnlyMessages(loaded.messages);
+  let historyMessages = userAlreadyPersisted ? roleplayMessages.slice(0, -1) : roleplayMessages;
   let primaryCharacter = loaded.primary_character;
   if (!primaryCharacter && pack.primary) {
     primaryCharacter = pack.primary;
@@ -734,6 +760,48 @@ export async function runTurn(
   const contextCfg = effectiveContextConfig(settings, opts?.ai?.model);
   const miniCfg = effectiveMiniConfig(settings, contextCfg, opts?.ai?.model);
   const outputTokens = effectiveOutputTokens(settings, opts?.ai?.model, opts?.ai?.requestKind || "story");
+  const leanTailBudget = leanTailTokenBudget(contextCfg.max_tokens);
+  const compressionThreshold = Math.min(
+    0.95,
+    Math.max(0.1, Number(settings.compression_threshold ?? 0.5) || 0.5),
+  );
+  // Hermes pressure preflight: compact BEFORE paying for an oversized story prompt.
+  const historyPressure = estimateRoleplayHistoryTokens(historyMessages);
+  const lastPromptPressure = await loadLastPromptPressureTokens(fs, sessionId);
+  const pressureTokens = Math.max(historyPressure, lastPromptPressure);
+  const pressureLimit = Math.floor(contextCfg.max_tokens * compressionThreshold);
+  const requestKind = opts?.ai?.requestKind || "story";
+  if (requestKind === "story" && pressureTokens >= pressureLimit && historyPressure > leanTailBudget) {
+    try {
+      const compactResult = await runCompact(
+        env,
+        fs,
+        memory,
+        loaded.messages,
+        sessionId,
+        {
+          thread_id: loaded.thread_id,
+          nmem_space: loaded.nmem_space,
+          primary_character: primaryCharacter,
+          compact_roleplay_count: loaded.compact_roleplay_count,
+        },
+        library,
+        settings,
+        pack,
+        waitUntil,
+        opts?.ai ? { model: opts.ai.model, requestKind: "compact" } : undefined,
+      );
+      for (const warning of compactResult.warnings) warnings.push(warning);
+      if (compactResult.applied) {
+        warnings.push("preflight compact: context pressure");
+        loaded = await loadSession(fs, sessionId);
+        roleplayMessages = roleplayOnlyMessages(loaded.messages);
+        historyMessages = userAlreadyPersisted ? roleplayMessages.slice(0, -1) : roleplayMessages;
+      }
+    } catch (err) {
+      warnings.push(`preflight compact failed: ${String(err)}`);
+    }
+  }
   const recentSlice = roleplayMessages.slice(-Math.max(8, miniCfg.recent_turns * 2));
   const recentHaystack = recentSlice.map((m) => m.content).join("\n");
   const haystack = `${userText}\n${recentHaystack}\n${scene.location} ${scene.time} ${scene.scene || scene.notes} ${scene.present.join(" ")}`;
@@ -775,6 +843,7 @@ export async function runTurn(
   const historyForAssemble = sliceRoleplayHistoryForAssemble(
     historyMessages,
     settings.transcript_keep_after_compact,
+    leanTailBudget,
   ).map((m) => ({ role: m.role, content: m.content }));
   const assembled = assembleBudgeted(
     library,

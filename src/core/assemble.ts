@@ -4,6 +4,7 @@ import {
   estimateTokens,
   fitMemorySections,
   historyTokenBudget,
+  leanTailTokenBudget,
   parseContextConfig,
   parseMiniConfig,
   sectionSoftCap,
@@ -365,7 +366,13 @@ export function assembleBudgeted(
     llmMaxTokens,
     phiTokens,
   );
-  const trimmed = trimHistory(historyMessages, histBudget, contextCfg.history.protect_recent_turns);
+  const leanProtectCap = leanTailTokenBudget(contextCfg.max_tokens);
+  const trimmed = trimHistory(
+    historyMessages,
+    histBudget,
+    contextCfg.history.protect_recent_turns,
+    leanProtectCap,
+  );
   const report = buildContextReport(contextCfg, reports, trimmed.messages, trimmed.truncated, userInput, {
     llmMaxTokens,
     phiText,

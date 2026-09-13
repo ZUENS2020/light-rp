@@ -90,6 +90,19 @@ export const WORKING_CONTEXT_CAP = 131_072;
 export const LEGACY_DEFAULT_CONTEXT_MAX_TOKENS = 32_768;
 export const LEGACY_MINI_MAX_TOKENS = 1_200;
 
+/** Hermes-style lean tail: keep a small recent transcript tip for the live LLM window. */
+export const LEAN_TAIL_FLOOR_TOKENS = 10_000;
+export const LEAN_TAIL_CAP_TOKENS = 25_000;
+export const LEAN_TAIL_FRACTION = 0.025;
+export const LEAN_MIN_TAIL_MESSAGES = 2;
+
+/** clamp(floor, cap, floor(contextWindow * 0.025)) — Hermes lean tail token budget. */
+export function leanTailTokenBudget(contextWindow: number): number {
+  const window = Math.max(0, Math.floor(Number(contextWindow) || 0));
+  const raw = Math.floor(window * LEAN_TAIL_FRACTION);
+  return Math.min(LEAN_TAIL_CAP_TOKENS, Math.max(LEAN_TAIL_FLOOR_TOKENS, raw));
+}
+
 /** Scaled ~4× from the 32k-era caps so section room tracks WORKING_CONTEXT_CAP. */
 export const DEFAULT_SECTION_BUDGET: SectionBudget = {
   system: 6_000,
@@ -115,7 +128,7 @@ export const DEFAULT_CONTEXT: ContextConfig = {
   tool_reserve: 1500,
   budget: { ...DEFAULT_SECTION_BUDGET },
   memory_split: { ...DEFAULT_MEMORY_SPLIT },
-  history: { use_remaining: true, protect_recent_turns: 10 },
+  history: { use_remaining: true, protect_recent_turns: 6 },
 };
 
 export const DEFAULT_MINI: MiniSelectConfig = {
@@ -371,14 +384,42 @@ function recentUa<T extends { role?: string }>(messages: T[], n: number): T[] {
   return messages.filter((m) => m.role === "user" || m.role === "assistant").slice(-n);
 }
 
+/**
+ * Recent UA messages protected from drop, but never more tokens than protectTokenCap
+ * (Hermes lean: protect_recent_turns cannot force a 40k+ tip).
+ */
+export function protectedRecentMessages<T extends { role?: string; content?: string | null }>(
+  messages: T[],
+  protectRecent: number,
+  protectTokenCap: number,
+): T[] {
+  const candidates = recentUa(messages, Math.max(0, protectRecent));
+  if (!candidates.length) return [];
+  const cap = Math.max(0, Math.floor(protectTokenCap));
+  if (cap <= 0) return candidates.slice(-LEAN_MIN_TAIL_MESSAGES);
+  const selected: T[] = [];
+  let used = 0;
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const msg = candidates[i]!;
+    const cost = estimateTokens(`${msg.role || ""}: ${msg.content || ""}`);
+    if (selected.length >= LEAN_MIN_TAIL_MESSAGES && used + cost > cap) break;
+    selected.push(msg);
+    used += cost;
+    // Always attempt at least LEAN_MIN_TAIL_MESSAGES even if slightly over cap.
+    if (selected.length >= LEAN_MIN_TAIL_MESSAGES && used >= cap) break;
+  }
+  return selected.reverse();
+}
+
 export function trimHistory<T extends { role?: string; content?: string | null }>(
   messages: T[],
   tokenBudget: number,
   protectRecent: number,
+  protectTokenCap: number = LEAN_TAIL_CAP_TOKENS,
 ): { messages: T[]; truncated: boolean } {
+  const protectedMsgs = protectedRecentMessages(messages, protectRecent, protectTokenCap);
   if (tokenBudget <= 0) {
-    const kept = recentUa(messages, protectRecent);
-    return { messages: kept, truncated: kept.length < messages.length };
+    return { messages: protectedMsgs, truncated: protectedMsgs.length < messages.length };
   }
   const selected: T[] = [];
   let used = 0;
@@ -394,7 +435,6 @@ export function trimHistory<T extends { role?: string; content?: string | null }
     used += cost;
   }
   selected.reverse();
-  const protectedMsgs = recentUa(messages, protectRecent);
   const ids = new Set(selected.map((m) => m));
   for (const msg of protectedMsgs) {
     if (!ids.has(msg)) {
@@ -410,6 +450,11 @@ export function trimHistory<T extends { role?: string; content?: string | null }
     if (dropIdx < 0) break;
     selected.splice(dropIdx, 1);
     truncated = true;
+  }
+  // Final safety: if protected alone still exceeds hist budget, keep lean tip only.
+  if (selected.length && estimateTokens(histBlob(selected)) > tokenBudget) {
+    const leanOnly = protectedRecentMessages(messages, protectRecent, Math.min(protectTokenCap, tokenBudget));
+    return { messages: leanOnly, truncated: true };
   }
   return { messages: selected, truncated: truncated || selected.length < messages.length };
 }

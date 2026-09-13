@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   COMPACT_REQUIRED_SECTIONS,
+  COMPACT_SUMMARY_END_MARKER,
   COMPACT_SUMMARY_MARKER,
   buildIncrementalCompactInput,
   formatCompactSummaryForStorage,
   isBadCompactSummary,
+  sliceRoleplayHistoryByTokenBudget,
   sliceRoleplayHistoryForAssemble,
   stripCompactSummaryMessages,
   upsertCompactSummaryMessage,
 } from "../../src/core/compact";
+import { estimateTokens, leanTailTokenBudget, WORKING_CONTEXT_CAP } from "../../src/core/budget";
 import { invalidateSessionSummary, INVALIDATED_SUMMARY_STUB } from "../../src/core/domain";
 import { storySummary } from "../../src/core/assemble";
 import { PromptLibrary } from "../../src/core/prompts";
@@ -110,8 +113,12 @@ describe("assemble history keep window", () => {
 });
 
 describe("settings + prompts", () => {
-  it("defaults transcript_keep_after_compact to 20", () => {
-    expect(DEFAULT_SETTINGS.transcript_keep_after_compact).toBe(20);
+  it("defaults transcript_keep_after_compact to lean-compatible 12", () => {
+    expect(DEFAULT_SETTINGS.transcript_keep_after_compact).toBe(12);
+  });
+
+  it("defaults compression_threshold to Hermes 0.50", () => {
+    expect(DEFAULT_SETTINGS.compression_threshold).toBe(0.5);
   });
 
   it("compact prompts include structured schema keywords", () => {
@@ -123,6 +130,8 @@ describe("settings + prompts", () => {
       expect(system).toContain(section);
     }
     expect(system).toMatch(/800|1500|2000/);
+    expect(system).toContain(COMPACT_SUMMARY_END_MARKER);
+    expect(system).toMatch(/背景参考|reference only|最新用户/);
     expect(user).toContain("previous_summary");
     expect(user).toContain("transcript");
     expect(library.text("memory_flush.md")).toMatch(/原文|禁止美化|未成年|零点/);
@@ -162,5 +171,39 @@ describe("invalidateSessionSummary with new marker", () => {
     expect(meta.compact_roleplay_count).toBeNull();
     expect(meta.compact_at_message_count).toBeNull();
     expect(meta.last_compact_summary_chars).toBeNull();
+  });
+});
+
+describe("Hermes lean assemble slice", () => {
+  it("accepts structured summary with END marker", () => {
+    const formatted = formatCompactSummaryForStorage(validSummary());
+    expect(formatted).toContain(COMPACT_SUMMARY_END_MARKER);
+    expect(isBadCompactSummary(formatted)).toBe(false);
+  });
+
+  it("cuts 20 huge UA messages down to lean token budget", () => {
+    const huge = "汉".repeat(2_000);
+    const messages = Array.from({ length: 20 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: huge,
+    }));
+    const budget = leanTailTokenBudget(WORKING_CONTEXT_CAP);
+    const kept = sliceRoleplayHistoryByTokenBudget(messages, budget);
+    const tokens = estimateTokens(kept.map((m) => `${m.role}: ${m.content}`).join("\n"));
+    expect(kept.length).toBeGreaterThanOrEqual(2);
+    expect(kept.length).toBeLessThan(20);
+    // May slightly exceed when forcing min_tail of oversized messages; stay near lean.
+    expect(tokens).toBeLessThanOrEqual(budget + estimateTokens(`user: ${huge}`));
+  });
+
+  it("applies message ceiling on top of token budget", () => {
+    const messages = Array.from({ length: 30 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: `短消息${i}`,
+    }));
+    const budget = leanTailTokenBudget(WORKING_CONTEXT_CAP);
+    const kept = sliceRoleplayHistoryForAssemble(messages, 12, budget);
+    expect(kept.length).toBeLessThanOrEqual(12);
+    expect(kept.at(-1)?.content).toBe("短消息29");
   });
 });
