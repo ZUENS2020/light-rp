@@ -159,8 +159,7 @@ export function effectiveContextConfig(settings: AppSettings, model?: AiModelCon
       ? { ...DEFAULT_SECTION_BUDGET }
       : settings.context.budget;
   const history =
-    staleSmallWindow &&
-    settings.context.history.protect_recent_turns < DEFAULT_CONTEXT.history.protect_recent_turns
+    staleSmallWindow && settings.context.history.protect_recent_turns < DEFAULT_CONTEXT.history.protect_recent_turns
       ? {
           ...settings.context.history,
           protect_recent_turns: DEFAULT_CONTEXT.history.protect_recent_turns,
@@ -694,7 +693,6 @@ async function extractTurnCommit(
   if (!commit) throw new Error("模型没有提交合法的 commit_turn，状态与记忆未落盘");
   return commit;
 }
-
 
 export async function runTurn(
   env: Env,

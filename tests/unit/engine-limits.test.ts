@@ -70,7 +70,6 @@ describe("runtime model limits", () => {
     expect(DEFAULT_MODEL.max_output_tokens).toBeGreaterThanOrEqual(STORY_OUTPUT_TOKEN_FLOOR);
   });
 
-
   it("auto-raises stale 32k settings toward WORKING_CONTEXT_CAP when the model window is larger", () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
     settings.context.max_tokens = LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;

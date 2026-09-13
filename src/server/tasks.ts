@@ -242,7 +242,6 @@ export async function insertPending(
     .run();
 }
 
-
 /** How many tip user/assistant turns to re-seed into llm_events after epoch rotate. */
 const TRANSCRIPT_RESEED_EVENTS = Math.max(20, DEFAULT_CONTEXT.history.protect_recent_turns * 2);
 
