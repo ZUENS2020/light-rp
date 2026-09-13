@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CONTEXT,
+  LEAN_TAIL_CAP_TOKENS,
+  LEAN_TAIL_FLOOR_TOKENS,
+  WORKING_CONTEXT_CAP,
   applySectionBudgets,
   buildContextReport,
   estimateTokens,
   fitMemorySections,
   historyTokenBudget,
+  leanTailTokenBudget,
   memoryIsDuplicate,
   parseContextConfig,
   parseMemorySplit,
+  protectedRecentMessages,
   routeMemoryCandidate,
   sectionSoftCap,
   splitMemoryBudget,
@@ -49,7 +54,7 @@ describe("ported budget behavior", () => {
     expect(value.max_tokens).toBe(131_072);
     expect(value.budget.lore).toBe(12_000);
     expect(value.budget.memory).toBe(10_000);
-    expect(value.history.protect_recent_turns).toBe(10);
+    expect(value.history.protect_recent_turns).toBe(6);
     expect(value.tool_reserve).toBe(1_500);
   });
   it("normalizes memory split", () =>
@@ -68,15 +73,17 @@ describe("ported budget behavior", () => {
     const fitted = fitMemorySections("世界设定很长很长。".repeat(600), "短", 1_000);
     expect(fitted.world_tokens).toBeGreaterThan(600);
   });
-  it("protects recent history", () => {
+  it("protects recent history within lean token cap", () => {
     const messages = Array.from({ length: 20 }, (_, index) => ({
       role: "user",
       content: `m${index} ${"x".repeat(30)}`,
     }));
-    const result = trimHistory(messages, 20, 4);
+    const result = trimHistory(messages, 20, 4, 20);
     expect(result.truncated).toBe(true);
     expect(result.messages.at(-1)?.content).toMatch(/^m19/);
-    expect(result.messages.length).toBeGreaterThanOrEqual(4);
+    // Tiny hist budget + protect token cap → keep min lean tip, not all protect_recent_turns.
+    expect(result.messages.length).toBeGreaterThanOrEqual(2);
+    expect(result.messages.length).toBeLessThanOrEqual(4);
   });
   it("drops examples before protected card rules", () => {
     const result = trimCardFieldMap(
@@ -142,5 +149,30 @@ describe("ported budget behavior", () => {
     });
     expect(report.tool_reserve).toBeGreaterThan(1_500);
     expect(report.phi_tokens).toBe(report.tool_reserve);
+  });
+});
+
+describe("Hermes lean tail budget", () => {
+  it("clamps 2.5% of context window into 10k–25k", () => {
+    expect(leanTailTokenBudget(WORKING_CONTEXT_CAP)).toBe(LEAN_TAIL_FLOOR_TOKENS);
+    expect(leanTailTokenBudget(1_000_000)).toBe(LEAN_TAIL_CAP_TOKENS);
+    expect(leanTailTokenBudget(500_000)).toBe(12_500);
+  });
+
+  it("caps protected recent turns so huge smut tips cannot force 40k+", () => {
+    const huge = "汉".repeat(2_000);
+    const messages = Array.from({ length: 20 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: huge,
+    }));
+    const lean = leanTailTokenBudget(WORKING_CONTEXT_CAP);
+    const protectedMsgs = protectedRecentMessages(messages, 10, lean);
+    const protTokens = estimateTokens(protectedMsgs.map((m) => `${m.role}: ${m.content}`).join("\n"));
+    expect(protectedMsgs.length).toBeGreaterThanOrEqual(2);
+    expect(protTokens).toBeLessThanOrEqual(lean + estimateTokens(`${messages[0]!.role}: ${huge}`));
+    const trimmed = trimHistory(messages, lean, 10, lean);
+    const trimmedTokens = estimateTokens(trimmed.messages.map((m) => `${m.role}: ${m.content}`).join("\n"));
+    expect(trimmedTokens).toBeLessThanOrEqual(lean + estimateTokens(`${messages[0]!.role}: ${huge}`));
+    expect(trimmed.messages.length).toBeLessThan(20);
   });
 });

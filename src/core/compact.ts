@@ -1,7 +1,11 @@
 import { INVALIDATED_SUMMARY_STUB } from "./domain";
+import { estimateTokens, LEAN_MIN_TAIL_MESSAGES } from "./budget";
 
 /** Prefix for the single replaceable GM compact summary system message. */
 export const COMPACT_SUMMARY_MARKER = "【压缩摘要·时间线】";
+
+/** Hermes-style end-of-summary fence (reference only; latest user wins). */
+export const COMPACT_SUMMARY_END_MARKER = "--- END OF CONTEXT SUMMARY ---";
 
 /** Required structured sections in a valid compact summary. */
 export const COMPACT_REQUIRED_SECTIONS = [
@@ -98,12 +102,62 @@ export function upsertCompactSummaryMessage<T extends { role: string; content: s
   return [{ role: "system", content: body, ts } as T, ...rest];
 }
 
-/** Last N user/assistant roleplay messages for LLM history (context eviction, not disk). */
+export type SliceRoleplayHistoryOptions = {
+  /** Optional max UA message count (ceiling). */
+  keep?: number;
+  /** Hermes lean token budget for the live LLM tip. */
+  tokenBudget?: number;
+  /** Minimum UA messages to keep when possible (default LEAN_MIN_TAIL_MESSAGES). */
+  minTailMessages?: number;
+};
+
+/**
+ * Walk backward by estimateTokens, keeping a lean recent tip for the LLM window.
+ * Full transcript can remain on disk; this only bounds the live prompt.
+ */
+export function sliceRoleplayHistoryByTokenBudget<T extends { role: string; content: string }>(
+  messages: T[],
+  tokenBudget: number,
+  minTailMessages: number = LEAN_MIN_TAIL_MESSAGES,
+): T[] {
+  const ua = messages.filter((m) => m.role === "user" || m.role === "assistant");
+  if (!ua.length) return [];
+  const minTail = Math.max(1, Math.floor(minTailMessages || LEAN_MIN_TAIL_MESSAGES));
+  const budget = Math.max(0, Math.floor(tokenBudget));
+  if (budget <= 0) return ua.slice(-Math.min(minTail, ua.length));
+
+  const selected: T[] = [];
+  let used = 0;
+  for (let i = ua.length - 1; i >= 0; i -= 1) {
+    const msg = ua[i]!;
+    const cost = estimateTokens(`${msg.role}: ${msg.content}`);
+    if (selected.length >= minTail && used + cost > budget) break;
+    selected.push(msg);
+    used += cost;
+    if (selected.length >= minTail && used >= budget) break;
+  }
+  return selected.reverse();
+}
+
+/**
+ * Last roleplay UA messages for LLM history (context eviction, not disk).
+ * Prefers Hermes token budget when provided; `keep` remains an optional message ceiling.
+ */
 export function sliceRoleplayHistoryForAssemble<T extends { role: string; content: string }>(
   messages: T[],
   keep: number,
+  tokenBudget?: number,
+  minTailMessages: number = LEAN_MIN_TAIL_MESSAGES,
 ): T[] {
   const ua = messages.filter((m) => m.role === "user" || m.role === "assistant");
+  if (!ua.length) return [];
+
+  if (tokenBudget != null && tokenBudget > 0) {
+    const byTokens = sliceRoleplayHistoryByTokenBudget(ua, tokenBudget, minTailMessages);
+    if (keep && keep > 0) return byTokens.slice(-keep);
+    return byTokens;
+  }
+
   if (!keep || keep <= 0) return ua;
   return ua.slice(-keep);
 }
@@ -160,7 +214,12 @@ export function buildIncrementalCompactInput(
 }
 
 export function formatCompactSummaryForStorage(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith(COMPACT_SUMMARY_MARKER)) return trimmed;
-  return `${COMPACT_SUMMARY_MARKER}\n${trimmed}`;
+  let trimmed = raw.trim();
+  if (!trimmed.startsWith(COMPACT_SUMMARY_MARKER)) {
+    trimmed = `${COMPACT_SUMMARY_MARKER}\n${trimmed}`;
+  }
+  if (!trimmed.includes(COMPACT_SUMMARY_END_MARKER)) {
+    trimmed = `${trimmed.trimEnd()}\n\n${COMPACT_SUMMARY_END_MARKER}`;
+  }
+  return trimmed;
 }

@@ -240,6 +240,7 @@ app.put("/api/v2/settings", async (c) => {
       character_char_limit: Number(body.memory?.character_char_limit ?? previous.memory.character_char_limit),
     },
     compact_after_turns: Number(body.compact_after_turns ?? previous.compact_after_turns),
+    compression_threshold: Number(body.compression_threshold ?? previous.compression_threshold ?? 0.5),
     lore_scan_depth: Number(body.lore_scan_depth ?? previous.lore_scan_depth),
     lore_token_budget: Number(body.lore_token_budget ?? previous.lore_token_budget),
     max_tool_rounds: Number(body.max_tool_rounds ?? previous.max_tool_rounds),

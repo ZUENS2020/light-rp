@@ -94,6 +94,7 @@ export type AppSettings = {
   worlds_dir: string;
   home: string;
   compact_after_turns: number;
+  compression_threshold: number;
   lore_scan_depth: number;
   lore_token_budget: number;
   max_tool_rounds: number;
@@ -120,6 +121,7 @@ export type SettingsPut = {
   worlds_dir: string;
   home: string;
   compact_after_turns: number;
+  compression_threshold: number;
   lore_scan_depth: number;
   lore_token_budget: number;
   max_tool_rounds: number;

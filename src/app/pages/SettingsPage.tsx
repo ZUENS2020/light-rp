@@ -21,6 +21,7 @@ function settingsPayload(data: AppSettings): SettingsPut {
     worlds_dir: data.worlds_dir,
     home: data.home,
     compact_after_turns: data.compact_after_turns,
+    compression_threshold: data.compression_threshold ?? 0.5,
     lore_scan_depth: data.lore_scan_depth,
     lore_token_budget: data.lore_token_budget,
     max_tool_rounds: data.max_tool_rounds,
@@ -421,10 +422,18 @@ export function SettingsPage() {
               />
               <NumberField
                 id="compact-after"
-                label="压缩阈值"
+                label="压缩回合"
                 value={form.compact_after_turns}
                 min={1}
                 onChange={(value) => setForm({ ...form, compact_after_turns: value })}
+              />
+              <NumberField
+                id="compression-threshold"
+                label="压缩压力阈值"
+                value={form.compression_threshold}
+                min={0.1}
+                step={0.05}
+                onChange={(value) => setForm({ ...form, compression_threshold: value })}
               />
               <NumberField
                 id="lore-budget"
