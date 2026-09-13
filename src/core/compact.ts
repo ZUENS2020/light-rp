@@ -223,3 +223,24 @@ export function formatCompactSummaryForStorage(raw: string): string {
   }
   return trimmed;
 }
+
+/**
+ * Hermes-style post-generation pressure gate.
+ * Compact when max(actual prompt tokens, estimated assemble total) reaches
+ * threshold × context window — never every turn.
+ */
+export function shouldCompactAfterTurn(input: {
+  promptTokens?: number | null;
+  estimatedTotal?: number | null;
+  contextMax: number;
+  threshold: number;
+}): boolean {
+  const contextMax = Math.max(0, Math.floor(Number(input.contextMax) || 0));
+  if (contextMax <= 0) return false;
+  const threshold = Number(input.threshold);
+  if (!Number.isFinite(threshold) || threshold <= 0) return false;
+  const promptTokens = Math.max(0, Math.floor(Number(input.promptTokens) || 0));
+  const estimatedTotal = Math.max(0, Math.floor(Number(input.estimatedTotal) || 0));
+  const pressure = Math.max(promptTokens, estimatedTotal);
+  return pressure >= threshold * contextMax;
+}

@@ -28,7 +28,15 @@ import {
   type MiniCard,
   type WorldPack,
 } from "../core/domain";
-import { openingFor, runCompact, runOoc, runTurn, type TurnOut } from "./engine";
+import {
+  openingFor,
+  runCompact,
+  runDeferredPostTurnCompact,
+  runOoc,
+  runTurn,
+  schedulePostTurnCompact,
+  type TurnOut,
+} from "./engine";
 import { turnErrorStatus } from "../adapters/ai-gateway";
 import { importStFiles, type ImportFile } from "../core/sillytavern-import";
 import { PromptLibrary } from "../core/prompts";
@@ -74,6 +82,7 @@ type PersistedTurnDiagnostics = {
   stable_prefix_tokens?: number;
   volatile_tokens?: number;
   hidden_prompt_events?: Array<{ kind: "context" | "memory"; content: string; hashSeed?: string }>;
+  should_compact?: boolean;
   rotate_prompt_epoch_reason?: "context_compacted" | null;
 };
 
@@ -654,8 +663,20 @@ app.post("/api/v2/play/:id/:sid/turn", async (c) => {
   if (!c.env.DB || !c.env.GENERATE_QUEUE) {
     try {
       const settings = await loadSettings(c.env.BUCKET);
-      const result = await runTurn(c.env, fs, pack, sid, text, settings, await overlays(fs), (job) =>
-        c.executionCtx.waitUntil(job),
+      const overlayMap = await overlays(fs);
+      const waitUntil = (job: Promise<unknown>) => c.executionCtx.waitUntil(job);
+      const result = await runTurn(c.env, fs, pack, sid, text, settings, overlayMap, waitUntil);
+      schedulePostTurnCompact(waitUntil, Boolean(result.should_compact), () =>
+        runDeferredPostTurnCompact({
+          env: c.env,
+          fs,
+          pack,
+          sessionId: sid,
+          settings,
+          overlays: overlayMap,
+          waitUntil,
+          db: c.env.DB,
+        }),
       );
       return c.json({
         ...(await playState(c.env, fs, pack, sid, {
@@ -750,16 +771,22 @@ app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
     }
     try {
       const settings = await loadSettings(c.env.BUCKET);
-      const result = await runTurn(
-        c.env,
-        fs,
-        pack,
-        sid,
-        content,
-        settings,
-        await overlays(fs),
-        (job) => c.executionCtx.waitUntil(job),
-        { persistUser: false },
+      const overlayMap = await overlays(fs);
+      const waitUntil = (job: Promise<unknown>) => c.executionCtx.waitUntil(job);
+      const result = await runTurn(c.env, fs, pack, sid, content, settings, overlayMap, waitUntil, {
+        persistUser: false,
+      });
+      schedulePostTurnCompact(waitUntil, Boolean(result.should_compact), () =>
+        runDeferredPostTurnCompact({
+          env: c.env,
+          fs,
+          pack,
+          sessionId: sid,
+          settings,
+          overlays: overlayMap,
+          waitUntil,
+          db: c.env.DB,
+        }),
       );
       return c.json({
         ...(await playState(c.env, fs, pack, sid, {
@@ -928,9 +955,27 @@ export default {
             stablePrefixTokens: diagnostics?.task_id === taskId ? diagnostics.stable_prefix_tokens || 0 : undefined,
             volatileTokens: diagnostics?.task_id === taskId ? diagnostics.volatile_tokens || 0 : undefined,
             hiddenEvents: diagnostics?.task_id === taskId ? diagnostics.hidden_prompt_events || [] : undefined,
-            rotatePromptEpochReason:
-              diagnostics?.task_id === taskId ? diagnostics.rotate_prompt_epoch_reason || undefined : undefined,
+            // Epoch rotate happens in background compact after apply — not on story complete.
           });
+          if (!ooc && diagnostics?.task_id === taskId && diagnostics.should_compact) {
+            const overlayMap = await overlays(fs);
+            const waitUntil = (job: Promise<unknown>) => ctx.waitUntil(job);
+            const model = JSON.parse(leased.model_snapshot_json) as AiModelConfig;
+            const affinity = (await sessionRuntime(env.DB, sessionId)).affinity_key;
+            schedulePostTurnCompact(waitUntil, true, () =>
+              runDeferredPostTurnCompact({
+                env,
+                fs,
+                pack,
+                sessionId,
+                settings,
+                overlays: overlayMap,
+                waitUntil,
+                db: env.DB,
+                ai: { model, affinityKey: affinity, requestKind: "compact" },
+              }),
+            );
+          }
           msg.ack();
           continue;
         }
@@ -992,8 +1037,26 @@ export default {
           stablePrefixTokens: result.stable_prefix_tokens,
           volatileTokens: result.volatile_tokens,
           hiddenEvents: (result as Partial<TurnOut>).hidden_prompt_events,
-          rotatePromptEpochReason: (result as Partial<TurnOut>).rotate_prompt_epoch_reason,
+          // Post-turn pressure compact rotates epoch after apply in waitUntil.
         });
+        if (!ooc && (result as Partial<TurnOut>).should_compact) {
+          const overlayMap = await overlays(fs);
+          const waitUntil = (job: Promise<unknown>) => ctx.waitUntil(job);
+          const affinity = (await sessionRuntime(env.DB, sessionId)).affinity_key;
+          schedulePostTurnCompact(waitUntil, true, () =>
+            runDeferredPostTurnCompact({
+              env,
+              fs,
+              pack,
+              sessionId,
+              settings,
+              overlays: overlayMap,
+              waitUntil,
+              db: env.DB,
+              ai: { model, affinityKey: affinity, requestKind: "compact" },
+            }),
+          );
+        }
         msg.ack();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
