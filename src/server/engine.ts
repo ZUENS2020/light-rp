@@ -71,7 +71,13 @@ import {
 import { gateMemoryWrite } from "../core/memory";
 import { memoryToolSpec, PromptLibrary, turnCommitToolSpec } from "../core/prompts";
 import type { R2Fs } from "../adapters/r2";
-import { LEGACY_LORE_TOKEN_BUDGET, STORY_OUTPUT_TOKEN_FLOOR, type AppSettings } from "./settings";
+import {
+  LEGACY_LORE_TOKEN_BUDGET,
+  LEGACY_STORY_MAX_TOKENS,
+  STORY_OUTPUT_TOKEN_FLOOR,
+  TURN_COMMIT_TIMEOUT_SECONDS,
+  type AppSettings,
+} from "./settings";
 import { nowIso } from "../core/util";
 import { createPromptEpoch, preparePrompt } from "./prompt-state";
 import { getCachedToolExecution, recordToolExecution } from "./tasks";
@@ -102,6 +108,10 @@ export type TurnOut = {
   hidden_prompt_events?: Array<{ kind: "context" | "memory"; content: string; hashSeed?: string }>;
   /** Set when post-turn background compact should run (pressure or rare turn fallback). */
   should_compact?: boolean;
+  /** Set when commit_turn should run after the reply is visible (queue: after completeTask). */
+  should_commit?: boolean;
+  /** Scene loaded at the start of this turn; used by deferred commit. */
+  scene_before?: SceneState;
   /** Legacy: only set if compact applied inline (no longer used on the story critical path). */
   rotate_prompt_epoch_reason?: "context_compacted";
 };
@@ -131,10 +141,16 @@ const OOC_SYSTEM = `你是 Light RP 的系统助手。当前请求明确处于 O
 直接、清楚地回答用户关于当前故事、角色关系、设定、玩法或应用操作的问题；可以讨论 RP，但不要扮演角色或继续叙事。
 不得推进时间、地点、人物行动或状态，不得虚构已发生事件，不得生成状态块，也不得提出或执行任何记忆修改。`;
 
-export { STORY_OUTPUT_TOKEN_FLOOR };
+export { STORY_OUTPUT_TOKEN_FLOOR, TURN_COMMIT_TIMEOUT_SECONDS, LEGACY_STORY_MAX_TOKENS };
 
 function isStoryOutputKind(kind?: AiRequestOptions["requestKind"]): boolean {
   return kind == null || kind === "story" || kind === "rewrite" || kind === "regenerate";
+}
+
+/** Cap commit_turn so a failed/slow tool call cannot inherit the 180s story timeout. */
+export function turnCommitTimeoutSeconds(configured: number): number {
+  if (!Number.isFinite(configured) || configured <= 0) return TURN_COMMIT_TIMEOUT_SECONDS;
+  return Math.min(TURN_COMMIT_TIMEOUT_SECONDS, Math.floor(configured));
 }
 
 export function effectiveOutputTokens(
@@ -143,7 +159,8 @@ export function effectiveOutputTokens(
   requestKind?: AiRequestOptions["requestKind"],
 ): number {
   const configured = Math.max(1, Math.floor(settings.llm.max_tokens));
-  const wanted = isStoryOutputKind(requestKind) ? Math.max(configured, STORY_OUTPUT_TOKEN_FLOOR) : configured;
+  const storyConfigured = configured === LEGACY_STORY_MAX_TOKENS ? STORY_OUTPUT_TOKEN_FLOOR : configured;
+  const wanted = isStoryOutputKind(requestKind) ? Math.max(storyConfigured, STORY_OUTPUT_TOKEN_FLOOR) : configured;
   return model ? Math.min(wanted, Math.max(1, Math.floor(model.max_output_tokens))) : wanted;
 }
 
@@ -655,6 +672,7 @@ async function extractTurnCommit(
     },
   ];
   const commitMaxTokens = Math.min(1_536, effectiveOutputTokens(settings, options.model, "tool"));
+  const commitTimeout = turnCommitTimeoutSeconds(settings.llm.timeout);
   const requestKind = (memoryFeedback ? "correction" : "memory") as "correction" | "memory";
   const commitOptions = {
     ...options,
@@ -662,9 +680,9 @@ async function extractTurnCommit(
     skipCache: Boolean(memoryFeedback) || options.skipCache,
     skipOutputChannelRetry: true,
   };
-  const requestJson = () => chat(env, messages, null, 0, commitMaxTokens, settings.llm.timeout, commitOptions);
+  const requestJson = () => chat(env, messages, null, 0, commitMaxTokens, commitTimeout, commitOptions);
   const requestTool = () =>
-    chat(env, messages, [tool], 0, commitMaxTokens, settings.llm.timeout, {
+    chat(env, messages, [tool], 0, commitMaxTokens, commitTimeout, {
       ...commitOptions,
       toolChoice: { type: "function", function: { name: "commit_turn" } },
     });
@@ -844,12 +862,12 @@ export async function runTurn(
   let replyText = stripBreachAssistantPrefill(visible);
   if (truncated && replyText.trim()) replyText = `${replyText.trimEnd()}\n\n${TRUNCATION_NOTE}`;
   if (!replyText.trim()) throw new LlmEmptyError();
-  let nextScene = scene;
+  // Story reply is user-visible immediately. commit_turn (state/memory) is deferred
+  // off this critical path so a 45–180s failed tool call cannot hold the lease.
+  const deferCommit = Boolean(opts?.ai);
+  const nextScene = Object.keys(trailer).length ? applyScenePatch(scene, trailer) : scene;
   const remembered: string[] = [];
-  let commitUsage: AiUsage = { prompt_tokens: 0, completion_tokens: 0, cached_input_tokens: 0 };
-  let commitRecord: { call: TurnCommit["call"]; result: string } | undefined;
-  let activeCommit: TurnCommit | undefined;
-  let commitWasReplayed = false;
+  const commitUsage: AiUsage = { prompt_tokens: 0, completion_tokens: 0, cached_input_tokens: 0 };
   let events = trailerEvents(trailer);
   let memoryOps = [
     ...trailerMemoryCandidates(trailer),
@@ -859,106 +877,39 @@ export async function runTurn(
         )
       : []),
   ];
-  if (opts?.ai) {
-    try {
-      const commit = await extractTurnCommit(env, library, pack, scene, memory, userText, replyText, settings, {
-        model: opts.ai.model,
-        affinityKey: affinity,
-      });
-      activeCommit = commit;
-      const argsHash = await sha256(stableStringify(commit.call.arguments));
-      const replay = await getCachedToolExecution(opts.ai.db, opts.ai.taskId, commit.call.id, argsHash);
-      commitWasReplayed = replay != null;
-      nextScene = commit.state;
-      events = replay == null ? commit.events : [];
-      memoryOps = replay == null ? commit.memoryOps : [];
-      commitUsage = commit.usage;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      warnings.push(message);
-    }
-  } else if (Object.keys(trailer).length) {
-    nextScene = applyScenePatch(scene, trailer);
+  if (deferCommit) {
+    // Structured commit overwrites trailer memory/events in the background job.
+    events = [];
+    memoryOps = [];
   }
   await fs.put(`sessions/${sessionId}/state.yaml`, sceneYaml(nextScene));
 
   let appliedMemoryOps: MemoryMutation[] = [];
-  let memoryEventRecords: Record<string, unknown>[];
   const limits = {
     world: settings.memory.world_char_limit,
     player: settings.memory.player_char_limit,
     character: settings.memory.character_char_limit,
   };
-  let consolidationFailures = 0;
-  while (true) {
-    const planned = planMemoryChanges(pack, nextScene, memoryOps);
-    memoryEventRecords = planned.eventRecords;
-    const batch = applyMemoryBatch(memory, planned.mutations, limits);
-    if (batch.success) {
-      appliedMemoryOps = batch.applied;
-      await persistMemoryChanges(fs, memory, batch.touched);
-      remembered.push(
-        ...batch.applied
-          .filter((operation) => operation.action !== "remove")
-          .map((operation) =>
-            String(operation.content || "")
-              .replace(/^\[[^\]]+\]\s*/, "")
-              .slice(0, 80),
-          ),
-      );
-      break;
-    }
-
-    consolidationFailures += 1;
-    if (!opts?.ai || !activeCommit || commitWasReplayed || consolidationFailures >= 3) {
-      warnings.push(`长期记忆写入失败：${batch.message}`);
-      break;
-    }
-    const feedback = stableStringify({
-      error: batch.message,
-      current_entries: batch.currentEntries || [],
-      rejected_memory_ops: memoryOps,
-      attempt: consolidationFailures,
-      maximum_attempts: 3,
-    });
-    let repaired: TurnCommit;
-    try {
-      repaired = await extractTurnCommit(
-        env,
-        library,
-        pack,
-        scene,
-        memory,
-        userText,
-        replyText,
-        settings,
-        { model: opts.ai.model, affinityKey: affinity, requestKind: "correction", skipCache: true },
-        feedback,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      warnings.push(`记忆整理失败：${message}`);
-      break;
-    }
-    activeCommit = repaired;
-    memoryOps = repaired.memoryOps;
-    commitUsage = addUsage(commitUsage, repaired.usage);
+  const planned = planMemoryChanges(pack, nextScene, memoryOps);
+  const memoryEventRecords = planned.eventRecords;
+  const batch = applyMemoryBatch(memory, planned.mutations, limits);
+  if (batch.success) {
+    appliedMemoryOps = batch.applied;
+    await persistMemoryChanges(fs, memory, batch.touched);
+    remembered.push(
+      ...batch.applied
+        .filter((operation) => operation.action !== "remove")
+        .map((operation) =>
+          String(operation.content || "")
+            .replace(/^\[[^\]]+\]\s*/, "")
+            .slice(0, 80),
+        ),
+    );
+  } else {
+    warnings.push(`长期记忆写入失败：${batch.message}`);
   }
 
   await appendEvents(fs, sessionId, [...events.map((item) => enrichRecord(item, nextScene)), ...memoryEventRecords]);
-  if (opts?.ai && activeCommit && !commitWasReplayed) {
-    commitRecord = {
-      call: activeCommit.call,
-      result: stableStringify({ state: nextScene, events, memory_ops: appliedMemoryOps }),
-    };
-    await recordToolExecution(opts.ai.db, {
-      taskId: opts.ai.taskId,
-      toolCallId: commitRecord.call.id,
-      toolName: commitRecord.call.name,
-      arguments: commitRecord.call.arguments,
-      result: commitRecord.result,
-    });
-  }
   const stateUpdated = stableStringify(scene) !== stableStringify(nextScene);
   const hiddenPromptEvents: NonNullable<TurnOut["hidden_prompt_events"]> = [];
   if (stateUpdated) {
@@ -1035,6 +986,10 @@ export async function runTurn(
         state_updated: stateUpdated,
         hidden_prompt_events: hiddenPromptEvents,
         should_compact: shouldCompact,
+        should_commit: deferCommit,
+        commit_pending: deferCommit,
+        commit_applied: false,
+        scene_before: scene,
         compact_pressure: {
           prompt_tokens: aiUsage.prompt_tokens,
           estimated_total: assembled.report.total,
@@ -1073,6 +1028,8 @@ export async function runTurn(
     volatile_tokens: volatileTokens,
     hidden_prompt_events: hiddenPromptEvents,
     should_compact: shouldCompact,
+    should_commit: deferCommit,
+    scene_before: scene,
   };
 }
 
@@ -1390,6 +1347,270 @@ export async function runDeferredPostTurnCompact(input: DeferredPostTurnCompactI
   return compactResult;
 }
 
+export type DeferredTurnCommitInput = {
+  env: Env;
+  fs: R2Fs;
+  pack: WorldPack;
+  sessionId: string;
+  userText: string;
+  assistantText: string;
+  settings: AppSettings;
+  overlays: Record<string, string>;
+  sceneBefore: SceneState;
+  db?: D1Database;
+  ai?: {
+    taskId: string;
+    model: AiModelConfig;
+    affinityKey?: string;
+  };
+};
+
+export type DeferredTurnCommitResult = {
+  warnings: string[];
+  applied: boolean;
+  skippedState: boolean;
+};
+
+/** Skip state.yaml if this commit already landed or a newer turn owns last_turn. */
+export function deferredSceneWriteDecision(input: {
+  thisTaskId?: string | null;
+  lastTurnTaskId?: string | null;
+  alreadyApplied?: boolean;
+}): { apply: boolean; warning?: string } {
+  if (input.alreadyApplied) {
+    return { apply: false, warning: "deferred commit already applied" };
+  }
+  if (input.thisTaskId && input.lastTurnTaskId && input.lastTurnTaskId !== input.thisTaskId) {
+    return {
+      apply: false,
+      warning: "deferred commit skipped state.yaml (newer turn landed; last-write-wins avoided)",
+    };
+  }
+  return { apply: true };
+}
+
+export function sessionMovedPastTurn(
+  messages: Array<{ role: string; task_id?: string; content?: string }>,
+  input: { taskId?: string | null; assistantText: string },
+): boolean {
+  let idx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    if ((input.taskId && message.task_id === input.taskId) || message.content === input.assistantText) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 0) return false;
+  return messages.slice(idx + 1).some((message) => message.role === "user");
+}
+
+async function mergeLastTurnDiagnostics(
+  fs: R2Fs,
+  sessionId: string,
+  patch: Record<string, unknown>,
+  extraWarnings: string[] = [],
+): Promise<void> {
+  try {
+    const raw = await fs.get(`sessions/${sessionId}/last_turn.json`);
+    const prev = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    const prevWarnings = Array.isArray(prev.warnings) ? (prev.warnings as string[]) : [];
+    await fs.put(
+      `sessions/${sessionId}/last_turn.json`,
+      JSON.stringify({ ...prev, ...patch, warnings: [...prevWarnings, ...extraWarnings] }, null, 2),
+      "application/json",
+    );
+  } catch {
+    // Diagnostics-only; story turn already completed.
+  }
+}
+
+/**
+ * Background commit_turn after the story reply is visible / the generation task completed.
+ * Failures become last_turn warnings and must not fail the completed story turn.
+ */
+export async function runDeferredTurnCommit(input: DeferredTurnCommitInput): Promise<DeferredTurnCommitResult> {
+  const warnings: string[] = [];
+  const taskId = input.ai?.taskId || null;
+  let alreadyApplied = false;
+  try {
+    const raw = await input.fs.get(`sessions/${input.sessionId}/last_turn.json`);
+    const prev = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    const lastTurnTaskId = typeof prev.task_id === "string" ? prev.task_id : null;
+    alreadyApplied = prev.commit_applied === true && (!taskId || lastTurnTaskId === taskId);
+  } catch {
+    // ignore missing diagnostics
+  }
+  if (alreadyApplied) {
+    return { warnings: ["deferred commit already applied"], applied: false, skippedState: true };
+  }
+
+  const library = new PromptLibrary(input.overlays);
+  const memory = await loadMemory(input.fs);
+  let commit: TurnCommit;
+  try {
+    commit = await extractTurnCommit(
+      input.env,
+      library,
+      input.pack,
+      input.sceneBefore,
+      memory,
+      input.userText,
+      input.assistantText,
+      input.settings,
+      { model: input.ai?.model, affinityKey: input.ai?.affinityKey },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    warnings.push(message);
+    await mergeLastTurnDiagnostics(
+      input.fs,
+      input.sessionId,
+      { commit_pending: false, commit_applied: false, background_commit_completed_at: nowIso() },
+      warnings,
+    );
+    return { warnings, applied: false, skippedState: false };
+  }
+
+  let lastTurnAfter: Record<string, unknown>;
+  try {
+    const raw = await input.fs.get(`sessions/${input.sessionId}/last_turn.json`);
+    lastTurnAfter = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  } catch {
+    lastTurnAfter = {};
+  }
+  const latestTaskId = typeof lastTurnAfter.task_id === "string" ? lastTurnAfter.task_id : null;
+  const loaded = await loadSession(input.fs, input.sessionId);
+  const movedOn = sessionMovedPastTurn(loaded.messages, { taskId, assistantText: input.assistantText });
+  const decision = deferredSceneWriteDecision({
+    thisTaskId: taskId,
+    lastTurnTaskId: latestTaskId,
+    alreadyApplied: lastTurnAfter.commit_applied === true && (!taskId || latestTaskId === taskId),
+  });
+  const skipState = !decision.apply || movedOn;
+  if (decision.warning) warnings.push(decision.warning);
+  if (movedOn && decision.apply) {
+    warnings.push("deferred commit skipped state.yaml (newer user turn already queued)");
+  }
+
+  let commitWasReplayed = false;
+  if (input.db && taskId) {
+    const argsHash = await sha256(stableStringify(commit.call.arguments));
+    const replay = await getCachedToolExecution(input.db, taskId, commit.call.id, argsHash);
+    commitWasReplayed = replay != null;
+  }
+
+  const nextScene = commit.state;
+  const events = commitWasReplayed ? [] : commit.events;
+  const memoryOps = commitWasReplayed ? [] : commit.memoryOps;
+  if (!skipState) {
+    await input.fs.put(`sessions/${input.sessionId}/state.yaml`, sceneYaml(nextScene));
+  }
+
+  const limits = {
+    world: input.settings.memory.world_char_limit,
+    player: input.settings.memory.player_char_limit,
+    character: input.settings.memory.character_char_limit,
+  };
+  const planned = planMemoryChanges(input.pack, nextScene, memoryOps);
+  const batch = applyMemoryBatch(memory, planned.mutations, limits);
+  let appliedMemoryOps: MemoryMutation[] = [];
+  const remembered: string[] = [];
+  if (batch.success) {
+    appliedMemoryOps = batch.applied;
+    await persistMemoryChanges(input.fs, memory, batch.touched);
+    remembered.push(
+      ...batch.applied
+        .filter((operation) => operation.action !== "remove")
+        .map((operation) =>
+          String(operation.content || "")
+            .replace(/^\[[^\]]+\]\s*/, "")
+            .slice(0, 80),
+        ),
+    );
+  } else {
+    warnings.push(`长期记忆写入失败：${batch.message}`);
+  }
+
+  await appendEvents(input.fs, input.sessionId, [
+    ...events.map((item) => enrichRecord(item, nextScene)),
+    ...planned.eventRecords,
+  ]);
+
+  if (input.db && taskId && !commitWasReplayed) {
+    await recordToolExecution(input.db, {
+      taskId,
+      toolCallId: commit.call.id,
+      toolName: commit.call.name,
+      arguments: commit.call.arguments,
+      result: stableStringify({ state: nextScene, events, memory_ops: appliedMemoryOps }),
+    });
+  }
+
+  const hiddenPromptEvents: NonNullable<TurnOut["hidden_prompt_events"]> = [];
+  if (!skipState) {
+    hiddenPromptEvents.push({
+      kind: "context",
+      content: `## 场景状态变化\n${sceneYaml(nextScene)}`,
+      hashSeed: `state:${stableStringify(nextScene)}`,
+    });
+  }
+  if (appliedMemoryOps.length) {
+    hiddenPromptEvents.push({
+      kind: "memory",
+      content: memoryPromptDelta(appliedMemoryOps),
+      hashSeed: `memory:${stableStringify(appliedMemoryOps)}`,
+    });
+  }
+
+  await mergeLastTurnDiagnostics(
+    input.fs,
+    input.sessionId,
+    {
+      commit_pending: false,
+      commit_applied: true,
+      state_updated: !skipState,
+      remembered,
+      hidden_prompt_events: hiddenPromptEvents,
+      background_commit_completed_at: nowIso(),
+      background_commit_usage: commit.usage,
+    },
+    warnings,
+  );
+  return { warnings, applied: true, skippedState: skipState };
+}
+
+/** Run commit (if any) then compact after the reply is done; never blocks the caller. */
+export function schedulePostTurnFollowup(
+  waitUntil: ((job: Promise<unknown>) => void) | undefined,
+  jobs: { commit?: () => Promise<unknown>; compact?: () => Promise<unknown> },
+): void {
+  if (!jobs.commit && !jobs.compact) return;
+  if (!waitUntil) {
+    console.warn("post-turn followup needed but waitUntil unavailable; skipping");
+    return;
+  }
+  waitUntil(
+    Promise.resolve().then(async () => {
+      if (jobs.commit) {
+        try {
+          await jobs.commit();
+        } catch (err) {
+          console.warn("background turn-commit failed:", err);
+        }
+      }
+      if (jobs.compact) {
+        try {
+          await jobs.compact();
+        } catch (err) {
+          console.warn("background post-turn compact failed:", err);
+        }
+      }
+    }),
+  );
+}
+
 /** Schedule deferred compact after the reply is done; never blocks the caller. */
 export function schedulePostTurnCompact(
   waitUntil: ((job: Promise<unknown>) => void) | undefined,
@@ -1397,17 +1618,7 @@ export function schedulePostTurnCompact(
   job: () => Promise<unknown>,
 ): void {
   if (!shouldCompact) return;
-  if (!waitUntil) {
-    console.warn("post-turn compact needed but waitUntil unavailable; skipping");
-    return;
-  }
-  waitUntil(
-    Promise.resolve()
-      .then(() => job())
-      .catch((err) => {
-        console.warn("background post-turn compact failed:", err);
-      }),
-  );
+  schedulePostTurnFollowup(waitUntil, { compact: job });
 }
 
 function asIdList(value: unknown): string[] {

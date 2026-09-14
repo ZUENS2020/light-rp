@@ -32,9 +32,10 @@ import {
   openingFor,
   runCompact,
   runDeferredPostTurnCompact,
+  runDeferredTurnCommit,
   runOoc,
   runTurn,
-  schedulePostTurnCompact,
+  schedulePostTurnFollowup,
   type TurnOut,
 } from "./engine";
 import { turnErrorStatus } from "../adapters/ai-gateway";
@@ -83,6 +84,9 @@ type PersistedTurnDiagnostics = {
   volatile_tokens?: number;
   hidden_prompt_events?: Array<{ kind: "context" | "memory"; content: string; hashSeed?: string }>;
   should_compact?: boolean;
+  should_commit?: boolean;
+  commit_applied?: boolean;
+  scene_before?: TurnOut["scene_before"];
   rotate_prompt_epoch_reason?: "context_compacted" | null;
 };
 
@@ -666,18 +670,36 @@ app.post("/api/v2/play/:id/:sid/turn", async (c) => {
       const overlayMap = await overlays(fs);
       const waitUntil = (job: Promise<unknown>) => c.executionCtx.waitUntil(job);
       const result = await runTurn(c.env, fs, pack, sid, text, settings, overlayMap, waitUntil);
-      schedulePostTurnCompact(waitUntil, Boolean(result.should_compact), () =>
-        runDeferredPostTurnCompact({
-          env: c.env,
-          fs,
-          pack,
-          sessionId: sid,
-          settings,
-          overlays: overlayMap,
-          waitUntil,
-          db: c.env.DB,
-        }),
-      );
+      schedulePostTurnFollowup(waitUntil, {
+        commit: result.should_commit
+          ? () =>
+              runDeferredTurnCommit({
+                env: c.env,
+                fs,
+                pack,
+                sessionId: sid,
+                userText: text,
+                assistantText: result.text,
+                settings,
+                overlays: overlayMap,
+                sceneBefore: result.scene_before || result.scene,
+                db: c.env.DB,
+              })
+          : undefined,
+        compact: result.should_compact
+          ? () =>
+              runDeferredPostTurnCompact({
+                env: c.env,
+                fs,
+                pack,
+                sessionId: sid,
+                settings,
+                overlays: overlayMap,
+                waitUntil,
+                db: c.env.DB,
+              })
+          : undefined,
+      });
       return c.json({
         ...(await playState(c.env, fs, pack, sid, {
           context_report: result.context_report,
@@ -776,18 +798,36 @@ app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
       const result = await runTurn(c.env, fs, pack, sid, content, settings, overlayMap, waitUntil, {
         persistUser: false,
       });
-      schedulePostTurnCompact(waitUntil, Boolean(result.should_compact), () =>
-        runDeferredPostTurnCompact({
-          env: c.env,
-          fs,
-          pack,
-          sessionId: sid,
-          settings,
-          overlays: overlayMap,
-          waitUntil,
-          db: c.env.DB,
-        }),
-      );
+      schedulePostTurnFollowup(waitUntil, {
+        commit: result.should_commit
+          ? () =>
+              runDeferredTurnCommit({
+                env: c.env,
+                fs,
+                pack,
+                sessionId: sid,
+                userText: content,
+                assistantText: result.text,
+                settings,
+                overlays: overlayMap,
+                sceneBefore: result.scene_before || result.scene,
+                db: c.env.DB,
+              })
+          : undefined,
+        compact: result.should_compact
+          ? () =>
+              runDeferredPostTurnCompact({
+                env: c.env,
+                fs,
+                pack,
+                sessionId: sid,
+                settings,
+                overlays: overlayMap,
+                waitUntil,
+                db: c.env.DB,
+              })
+          : undefined,
+      });
       return c.json({
         ...(await playState(c.env, fs, pack, sid, {
           context_report: result.context_report,
@@ -957,24 +997,45 @@ export default {
             hiddenEvents: diagnostics?.task_id === taskId ? diagnostics.hidden_prompt_events || [] : undefined,
             // Epoch rotate happens in background compact after apply — not on story complete.
           });
-          if (!ooc && diagnostics?.task_id === taskId && diagnostics.should_compact) {
+          if (!ooc && diagnostics?.task_id === taskId && (diagnostics.should_commit || diagnostics.should_compact)) {
             const overlayMap = await overlays(fs);
             const waitUntil = (job: Promise<unknown>) => ctx.waitUntil(job);
             const model = JSON.parse(leased.model_snapshot_json) as AiModelConfig;
             const affinity = (await sessionRuntime(env.DB, sessionId)).affinity_key;
-            schedulePostTurnCompact(waitUntil, true, () =>
-              runDeferredPostTurnCompact({
-                env,
-                fs,
-                pack,
-                sessionId,
-                settings,
-                overlays: overlayMap,
-                waitUntil,
-                db: env.DB,
-                ai: { model, affinityKey: affinity, requestKind: "compact" },
-              }),
-            );
+            const scene = await ensureSessionState(fs, sessionId, pack);
+            schedulePostTurnFollowup(waitUntil, {
+              commit:
+                diagnostics.should_commit && !diagnostics.commit_applied
+                  ? () =>
+                      runDeferredTurnCommit({
+                        env,
+                        fs,
+                        pack,
+                        sessionId,
+                        userText: leased.user_text,
+                        assistantText: persistedAssistant.content,
+                        settings,
+                        overlays: overlayMap,
+                        sceneBefore: diagnostics.scene_before || scene,
+                        db: env.DB,
+                        ai: { taskId, model, affinityKey: affinity },
+                      })
+                  : undefined,
+              compact: diagnostics.should_compact
+                ? () =>
+                    runDeferredPostTurnCompact({
+                      env,
+                      fs,
+                      pack,
+                      sessionId,
+                      settings,
+                      overlays: overlayMap,
+                      waitUntil,
+                      db: env.DB,
+                      ai: { model, affinityKey: affinity, requestKind: "compact" },
+                    })
+                : undefined,
+            });
           }
           msg.ack();
           continue;
@@ -1037,25 +1098,45 @@ export default {
           stablePrefixTokens: result.stable_prefix_tokens,
           volatileTokens: result.volatile_tokens,
           hiddenEvents: (result as Partial<TurnOut>).hidden_prompt_events,
-          // Post-turn pressure compact rotates epoch after apply in waitUntil.
+          // Post-turn pressure compact / commit_turn run after the reply is visible.
         });
-        if (!ooc && (result as Partial<TurnOut>).should_compact) {
+        if (!ooc && ((result as Partial<TurnOut>).should_commit || (result as Partial<TurnOut>).should_compact)) {
           const overlayMap = await overlays(fs);
           const waitUntil = (job: Promise<unknown>) => ctx.waitUntil(job);
           const affinity = (await sessionRuntime(env.DB, sessionId)).affinity_key;
-          schedulePostTurnCompact(waitUntil, true, () =>
-            runDeferredPostTurnCompact({
-              env,
-              fs,
-              pack,
-              sessionId,
-              settings,
-              overlays: overlayMap,
-              waitUntil,
-              db: env.DB,
-              ai: { model, affinityKey: affinity, requestKind: "compact" },
-            }),
-          );
+          const turn = result as TurnOut;
+          schedulePostTurnFollowup(waitUntil, {
+            commit: turn.should_commit
+              ? () =>
+                  runDeferredTurnCommit({
+                    env,
+                    fs,
+                    pack,
+                    sessionId,
+                    userText: leased.user_text,
+                    assistantText: turn.text,
+                    settings,
+                    overlays: overlayMap,
+                    sceneBefore: turn.scene_before || turn.scene,
+                    db: env.DB,
+                    ai: { taskId, model, affinityKey: affinity },
+                  })
+              : undefined,
+            compact: turn.should_compact
+              ? () =>
+                  runDeferredPostTurnCompact({
+                    env,
+                    fs,
+                    pack,
+                    sessionId,
+                    settings,
+                    overlays: overlayMap,
+                    waitUntil,
+                    db: env.DB,
+                    ai: { model, affinityKey: affinity, requestKind: "compact" },
+                  })
+              : undefined,
+          });
         }
         msg.ack();
       } catch (err) {

@@ -134,6 +134,14 @@ describe("runtime model limits", () => {
   it("does not let callers mutate DEFAULT_SETTINGS through a clone", () => {
     const cloned = cloneAppSettings(DEFAULT_SETTINGS);
     cloned.llm.max_tokens = 1;
-    expect(DEFAULT_SETTINGS.llm.max_tokens).toBe(16_384);
+    expect(DEFAULT_SETTINGS.llm.max_tokens).toBe(8_192);
+  });
+
+  it("treats stale 16k story max_tokens as the new 8k floor", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.llm.max_tokens = 16_384;
+    const glm: AiModelConfig = { ...DEFAULT_MODEL, max_output_tokens: 16_384 };
+    expect(effectiveOutputTokens(settings, glm, "story")).toBe(STORY_OUTPUT_TOKEN_FLOOR);
+    expect(effectiveOutputTokens(settings, glm, "ooc")).toBe(16_384);
   });
 });
