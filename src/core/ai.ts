@@ -39,6 +39,8 @@ export type AiRequestOptions = {
   affinityKey?: string;
   toolChoice?: ToolChoice;
   skipOutputChannelRetry?: boolean;
+  /** Progressive assistant text callback (enables OpenAI-compatible SSE stream:true). */
+  onPartial?: (text: string) => void | Promise<void>;
   requestKind?:
     "story" | "ooc" | "tool" | "summary" | "compact" | "memory" | "rewrite" | "regenerate" | "correction" | "probe";
 };

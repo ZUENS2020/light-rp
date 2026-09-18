@@ -418,6 +418,18 @@ export async function markRunning(db: D1Database, id: string): Promise<void> {
   await leaseTask(db, id, `legacy-${id}`);
 }
 
+/** Persist progressive assistant text while status=running (polled by Play UI). */
+export async function updateTaskPartialContent(db: D1Database, id: string, content: string): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE generation_tasks
+       SET result_content = ?, updated_at = ?
+       WHERE id = ? AND status = 'running'`,
+    )
+    .bind(content, nowIso(), id)
+    .run();
+}
+
 export async function completeTask(db: D1Database, id: string, completion: TaskCompletion): Promise<void> {
   const task = await getTask(db, id);
   if (!task || task.status === "completed" || task.status === "dead") return;

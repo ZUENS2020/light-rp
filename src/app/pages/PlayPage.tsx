@@ -356,6 +356,12 @@ export function PlayPage() {
     onSuccess: refreshPlay,
   });
 
+  const streamingText =
+    taskQuery.data &&
+    (taskQuery.data.status === "pending" || taskQuery.data.status === "running") &&
+    typeof taskQuery.data.content === "string"
+      ? taskQuery.data.content
+      : "";
   const activeStatus = taskQuery.data?.status;
   const busy =
     turnMutation.isPending ||
@@ -639,6 +645,7 @@ export function PlayPage() {
             <Transcript
               state={displayed}
               pending={busy}
+              streamingText={streamingText}
               disabled={busy}
               onRewrite={(index, content) => rewriteMutation.mutate({ index, content })}
             />

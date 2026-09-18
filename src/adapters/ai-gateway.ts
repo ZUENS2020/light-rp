@@ -202,6 +202,87 @@ function parseResponse(response: Response, rawText: string, requestBody: string,
   };
 }
 
+
+/** OpenAI-compatible chat.completion.chunk SSE → accumulated assistant text. */
+export async function readChatCompletionSse(
+  body: ReadableStream<Uint8Array>,
+  onPartial?: (text: string) => void | Promise<void>,
+): Promise<{
+  text: string;
+  finish_reason?: string;
+  usage: AiUsage;
+  reasoningOnly: boolean;
+}> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  let finish_reason: string | undefined;
+  let usage: AiUsage = { prompt_tokens: 0, completion_tokens: 0, cached_input_tokens: 0 };
+  let reasoningPresent = false;
+  let lastEmitted = "";
+
+  const emit = async () => {
+    if (!onPartial || text === lastEmitted) return;
+    lastEmitted = text;
+    await onPartial(text);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n");
+    buffer = parts.pop() || "";
+    for (const line of parts) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(":")) continue;
+      if (!trimmed.startsWith("data:")) continue;
+      const data = trimmed.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(data) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const choices = (parsed.choices as Record<string, unknown>[] | undefined) || [];
+      const choice = choices[0] || {};
+      const delta = (choice.delta as Record<string, unknown> | undefined) || {};
+      const message = (choice.message as Record<string, unknown> | undefined) || {};
+      const piece =
+        typeof delta.content === "string"
+          ? delta.content
+          : typeof message.content === "string"
+            ? message.content
+            : "";
+      if (piece) {
+        // Some providers resend the full message content on the final chunk.
+        if (typeof message.content === "string" && message.content.startsWith(text) && message.content.length >= text.length) {
+          text = message.content;
+        } else {
+          text += piece;
+        }
+        await emit();
+      }
+      if (delta.reasoning_content || delta.reasoning || message.reasoning_content || message.reasoning) {
+        reasoningPresent = true;
+      }
+      if (choice.finish_reason) finish_reason = String(choice.finish_reason);
+      if (parsed.usage && typeof parsed.usage === "object") {
+        usage = parseUsage(parsed);
+      }
+    }
+  }
+  await emit();
+  return {
+    text,
+    finish_reason,
+    usage,
+    reasoningOnly: reasoningPresent && !text.trim(),
+  };
+}
+
 async function rawChat(
   env: Env,
   messages: LlmMessage[],
@@ -225,8 +306,15 @@ async function rawChat(
     payload.tools = normalizedTools;
     payload.tool_choice = options.toolChoice || "auto";
   }
-  const requestBody = stableStringify(payload);
-  const normalizedPayload = JSON.parse(requestBody) as Record<string, unknown>;
+  // Stream only for plain text completions with an onPartial sink (story TTFT).
+  // Tool-call streaming is intentionally out of scope — keep the JSON path.
+  const wantStream = Boolean(options.onPartial) && !normalizedTools?.length;
+  if (wantStream) payload.stream = true;
+  // request_body omits stream so cache keys / diagnostics stay comparable to non-stream.
+  const requestBody = stableStringify(
+    Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "stream")),
+  );
+  const normalizedPayload = JSON.parse(stableStringify(payload)) as Record<string, unknown>;
   const cache = effectiveCache(options);
   const seconds = Math.max(1, timeoutSec || 120);
   const controller = new AbortController();
@@ -275,9 +363,48 @@ async function rawChat(
   } finally {
     clearTimeout(timer);
   }
+  if (!response.ok) {
+    const rawText = await response.text();
+    throw new LlmHttpError(response.status, rawText.slice(0, 800));
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (wantStream && response.body && /event-stream|octet-stream|jsonl/i.test(contentType + " text/event-stream")) {
+    const streamed = await readChatCompletionSse(response.body, options.onPartial);
+    return {
+      text: streamed.text,
+      tool_calls: [],
+      finish_reason: streamed.finish_reason,
+      usage: streamed.usage,
+      response_cache_status: responseCacheStatus(response, cache.skipCache),
+      request_body: requestBody,
+      reasoningOnly: streamed.reasoningOnly,
+    };
+  }
+  // Fallback: provider ignored stream or returned a full JSON body.
   const rawText = await response.text();
-  if (!response.ok) throw new LlmHttpError(response.status, rawText.slice(0, 800));
-  return parseResponse(response, rawText, requestBody, cache.skipCache);
+  if (wantStream && rawText.trim().startsWith("data:")) {
+    const streamed = await readChatCompletionSse(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(rawText));
+          controller.close();
+        },
+      }),
+      options.onPartial,
+    );
+    return {
+      text: streamed.text,
+      tool_calls: [],
+      finish_reason: streamed.finish_reason,
+      usage: streamed.usage,
+      response_cache_status: responseCacheStatus(response, cache.skipCache),
+      request_body: requestBody,
+      reasoningOnly: streamed.reasoningOnly,
+    };
+  }
+  const parsed = parseResponse(response, rawText, requestBody, cache.skipCache);
+  if (wantStream && options.onPartial && parsed.text) await options.onPartial(parsed.text);
+  return parsed;
 }
 
 export async function chat(

@@ -80,7 +80,7 @@ import {
 } from "./settings";
 import { nowIso } from "../core/util";
 import { createPromptEpoch, preparePrompt } from "./prompt-state";
-import { getCachedToolExecution, recordToolExecution } from "./tasks";
+import { getCachedToolExecution, recordToolExecution, updateTaskPartialContent } from "./tasks";
 import { parseSystemCommand, roleplayOnlyMessages } from "../core/commands";
 import {
   buildIncrementalCompactInput,
@@ -226,6 +226,56 @@ export function effectiveLoreTokenBudget(
   return contextCfg.budget.lore;
 }
 
+
+/** Throttle D1 partial writes during SSE (avoid rows_written blowups). */
+function createPartialContentSink(db: D1Database, taskId: string, intervalMs = 400) {
+  let lastAt = 0;
+  let lastText = "";
+  let chain: Promise<void> = Promise.resolve();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const write = (content: string) => {
+    lastText = content;
+    chain = chain
+      .then(() => updateTaskPartialContent(db, taskId, content))
+      .catch(() => undefined);
+    return chain;
+  };
+
+  return {
+    onPartial: (text: string) => {
+      const now = Date.now();
+      if (text === lastText) return chain;
+      if (now - lastAt >= intervalMs) {
+        lastAt = now;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        return write(text);
+      }
+      if (!timer) {
+        const wait = Math.max(0, intervalMs - (now - lastAt));
+        timer = setTimeout(() => {
+          timer = null;
+          lastAt = Date.now();
+          void write(lastText);
+        }, wait);
+      }
+      lastText = text;
+      return chain;
+    },
+    flush: async () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await chain;
+      if (lastText) await updateTaskPartialContent(db, taskId, lastText).catch(() => undefined);
+    },
+  };
+}
+
 export async function runOoc(
   env: Env,
   fs: R2Fs,
@@ -233,7 +283,7 @@ export async function runOoc(
   sessionId: string,
   rawText: string,
   settings: AppSettings,
-  options: { model: AiModelConfig; affinityKey?: string; taskId?: string },
+  options: { model: AiModelConfig; affinityKey?: string; taskId?: string; db?: D1Database },
 ): Promise<OocOut> {
   const command = parseSystemCommand(rawText);
   if (command?.name !== "ooc" || !command.argument) throw new Error("/ooc 后需要填写问题");
@@ -246,7 +296,11 @@ export async function runOoc(
   const context = [`工作区：${pack.name}`, roleplayHistory ? `最近的 RP 正文：\n${roleplayHistory}` : "暂无 RP 正文。"]
     .join("\n\n")
     .trim();
-  const result = await chat(
+  const oocSink =
+    options.db && options.taskId ? createPartialContentSink(options.db, options.taskId) : null;
+  let result;
+  try {
+    result = await chat(
     env,
     [
       { role: "system", content: OOC_SYSTEM },
@@ -257,8 +311,16 @@ export async function runOoc(
     Math.min(settings.llm.temperature, 0.5),
     effectiveOutputTokens(settings, options.model, "ooc"),
     settings.llm.timeout,
-    { model: options.model, affinityKey: options.affinityKey, requestKind: "ooc" },
+    {
+      model: options.model,
+      affinityKey: options.affinityKey,
+      requestKind: "ooc",
+      ...(oocSink ? { onPartial: oocSink.onPartial } : {}),
+    },
   );
+  } finally {
+    if (oocSink) await oocSink.flush();
+  }
   const assistant = {
     role: "assistant",
     content: result.text.trim(),
@@ -849,12 +911,20 @@ export async function runTurn(
   }
   // Prefill AFTER preparePrompt so the final chat() list ends with an in-character stub.
   messages = withBreachAssistantPrefill(messages, breach);
-  const gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, {
-    model: opts?.ai?.model,
-    affinityKey: affinity,
-    requestKind: opts?.ai?.requestKind || "story",
-    skipCache: opts?.ai?.requestKind === "rewrite" || opts?.ai?.requestKind === "regenerate",
-  });
+  const partialSink =
+    opts?.ai?.db && opts.ai.taskId ? createPartialContentSink(opts.ai.db, opts.ai.taskId) : null;
+  let gm;
+  try {
+    gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, {
+      model: opts?.ai?.model,
+      affinityKey: affinity,
+      requestKind: opts?.ai?.requestKind || "story",
+      skipCache: opts?.ai?.requestKind === "rewrite" || opts?.ai?.requestKind === "regenerate",
+      ...(partialSink ? { onPartial: partialSink.onPartial } : {}),
+    });
+  } finally {
+    if (partialSink) await partialSink.flush();
+  }
   const { visible, trailer } = parseTrailer(gm.text);
   const truncated = gm.finish_reason === "length";
   if (truncated) warnings.push("回复在 max_tokens 处被截断");
