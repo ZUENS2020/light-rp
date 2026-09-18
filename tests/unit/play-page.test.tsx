@@ -193,4 +193,23 @@ describe("Play Studio", () => {
     await user.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(api.turn).toHaveBeenCalledWith("session-1", "/ooc 解释当前关系", expect.any(String)));
   });
+
+  it("renders growing partial assistant text while the task is running", async () => {
+    stubApi();
+    vi.spyOn(api, "turn").mockResolvedValue({ task_id: "task-stream", status: "running" });
+    vi.spyOn(api, "task").mockResolvedValue({
+      id: "task-stream",
+      status: "running",
+      content: "门轴轻响，一缕夜风——",
+    });
+    const user = userEvent.setup();
+    renderPlay();
+
+    const editor = await screen.findByLabelText("你的行动");
+    await user.type(editor, "推开门");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(await screen.findByText("门轴轻响，一缕夜风——")).toBeInTheDocument();
+    expect(screen.getByText("生成中…")).toBeInTheDocument();
+  });
 });

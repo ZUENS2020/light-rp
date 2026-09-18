@@ -100,11 +100,14 @@ function EditPanel({
 export function Transcript({
   state,
   pending,
+  streamingText,
   disabled,
   onRewrite,
 }: {
   state: PlayState;
   pending?: boolean;
+  /** Growing assistant text while a generation task is running. */
+  streamingText?: string;
   disabled?: boolean;
   onRewrite?: (index: number, content: string) => void;
 }) {
@@ -114,7 +117,7 @@ export function Transcript({
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [state.messages.length, state.opening, pending]);
+  }, [state.messages.length, state.opening, pending, streamingText]);
 
   const lastAssistantIndex = (() => {
     for (let i = state.messages.length - 1; i >= 0; i -= 1) {
@@ -197,9 +200,16 @@ export function Transcript({
       })}
       {lastAssistantIndex < 0 && (state.opening || state.messages.length === 0) ? <StateBar state={state} /> : null}
       {pending ? (
-        <article className="flex items-center gap-2 font-ui text-sm text-secondary" aria-live="polite">
-          <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
-          正在生成…
+        <article className="flex flex-col gap-3" aria-live="polite" aria-busy="true">
+          {streamingText?.trim() ? (
+            <div className="whitespace-pre-wrap font-body text-base leading-relaxed opacity-90">
+              {stripHidden(streamingText)}
+            </div>
+          ) : null}
+          <div className="flex items-center gap-2 font-ui text-sm text-secondary">
+            <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
+            {streamingText?.trim() ? "生成中…" : "正在生成…"}
+          </div>
         </article>
       ) : null}
       <div ref={endRef} />

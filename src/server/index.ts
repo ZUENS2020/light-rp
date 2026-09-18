@@ -1065,6 +1065,7 @@ export default {
               model,
               affinityKey: (await sessionRuntime(env.DB, sessionId)).affinity_key,
               taskId,
+              db: env.DB,
             })
           : await runTurn(
               env,
