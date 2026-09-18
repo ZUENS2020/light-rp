@@ -115,4 +115,36 @@ describe("chat() streaming via onPartial", () => {
     const [request] = run.mock.calls[0] as unknown as [{ query: Record<string, unknown> }];
     expect(request.query.stream).toBeUndefined();
   });
+
+  it("falls back to JSON body when provider ignores stream", async () => {
+    const run = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "整段回复" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 10, completion_tokens: 4 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    const partials: string[] = [];
+    const result = await chat(
+      fakeGatewayEnv(run),
+      [{ role: "user", content: "继续" }],
+      null,
+      0.5,
+      1_000,
+      10,
+      {
+        model: gatewayModel,
+        onPartial: (text) => {
+          partials.push(text);
+        },
+      },
+    );
+    expect(result.text).toBe("整段回复");
+    expect(partials).toEqual(["整段回复"]);
+    const [request] = run.mock.calls[0] as unknown as [{ query: Record<string, unknown> }];
+    expect(request.query.stream).toBe(true);
+  });
 });

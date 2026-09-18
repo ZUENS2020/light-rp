@@ -368,7 +368,7 @@ async function rawChat(
     throw new LlmHttpError(response.status, rawText.slice(0, 800));
   }
   const contentType = response.headers.get("content-type") || "";
-  if (wantStream && response.body && /event-stream|octet-stream|jsonl/i.test(contentType + " text/event-stream")) {
+  if (wantStream && response.body && (/event-stream|octet-stream|jsonl/i.test(contentType) || !contentType)) {
     const streamed = await readChatCompletionSse(response.body, options.onPartial);
     return {
       text: streamed.text,
