@@ -80,7 +80,7 @@ describe("runtime model limits", () => {
     const glm: AiModelConfig = {
       ...DEFAULT_MODEL,
       id: "glm53-flash-cheap-openrouter",
-      model_id: "@preset/glm53-flash-cheap",
+      model_id: "~z-ai/glm-flash-latest",
       context_window: 1_310_720,
       max_output_tokens: 32_768,
     };
