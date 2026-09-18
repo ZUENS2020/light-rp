@@ -5,9 +5,10 @@
   "main": "./src/server/index.ts",
   "compatibility_date": "2026-08-30",
   "compatibility_flags": ["nodejs_compat"],
-  // Cron every 5 minutes (not every minute): lease grace is DELIVERY_GRACE_MS=180s,
-  // so recovery within ~5min is fine and cuts quiet-tick D1 rows_written from scheduled flush.
-  "triggers": { "crons": ["*/5 * * * *"] },
+  // Cron every minute: never-started pending (lost Queue after outbox publish) must
+  // republish within ~30–60s via PENDING_NEVER_STARTED_GRACE_MS; leased recovery still
+  // uses DELIVERY_GRACE_MS=180s. Quiet ticks perform zero D1 writes when nothing matches.
+  "triggers": { "crons": ["*/1 * * * *"] },
   "workers_dev": false,
   "preview_urls": false,
   "observability": {
@@ -43,9 +44,7 @@
     },
   ],
   "queues": {
-    "producers": [
-      { "binding": "GENERATE_QUEUE", "queue": "lightrp-v2-generate" },
-    ],
+    "producers": [{ "binding": "GENERATE_QUEUE", "queue": "lightrp-v2-generate" }],
     "consumers": [
       {
         "queue": "lightrp-v2-generate",

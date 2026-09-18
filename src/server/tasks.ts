@@ -10,7 +10,11 @@ import {
 import { DEFAULT_CONTEXT, estimateTokens } from "../core/budget";
 import { nowIso } from "../core/util";
 import { resolveSessionModel, sessionRuntime } from "./models";
-import { MAX_GENERATION_ATTEMPTS, recoverGenerationTasks } from "./generation-recovery";
+import {
+  MAX_GENERATION_ATTEMPTS,
+  recoverGenerationTasks,
+  resetNeverStartedPublishedOutbox,
+} from "./generation-recovery";
 
 export type TaskStatus = "pending" | "running" | "completed" | "failed" | "dead";
 export type TaskKind = "turn" | "regenerate" | "rewrite" | "compact" | "summary" | "memory" | "probe";
@@ -221,25 +225,38 @@ export async function insertPending(
 ): Promise<void> {
   const ts = nowIso();
   const model = input.model || (await resolveSessionModel(db, input.sessionId));
-  await db
-    .prepare(
-      `INSERT INTO generation_tasks (
-         id, workspace_id, session_id, kind, idempotency_key, user_text, status,
-         model_snapshot_json, output_contract_tokens, nmem_sync_status, created_at, updated_at
-       ) VALUES (?, ?, ?, 'turn', ?, ?, 'pending', ?, ?, 'not_requested', ?, ?)`,
-    )
-    .bind(
-      input.id,
-      input.worldId,
-      input.sessionId,
-      input.idempotencyKey || input.id,
-      input.userText,
-      stableStringify(model),
-      estimateTokens(OUTPUT_CHANNEL_CONTRACT),
-      ts,
-      ts,
-    )
-    .run();
+  const outboxId = crypto.randomUUID();
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO generation_tasks (
+           id, workspace_id, session_id, kind, idempotency_key, user_text, status,
+           model_snapshot_json, output_contract_tokens, nmem_sync_status, created_at, updated_at
+         ) VALUES (?, ?, ?, 'turn', ?, ?, 'pending', ?, ?, 'not_requested', ?, ?)`,
+      )
+      .bind(
+        input.id,
+        input.worldId,
+        input.sessionId,
+        input.idempotencyKey || input.id,
+        input.userText,
+        stableStringify(model),
+        estimateTokens(OUTPUT_CHANNEL_CONTRACT),
+        ts,
+        ts,
+      ),
+    db
+      .prepare(
+        `INSERT INTO outbox_events (id, aggregate_type, aggregate_id, event_type, payload_json, created_at)
+         VALUES (?, 'generation_task', ?, 'generation.requested', ?, ?)`,
+      )
+      .bind(
+        outboxId,
+        input.id,
+        stableStringify({ taskId: input.id, workspaceId: input.worldId, sessionId: input.sessionId }),
+        ts,
+      ),
+  ]);
 }
 
 /** How many tip user/assistant turns to re-seed into llm_events after epoch rotate. */
@@ -352,12 +369,16 @@ export async function publishTask(env: Env, task: GenerationTaskRow): Promise<vo
 
 /**
  * Recover expired leases as well as sends lost after the input transaction.
- * Quiet ticks: recoverGenerationTasks early-returns with zero writes when nothing is
- * stale; the outbox SELECT only drives publishTask/markOutboxPublished for unpublished
- * rows (published_at IS NULL), so idle minutes do not touch updated_at.
+ * Quiet ticks: recover + never-started reset early-return with zero writes when nothing
+ * matches; the outbox SELECT only drives publishTask for published_at IS NULL rows.
+ *
+ * Never-started pending (attempt_count=0) with a published outbox older than
+ * PENDING_NEVER_STARTED_GRACE_MS is force-reset so lost Queue deliveries republish
+ * within ~30–60s (cron every minute) instead of waiting DELIVERY_GRACE_MS + cron lag.
  */
 export async function flushGenerationOutbox(env: Env): Promise<void> {
   await recoverGenerationTasks(env.DB);
+  await resetNeverStartedPublishedOutbox(env.DB);
   const rows = await env.DB.prepare(
     `SELECT o.aggregate_id AS id FROM outbox_events o JOIN generation_tasks g ON g.id = o.aggregate_id
      WHERE o.event_type = 'generation.requested' AND o.published_at IS NULL AND g.status IN ('pending', 'running')

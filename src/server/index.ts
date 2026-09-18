@@ -53,6 +53,7 @@ import {
   insertPending,
   leaseTask,
   markFailed,
+  publishTask,
   replaceSessionTranscriptProjection,
 } from "./tasks";
 import { MAX_GENERATION_ATTEMPTS } from "./generation-recovery";
@@ -727,7 +728,9 @@ app.post("/api/v2/play/:id/:sid/turn", async (c) => {
   });
   const taskId = crypto.randomUUID();
   await insertPending(c.env.DB, { id: taskId, worldId: id, sessionId: sid, userText: text });
-  await c.env.GENERATE_QUEUE.send({ taskId, worldId: id, sessionId: sid });
+  const pending = await getTask(c.env.DB, taskId);
+  if (!pending) throw new Error("pending turn task insert did not commit");
+  await publishTask(c.env, pending);
   return c.json({
     ...(await playState(c.env, fs, pack, sid)),
     task_id: taskId,
@@ -784,7 +787,9 @@ app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
     if (c.env.DB && c.env.GENERATE_QUEUE) {
       const taskId = crypto.randomUUID();
       await insertPending(c.env.DB, { id: taskId, worldId: id, sessionId: sid, userText: content });
-      await c.env.GENERATE_QUEUE.send({ taskId, worldId: id, sessionId: sid });
+      const pending = await getTask(c.env.DB, taskId);
+      if (!pending) throw new Error("pending rewrite task insert did not commit");
+      await publishTask(c.env, pending);
       return c.json({
         ...(await playState(c.env, fs, pack, sid)),
         task_id: taskId,
