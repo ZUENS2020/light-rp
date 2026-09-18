@@ -10,7 +10,11 @@ import {
   listMessages,
   markOutboxPublished,
 } from "../../src/server/tasks";
-import { MAX_GENERATION_ATTEMPTS, recoverGenerationTasks } from "../../src/server/generation-recovery";
+import {
+  MAX_GENERATION_ATTEMPTS,
+  PENDING_NEVER_STARTED_GRACE_MS,
+  recoverGenerationTasks,
+} from "../../src/server/generation-recovery";
 
 const migrations = inject("D1_MIGRATIONS");
 const old = "2000-01-01T00:00:00.000Z";
@@ -69,6 +73,51 @@ it("leaves a healthy lease alone", async () => {
   await leaseTask(env.DB, task.id, "healthy-owner");
   await markOutboxPublished(env.DB, task.id);
   await env.DB.prepare("UPDATE generation_tasks SET updated_at = ? WHERE id = ?").bind(old, task.id).run();
+  const { runtime, send } = queueEnv();
+  await flushGenerationOutbox(runtime);
+  expect(send).not.toHaveBeenCalled();
+  expect(await getTask(env.DB, task.id)).toMatchObject({
+    status: "running",
+    lease_owner: "healthy-owner",
+    attempt_count: 1,
+  });
+});
+
+it("republishes never-started pending with published outbox after short grace", async () => {
+  const task = await turn();
+  await markOutboxPublished(env.DB, task.id);
+  const { runtime, send } = queueEnv();
+  // Fresher than PENDING_NEVER_STARTED_GRACE_MS — must not republish yet.
+  const recent = new Date(Date.now() - PENDING_NEVER_STARTED_GRACE_MS / 2).toISOString();
+  await env.DB.prepare("UPDATE generation_tasks SET updated_at = ? WHERE id = ?").bind(recent, task.id).run();
+  await flushGenerationOutbox(runtime);
+  expect(send).not.toHaveBeenCalled();
+  // Older than short grace, still attempt_count=0 / lease null / published outbox.
+  const staleEnough = new Date(Date.now() - PENDING_NEVER_STARTED_GRACE_MS - 1_000).toISOString();
+  await env.DB.prepare("UPDATE generation_tasks SET updated_at = ? WHERE id = ?").bind(staleEnough, task.id).run();
+  await flushGenerationOutbox(runtime);
+  expect(send).toHaveBeenCalledOnce();
+  expect(send).toHaveBeenCalledWith(expect.objectContaining({ taskId: task.id }));
+  expect(await getTask(env.DB, task.id)).toMatchObject({
+    status: "pending",
+    attempt_count: 0,
+    lease_owner: null,
+  });
+  expect(
+    await env.DB.prepare(
+      "SELECT published_at FROM outbox_events WHERE aggregate_id = ? AND event_type = 'generation.requested'",
+    )
+      .bind(task.id)
+      .first("published_at"),
+  ).not.toBeNull();
+});
+
+it("does not short-grace republish a healthy leased running task", async () => {
+  const task = await turn();
+  await leaseTask(env.DB, task.id, "healthy-owner");
+  await markOutboxPublished(env.DB, task.id);
+  const staleEnough = new Date(Date.now() - PENDING_NEVER_STARTED_GRACE_MS - 1_000).toISOString();
+  await env.DB.prepare("UPDATE generation_tasks SET updated_at = ? WHERE id = ?").bind(staleEnough, task.id).run();
   const { runtime, send } = queueEnv();
   await flushGenerationOutbox(runtime);
   expect(send).not.toHaveBeenCalled();
