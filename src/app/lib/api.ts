@@ -423,3 +423,10 @@ export const api = {
       { method: "POST", body: JSON.stringify({ files }) },
     ),
 };
+
+/** WebSocket URL for SessionRuntime streaming (full-content partials). */
+export function runtimeWebSocketUrl(worldId: string, sessionId: string): string {
+  const proto = typeof location !== "undefined" && location.protocol === "https:" ? "wss" : "ws";
+  const host = typeof location !== "undefined" ? location.host : "localhost";
+  return `${proto}://${host}/api/v2/play/${encodeURIComponent(worldId)}/${encodeURIComponent(sessionId)}/runtime`;
+}

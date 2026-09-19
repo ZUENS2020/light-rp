@@ -22,9 +22,11 @@ import { Button } from "../components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../components/ui/sheet";
 import {
   api,
+  runtimeWebSocketUrl,
   TaskConflictError,
   type AiModelConfig,
   type CacheReport,
+  type GenerationTask,
   type MemoryStatus,
   type PlayState,
 } from "../lib/api";
@@ -238,6 +240,7 @@ export function PlayPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [wsLive, setWsLive] = useState(false);
   const [optimisticText, setOptimisticText] = useState("");
   const [leftOpen, setLeftOpen] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -272,7 +275,9 @@ export function PlayPage() {
     enabled: Boolean(taskId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "pending" || status === "running" || !status ? 1_500 : false;
+      if (!(status === "pending" || status === "running" || !status)) return false;
+      // WS partials are primary; poll is fallback (slower when socket is healthy).
+      return wsLive ? 8_000 : 1_500;
     },
   });
   const state = playQuery.data;
@@ -281,6 +286,114 @@ export function PlayPage() {
     const active = activeQuery.data?.task;
     if (active && (active.status === "pending" || active.status === "running")) setTaskId(active.id);
   }, [activeQuery.data]);
+
+  useEffect(() => {
+    if (!worldId || !sessionId || typeof WebSocket === "undefined") return;
+    let closed = false;
+    let socket: WebSocket | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+
+    const applyEvent = (raw: string) => {
+      let msg: {
+        type?: string;
+        taskId?: string | null;
+        content?: string;
+        error?: string;
+        status?: string;
+        partialContent?: string;
+      };
+      try {
+        msg = JSON.parse(raw) as typeof msg;
+      } catch {
+        return;
+      }
+      if (msg.type === "partial" && msg.taskId && typeof msg.content === "string") {
+        setTaskId(msg.taskId);
+        queryClient.setQueryData(["task", msg.taskId], (prev: GenerationTask | undefined) => ({
+          ...(prev || { id: msg.taskId! }),
+          id: msg.taskId!,
+          status: "running" as const,
+          content: msg.content,
+          error: prev?.error ?? null,
+        }));
+        return;
+      }
+      if (msg.type === "completed" && msg.taskId) {
+        setTaskId(msg.taskId);
+        queryClient.setQueryData(["task", msg.taskId], (prev: GenerationTask | undefined) => ({
+          ...(prev || { id: msg.taskId! }),
+          id: msg.taskId!,
+          status: "completed" as const,
+          content: typeof msg.content === "string" ? msg.content : prev?.content,
+          error: null,
+        }));
+        return;
+      }
+      if (msg.type === "failed" && msg.taskId) {
+        setTaskId(msg.taskId);
+        queryClient.setQueryData(["task", msg.taskId], (prev: GenerationTask | undefined) => ({
+          ...(prev || { id: msg.taskId! }),
+          id: msg.taskId!,
+          status: "failed" as const,
+          content: prev?.content,
+          error: msg.error || "生成失败",
+        }));
+        return;
+      }
+      if (msg.type === "status" && msg.taskId && (msg.status === "pending" || msg.status === "running")) {
+        setTaskId(msg.taskId);
+        if (typeof msg.partialContent === "string" && msg.partialContent) {
+          queryClient.setQueryData(["task", msg.taskId], (prev: GenerationTask | undefined) => ({
+            ...(prev || { id: msg.taskId! }),
+            id: msg.taskId!,
+            status: "running" as const,
+            content: msg.partialContent,
+          }));
+        }
+      }
+    };
+
+    const connect = () => {
+      if (closed) return;
+      try {
+        socket = new WebSocket(runtimeWebSocketUrl(worldId, sessionId));
+      } catch {
+        setWsLive(false);
+        return;
+      }
+      socket.onopen = () => {
+        attempt = 0;
+        setWsLive(true);
+      };
+      socket.onmessage = (event) => {
+        if (typeof event.data === "string") applyEvent(event.data);
+      };
+      socket.onerror = () => {
+        setWsLive(false);
+      };
+      socket.onclose = () => {
+        setWsLive(false);
+        socket = null;
+        if (closed) return;
+        const delay = Math.min(15_000, 1_000 * 2 ** attempt);
+        attempt += 1;
+        retryTimer = setTimeout(connect, delay);
+      };
+    };
+
+    connect();
+    return () => {
+      closed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      setWsLive(false);
+      try {
+        socket?.close();
+      } catch {
+        // ignore
+      }
+    };
+  }, [queryClient, sessionId, worldId]);
 
   useEffect(() => {
     const task = taskQuery.data;
