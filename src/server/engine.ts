@@ -126,6 +126,8 @@ export type RunTurnOptions = {
     leaseOwner?: string;
     /** Extra renew hook (scheduler heartbeat touch) on each flushed partial. */
     onLeaseTouch?: () => Promise<void>;
+    /** SessionRuntime DO broadcast (full content); D1 partial writes stay for poll fallback. */
+    onRuntimePartial?: (content: string) => Promise<void>;
   };
 };
 
@@ -237,6 +239,7 @@ function createPartialContentSink(
     intervalMs?: number;
     leaseOwner?: string;
     onLeaseTouch?: () => Promise<void>;
+    onRuntimePartial?: (content: string) => Promise<void>;
   } = {},
 ) {
   const intervalMs = options.intervalMs ?? 400;
@@ -255,6 +258,7 @@ function createPartialContentSink(
         if (ok && !options.leaseOwner && options.onLeaseTouch) await options.onLeaseTouch();
         // Stolen lease: nudge heartbeat so assertHeld fails instead of completing.
         if (!ok && options.leaseOwner && options.onLeaseTouch) await options.onLeaseTouch();
+        if (ok && options.onRuntimePartial) await options.onRuntimePartial(content);
       })
       .catch(() => undefined);
     return chain;
@@ -290,7 +294,8 @@ function createPartialContentSink(
       }
       await chain;
       if (lastText) {
-        await updateTaskPartialContent(db, taskId, lastText, options.leaseOwner).catch(() => undefined);
+        const ok = await updateTaskPartialContent(db, taskId, lastText, options.leaseOwner).catch(() => false);
+        if (ok && options.onRuntimePartial) await options.onRuntimePartial(lastText).catch(() => undefined);
       }
     },
   };
@@ -310,6 +315,7 @@ export async function runOoc(
     db?: D1Database;
     leaseOwner?: string;
     onLeaseTouch?: () => Promise<void>;
+    onRuntimePartial?: (content: string) => Promise<void>;
   },
 ): Promise<OocOut> {
   const command = parseSystemCommand(rawText);
@@ -328,6 +334,7 @@ export async function runOoc(
       ? createPartialContentSink(options.db, options.taskId, {
           leaseOwner: options.leaseOwner,
           onLeaseTouch: options.onLeaseTouch,
+          onRuntimePartial: options.onRuntimePartial,
         })
       : null;
   let result;
@@ -949,6 +956,7 @@ export async function runTurn(
       ? createPartialContentSink(opts.ai.db, opts.ai.taskId, {
           leaseOwner: opts.ai.leaseOwner,
           onLeaseTouch: opts.ai.onLeaseTouch,
+          onRuntimePartial: opts.ai.onRuntimePartial,
         })
       : null;
   let gm;

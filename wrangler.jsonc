@@ -8,7 +8,7 @@
   // Workers Paid/Standard: max CPU 300000ms (5 min). Covers Queue consumer long GLM
   // turns — cpu_ms is compute time only, not I/O wait.
   "limits": {
-    "cpu_ms": 300000
+    "cpu_ms": 300000,
   },
   // Cron every minute: never-started pending (lost Queue after outbox publish) must
   // republish within ~30–60s via PENDING_NEVER_STARTED_GRACE_MS; lease-expiry recovery
@@ -61,4 +61,19 @@
       },
     ],
   },
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SESSION_RUNTIME",
+        "class_name": "SessionRuntime",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1-session-runtime",
+      "new_sqlite_classes": ["SessionRuntime"],
+    },
+  ],
 }

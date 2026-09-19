@@ -64,6 +64,7 @@ import { projectWorkspaceAndSession, projectWorkspaceContent, registerV2Routes }
 import type { AiModelConfig, AiUsage, ResponseCacheStatus } from "../core/ai";
 import { mirrorCoreMemorySnapshot } from "./memory";
 import { getApplicationDefaultModel, sessionRuntime } from "./models";
+import { getSessionRuntimeStub, SessionRuntime } from "./session-runtime";
 import { isOocMessage } from "../core/commands";
 import { createPromptEpoch } from "./prompt-state";
 
@@ -893,6 +894,22 @@ app.get("/api/v2/play/:id/:sid/tasks/:taskId", async (c) => {
   });
 });
 
+app.get("/api/v2/play/:id/:sid/runtime", async (c) => {
+  const id = c.req.param("id");
+  const sid = c.req.param("sid");
+  // Same gate as other play routes: workspace + session must exist.
+  const fs = workspaceFs(c.env.BUCKET, id);
+  await loadPack(fs, id);
+  await loadSession(fs, sid);
+  if (!c.env.SESSION_RUNTIME) throw new HTTPException(503, { message: "SESSION_RUNTIME binding unavailable" });
+  const stub = getSessionRuntimeStub(c.env, sid);
+  const upgrade = c.req.header("Upgrade");
+  if (upgrade?.toLowerCase() === "websocket") {
+    return stub.fetch(c.req.raw);
+  }
+  return c.json(await stub.getSnapshot());
+});
+
 app.post("/api/v2/play/:id/:sid/compact", async (c) => {
   const id = c.req.param("id");
   const sid = c.req.param("sid");
@@ -932,6 +949,8 @@ app.post("/api/v2/play/:id/:sid/space", async (c) => {
   return c.json(await playState(c.env, fs, pack, c.req.param("sid")));
 });
 
+export { SessionRuntime };
+
 export default {
   fetch: app.fetch,
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
@@ -960,10 +979,12 @@ export default {
   ) {
     for (const msg of batch.messages) {
       let taskId = "";
+      let sessionIdForRuntime = "";
       try {
         const body = typeof msg.body === "string" ? JSON.parse(msg.body) : msg.body;
         const { taskId: id, sessionId } = body;
         taskId = id;
+        sessionIdForRuntime = sessionId || "";
         const existing = await getTask(env.DB, taskId);
         if (
           !existing ||
@@ -985,6 +1006,24 @@ export default {
         const heartbeat = startLeaseHeartbeat(env.DB, taskId, owner, {
           waitUntil: (job) => ctx.waitUntil(job),
         });
+        const runtime = env.SESSION_RUNTIME && sessionId ? getSessionRuntimeStub(env, sessionId) : null;
+        const notifyRuntimePartial = (content: string) =>
+          runtime
+            ? runtime
+                .onPartial({ taskId, content })
+                .then(() => undefined)
+                .catch(() => undefined)
+            : Promise.resolve();
+        if (runtime) {
+          await runtime.attachGeneration({ taskId, sessionKey: sessionId }).catch((err) => {
+            console.warn({
+              event: "session_runtime.attach_failed",
+              taskId,
+              sessionId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
         try {
           const workspaceId = leased.workspace_id;
           const fs = workspaceFs(env.BUCKET, workspaceId);
@@ -1017,6 +1056,9 @@ export default {
               hiddenEvents: diagnostics?.task_id === taskId ? diagnostics.hidden_prompt_events || [] : undefined,
               // Epoch rotate happens in background compact after apply — not on story complete.
             });
+            if (runtime) {
+              await runtime.onComplete({ taskId, content: persistedAssistant.content }).catch(() => undefined);
+            }
             if (!ooc && diagnostics?.task_id === taskId && (diagnostics.should_commit || diagnostics.should_compact)) {
               const overlayMap = await overlays(fs);
               const waitUntil = (job: Promise<unknown>) => ctx.waitUntil(job);
@@ -1083,6 +1125,7 @@ export default {
                 db: env.DB,
                 leaseOwner: owner,
                 onLeaseTouch: () => heartbeat.touch(),
+                onRuntimePartial: notifyRuntimePartial,
               })
             : await runTurn(
                 env,
@@ -1101,6 +1144,7 @@ export default {
                     model,
                     leaseOwner: owner,
                     onLeaseTouch: () => heartbeat.touch(),
+                    onRuntimePartial: notifyRuntimePartial,
                     requestKind:
                       leased.kind === "rewrite" ? "rewrite" : leased.kind === "regenerate" ? "regenerate" : "story",
                   },
@@ -1126,6 +1170,9 @@ export default {
             hiddenEvents: (result as Partial<TurnOut>).hidden_prompt_events,
             // Post-turn pressure compact / commit_turn run after the reply is visible.
           });
+          if (runtime) {
+            await runtime.onComplete({ taskId, content: result.text }).catch(() => undefined);
+          }
           if (!ooc && ((result as Partial<TurnOut>).should_commit || (result as Partial<TurnOut>).should_compact)) {
             const overlayMap = await overlays(fs);
             const waitUntil = (job: Promise<unknown>) => ctx.waitUntil(job);
@@ -1183,6 +1230,11 @@ export default {
           (current?.attempt_count || msg.attempts) >= MAX_GENERATION_ATTEMPTS ||
           code === "LLM_OUTPUT_CHANNEL_VIOLATION";
         await markFailed(env.DB, taskId, message, { code, dead }).catch(() => undefined);
+        if (taskId && env.SESSION_RUNTIME && sessionIdForRuntime) {
+          await getSessionRuntimeStub(env, sessionIdForRuntime)
+            .onFail({ taskId, error: message })
+            .catch(() => undefined);
+        }
         if (dead) msg.ack();
         else msg.retry();
       }
