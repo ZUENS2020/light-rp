@@ -66,20 +66,12 @@ describe("chat() streaming via onPartial", () => {
   it("sets stream:true and surfaces progressive text", async () => {
     const run = vi.fn(async () => sseResponse([chunk("一"), chunk("二"), chunk("三", "stop")]));
     const partials: string[] = [];
-    const result = await chat(
-      fakeGatewayEnv(run),
-      [{ role: "user", content: "继续" }],
-      null,
-      0.7,
-      1_000,
-      10,
-      {
-        model: gatewayModel,
-        onPartial: (text) => {
-          partials.push(text);
-        },
+    const result = await chat(fakeGatewayEnv(run), [{ role: "user", content: "继续" }], null, 0.7, 1_000, 10, {
+      model: gatewayModel,
+      onPartial: (text) => {
+        partials.push(text);
       },
-    );
+    });
 
     expect(result.text).toBe("一二三");
     expect(partials.at(-1)).toBe("一二三");
@@ -128,23 +120,47 @@ describe("chat() streaming via onPartial", () => {
         ),
     );
     const partials: string[] = [];
-    const result = await chat(
-      fakeGatewayEnv(run),
-      [{ role: "user", content: "继续" }],
-      null,
-      0.5,
-      1_000,
-      10,
-      {
-        model: gatewayModel,
-        onPartial: (text) => {
-          partials.push(text);
-        },
+    const result = await chat(fakeGatewayEnv(run), [{ role: "user", content: "继续" }], null, 0.5, 1_000, 10, {
+      model: gatewayModel,
+      onPartial: (text) => {
+        partials.push(text);
       },
-    );
+    });
     expect(result.text).toBe("整段回复");
     expect(partials).toEqual(["整段回复"]);
     const [request] = run.mock.calls[0] as unknown as [{ query: Record<string, unknown> }];
     expect(request.query.stream).toBe(true);
+  });
+
+  it("skips gateway cache and sends low reasoning effort for streamed story", async () => {
+    const run = vi.fn(async (_req: unknown, init: { gateway?: { skipCache?: boolean } }) => {
+      expect(init.gateway?.skipCache).toBe(true);
+      return sseResponse([chunk("完", "stop")]);
+    });
+    await chat(fakeGatewayEnv(run), [{ role: "user", content: "继续" }], null, 0.7, 16_384, 10, {
+      model: gatewayModel,
+      requestKind: "story",
+      onPartial: () => undefined,
+    });
+    const [request] = run.mock.calls[0] as unknown as [{ query: Record<string, unknown> }];
+    expect(request.query.stream).toBe(true);
+    expect(request.query.reasoning).toEqual({ effort: "low" });
+    expect(request.query.max_tokens).toBe(4_096);
+  });
+
+  it("does not attach reasoning for tool loops / non-story kinds", async () => {
+    const run = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }), {
+          headers: { "content-type": "application/json", "cf-aig-cache-status": "MISS" },
+        }),
+    );
+    await chat(fakeGatewayEnv(run), [{ role: "user", content: "x" }], null, 0.2, 512, 10, {
+      model: gatewayModel,
+      requestKind: "tool",
+    });
+    const [request] = run.mock.calls[0] as unknown as [{ query: Record<string, unknown> }];
+    expect(request.query.reasoning).toBeUndefined();
+    expect(request.query.stream).toBeUndefined();
   });
 });

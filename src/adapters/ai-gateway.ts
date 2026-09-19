@@ -76,7 +76,9 @@ function shouldSkipCache(options: AiRequestOptions): boolean {
     options.skipCache === true ||
     options.requestKind === "rewrite" ||
     options.requestKind === "regenerate" ||
-    options.requestKind === "correction"
+    options.requestKind === "correction" ||
+    // Streaming story replies must not poison the gateway cache with truncated SSE bodies.
+    Boolean(options.onPartial)
   );
 }
 
@@ -357,6 +359,20 @@ export async function readChatCompletionSse(
   };
 }
 
+/** Keep reasoning from consuming the whole max_tokens budget (GLM defaults to max effort). */
+function storyReasoningBudget(
+  model: AiModelConfig,
+  _maxTokens: number,
+  requestKind?: AiRequestOptions["requestKind"],
+): Record<string, unknown> | null {
+  if (!model.supports_reasoning) return null;
+  const story =
+    requestKind == null || requestKind === "story" || requestKind === "rewrite" || requestKind === "regenerate";
+  if (!story) return null;
+  // OpenRouter: pass effort OR max_tokens, not both. GLM defaults to "max" which starves visible output.
+  return { effort: "low" };
+}
+
 async function rawChat(
   env: Env,
   messages: LlmMessage[],
@@ -370,16 +386,19 @@ async function rawChat(
   if (!model.enabled && options.requestKind !== "probe") throw new Error(`model '${model.label}' is disabled`);
   const canonical = canonicalMessages(messages);
   const normalizedTools = canonicalTools(tools);
+  const cappedMax = Math.min(maxTokens, model.max_output_tokens);
   const payload: Record<string, unknown> = {
     model: model.model_id,
     messages: canonical.map(toApiMessage),
     temperature,
-    max_tokens: Math.min(maxTokens, model.max_output_tokens),
+    max_tokens: cappedMax,
   };
   if (normalizedTools?.length) {
     payload.tools = normalizedTools;
     payload.tool_choice = options.toolChoice || "auto";
   }
+  const reasoning = storyReasoningBudget(model, cappedMax, options.requestKind);
+  if (reasoning) payload.reasoning = reasoning;
   // Stream only for plain text completions with an onPartial sink (story TTFT).
   // Tool-call streaming is intentionally out of scope — keep the JSON path.
   const wantStream = Boolean(options.onPartial) && !normalizedTools?.length;

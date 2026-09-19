@@ -1014,6 +1014,17 @@ export default {
                 .then(() => undefined)
                 .catch(() => undefined)
             : Promise.resolve();
+        const notifyRuntimeTouch = () =>
+          runtime
+            ? runtime
+                .touchActivity({ taskId })
+                .then(() => undefined)
+                .catch(() => undefined)
+            : Promise.resolve();
+        const onLeaseTouch = async () => {
+          await heartbeat.touch();
+          await notifyRuntimeTouch();
+        };
         if (runtime) {
           await runtime.attachGeneration({ taskId, sessionKey: sessionId }).catch((err) => {
             console.warn({
@@ -1124,7 +1135,7 @@ export default {
                 taskId,
                 db: env.DB,
                 leaseOwner: owner,
-                onLeaseTouch: () => heartbeat.touch(),
+                onLeaseTouch,
                 onRuntimePartial: notifyRuntimePartial,
               })
             : await runTurn(
@@ -1143,7 +1154,7 @@ export default {
                     taskId,
                     model,
                     leaseOwner: owner,
-                    onLeaseTouch: () => heartbeat.touch(),
+                    onLeaseTouch,
                     onRuntimePartial: notifyRuntimePartial,
                     requestKind:
                       leased.kind === "rewrite" ? "rewrite" : leased.kind === "regenerate" ? "regenerate" : "story",
