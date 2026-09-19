@@ -73,7 +73,6 @@ import { memoryToolSpec, PromptLibrary, turnCommitToolSpec } from "../core/promp
 import type { R2Fs } from "../adapters/r2";
 import {
   LEGACY_LORE_TOKEN_BUDGET,
-  LEGACY_STORY_MAX_TOKENS,
   STORY_OUTPUT_TOKEN_FLOOR,
   TURN_COMMIT_TIMEOUT_SECONDS,
   type AppSettings,
@@ -145,7 +144,7 @@ const OOC_SYSTEM = `你是 Light RP 的系统助手。当前请求明确处于 O
 直接、清楚地回答用户关于当前故事、角色关系、设定、玩法或应用操作的问题；可以讨论 RP，但不要扮演角色或继续叙事。
 不得推进时间、地点、人物行动或状态，不得虚构已发生事件，不得生成状态块，也不得提出或执行任何记忆修改。`;
 
-export { STORY_OUTPUT_TOKEN_FLOOR, TURN_COMMIT_TIMEOUT_SECONDS, LEGACY_STORY_MAX_TOKENS };
+export { STORY_OUTPUT_TOKEN_FLOOR, TURN_COMMIT_TIMEOUT_SECONDS };
 
 function isStoryOutputKind(kind?: AiRequestOptions["requestKind"]): boolean {
   return kind == null || kind === "story" || kind === "rewrite" || kind === "regenerate";
@@ -163,8 +162,8 @@ export function effectiveOutputTokens(
   requestKind?: AiRequestOptions["requestKind"],
 ): number {
   const configured = Math.max(1, Math.floor(settings.llm.max_tokens));
-  const storyConfigured = configured === LEGACY_STORY_MAX_TOKENS ? STORY_OUTPUT_TOKEN_FLOOR : configured;
-  const wanted = isStoryOutputKind(requestKind) ? Math.max(storyConfigured, STORY_OUTPUT_TOKEN_FLOOR) : configured;
+  // Story kinds: never below STORY_OUTPUT_TOKEN_FLOOR; no legacy remap that would lower a 16k+ setting.
+  const wanted = isStoryOutputKind(requestKind) ? Math.max(configured, STORY_OUTPUT_TOKEN_FLOOR) : configured;
   return model ? Math.min(wanted, Math.max(1, Math.floor(model.max_output_tokens))) : wanted;
 }
 

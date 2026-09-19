@@ -134,14 +134,22 @@ describe("runtime model limits", () => {
   it("does not let callers mutate DEFAULT_SETTINGS through a clone", () => {
     const cloned = cloneAppSettings(DEFAULT_SETTINGS);
     cloned.llm.max_tokens = 1;
-    expect(DEFAULT_SETTINGS.llm.max_tokens).toBe(8_192);
+    expect(DEFAULT_SETTINGS.llm.max_tokens).toBe(16_384);
   });
 
-  it("treats stale 16k story max_tokens as the new 8k floor", () => {
+  it("keeps configured 16k story max_tokens (no legacy downgrade to 8k)", () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
     settings.llm.max_tokens = 16_384;
-    const glm: AiModelConfig = { ...DEFAULT_MODEL, max_output_tokens: 16_384 };
-    expect(effectiveOutputTokens(settings, glm, "story")).toBe(STORY_OUTPUT_TOKEN_FLOOR);
+    const glm: AiModelConfig = { ...DEFAULT_MODEL, max_output_tokens: 32_768 };
+    expect(effectiveOutputTokens(settings, glm, "story")).toBe(16_384);
     expect(effectiveOutputTokens(settings, glm, "ooc")).toBe(16_384);
+  });
+
+  it("floors story below the 16k floor upward without affecting OOC", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.llm.max_tokens = 8_192;
+    const glm: AiModelConfig = { ...DEFAULT_MODEL, max_output_tokens: 32_768 };
+    expect(effectiveOutputTokens(settings, glm, "story")).toBe(STORY_OUTPUT_TOKEN_FLOOR);
+    expect(effectiveOutputTokens(settings, glm, "ooc")).toBe(8_192);
   });
 });
