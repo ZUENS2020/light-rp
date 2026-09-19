@@ -10,6 +10,8 @@ import {
   listMessages,
   markOutboxPublished,
   renewTaskLease,
+  startLeaseHeartbeat,
+  updateTaskPartialContent,
 } from "../../src/server/tasks";
 import {
   MAX_GENERATION_ATTEMPTS,
@@ -269,4 +271,60 @@ it("renewTaskLease extends expiry and bumps updated_at for the owner", async () 
   expect(after!.lease_expires_at! > (before?.lease_expires_at || old)).toBe(true);
   expect(await renewTaskLease(env.DB, task.id, "other-owner")).toBe(false);
   expect(await getTask(env.DB, task.id)).toMatchObject({ lease_owner: "owner-a", status: "running" });
+});
+
+it("updateTaskPartialContent with leaseOwner renews lease and rejects stolen owner", async () => {
+  const task = await turn();
+  await leaseTask(env.DB, task.id, "owner-a");
+  await env.DB.prepare("UPDATE generation_tasks SET updated_at = ?, lease_expires_at = ? WHERE id = ?")
+    .bind(old, old, task.id)
+    .run();
+  expect(await updateTaskPartialContent(env.DB, task.id, "partial…", "owner-a")).toBe(true);
+  const after = await getTask(env.DB, task.id);
+  expect(after?.result_content).toBe("partial…");
+  expect(after!.updated_at > old).toBe(true);
+  expect(after!.lease_expires_at! > old).toBe(true);
+  expect(await updateTaskPartialContent(env.DB, task.id, "stolen", "other-owner")).toBe(false);
+  expect(await getTask(env.DB, task.id)).toMatchObject({
+    result_content: "partial…",
+    lease_owner: "owner-a",
+  });
+});
+
+it("startLeaseHeartbeat renews via scheduler.wait loop without setInterval", async () => {
+  const task = await turn();
+  await leaseTask(env.DB, task.id, "hb-owner");
+  await env.DB.prepare("UPDATE generation_tasks SET updated_at = ?, lease_expires_at = ? WHERE id = ?")
+    .bind(old, old, task.id)
+    .run();
+  const heartbeat = startLeaseHeartbeat(env.DB, task.id, "hb-owner", { intervalMs: 20 });
+  try {
+    await scheduler.wait(80);
+    const after = await getTask(env.DB, task.id);
+    expect(after!.updated_at > old).toBe(true);
+    expect(after!.lease_expires_at! > old).toBe(true);
+    await heartbeat.assertHeld();
+  } finally {
+    heartbeat.stop();
+  }
+});
+
+it("flushGenerationOutbox recovers stale-running even when lease is far in the future", async () => {
+  const task = await turn();
+  await leaseTask(env.DB, task.id, "zombie");
+  await markOutboxPublished(env.DB, task.id);
+  const futureLease = new Date(Date.now() + 1_800_000).toISOString();
+  const staleUpdated = new Date(Date.now() - STALE_RUNNING_GRACE_MS - 5_000).toISOString();
+  await env.DB.prepare("UPDATE generation_tasks SET lease_expires_at = ?, updated_at = ? WHERE id = ?")
+    .bind(futureLease, staleUpdated, task.id)
+    .run();
+  const { runtime, send } = queueEnv();
+  await flushGenerationOutbox(runtime);
+  expect(send).toHaveBeenCalledOnce();
+  expect(await getTask(env.DB, task.id)).toMatchObject({
+    status: "pending",
+    lease_owner: null,
+    lease_expires_at: null,
+    error_code: "TASK_LEASE_EXPIRED",
+  });
 });

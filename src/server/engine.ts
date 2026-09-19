@@ -123,6 +123,10 @@ export type RunTurnOptions = {
     taskId: string;
     model: AiModelConfig;
     requestKind?: "story" | "rewrite" | "regenerate";
+    /** Queue lease owner — scopes partial writes and renews lease on each partial. */
+    leaseOwner?: string;
+    /** Extra renew hook (scheduler heartbeat touch) on each flushed partial. */
+    onLeaseTouch?: () => Promise<void>;
   };
 };
 
@@ -226,9 +230,17 @@ export function effectiveLoreTokenBudget(
   return contextCfg.budget.lore;
 }
 
-
 /** Throttle D1 partial writes during SSE (avoid rows_written blowups). */
-function createPartialContentSink(db: D1Database, taskId: string, intervalMs = 400) {
+function createPartialContentSink(
+  db: D1Database,
+  taskId: string,
+  options: {
+    intervalMs?: number;
+    leaseOwner?: string;
+    onLeaseTouch?: () => Promise<void>;
+  } = {},
+) {
+  const intervalMs = options.intervalMs ?? 400;
   let lastAt = 0;
   let lastText = "";
   let chain: Promise<void> = Promise.resolve();
@@ -237,7 +249,14 @@ function createPartialContentSink(db: D1Database, taskId: string, intervalMs = 4
   const write = (content: string) => {
     lastText = content;
     chain = chain
-      .then(() => updateTaskPartialContent(db, taskId, content))
+      .then(async () => {
+        const ok = await updateTaskPartialContent(db, taskId, content, options.leaseOwner);
+        // When leaseOwner is set, the UPDATE already extends the lease. Otherwise
+        // call onLeaseTouch so the scheduler heartbeat can renew updated_at.
+        if (ok && !options.leaseOwner && options.onLeaseTouch) await options.onLeaseTouch();
+        // Stolen lease: nudge heartbeat so assertHeld fails instead of completing.
+        if (!ok && options.leaseOwner && options.onLeaseTouch) await options.onLeaseTouch();
+      })
       .catch(() => undefined);
     return chain;
   };
@@ -271,7 +290,9 @@ function createPartialContentSink(db: D1Database, taskId: string, intervalMs = 4
         timer = null;
       }
       await chain;
-      if (lastText) await updateTaskPartialContent(db, taskId, lastText).catch(() => undefined);
+      if (lastText) {
+        await updateTaskPartialContent(db, taskId, lastText, options.leaseOwner).catch(() => undefined);
+      }
     },
   };
 }
@@ -283,7 +304,14 @@ export async function runOoc(
   sessionId: string,
   rawText: string,
   settings: AppSettings,
-  options: { model: AiModelConfig; affinityKey?: string; taskId?: string; db?: D1Database },
+  options: {
+    model: AiModelConfig;
+    affinityKey?: string;
+    taskId?: string;
+    db?: D1Database;
+    leaseOwner?: string;
+    onLeaseTouch?: () => Promise<void>;
+  },
 ): Promise<OocOut> {
   const command = parseSystemCommand(rawText);
   if (command?.name !== "ooc" || !command.argument) throw new Error("/ooc 后需要填写问题");
@@ -297,27 +325,33 @@ export async function runOoc(
     .join("\n\n")
     .trim();
   const oocSink =
-    options.db && options.taskId ? createPartialContentSink(options.db, options.taskId) : null;
+    options.db && options.taskId
+      ? createPartialContentSink(options.db, options.taskId, {
+          leaseOwner: options.leaseOwner,
+          onLeaseTouch: options.onLeaseTouch,
+        })
+      : null;
   let result;
   try {
     result = await chat(
-    env,
-    [
-      { role: "system", content: OOC_SYSTEM },
-      { role: "user", content: context },
-      { role: "user", content: command.argument },
-    ],
-    null,
-    Math.min(settings.llm.temperature, 0.5),
-    effectiveOutputTokens(settings, options.model, "ooc"),
-    settings.llm.timeout,
-    {
-      model: options.model,
-      affinityKey: options.affinityKey,
-      requestKind: "ooc",
-      ...(oocSink ? { onPartial: oocSink.onPartial } : {}),
-    },
-  );
+      env,
+      [
+        { role: "system", content: OOC_SYSTEM },
+        { role: "user", content: context },
+        { role: "user", content: command.argument },
+      ],
+      null,
+      Math.min(settings.llm.temperature, 0.5),
+      effectiveOutputTokens(settings, options.model, "ooc"),
+      settings.llm.timeout,
+      {
+        model: options.model,
+        affinityKey: options.affinityKey,
+        requestKind: "ooc",
+        ...(oocSink ? { onPartial: oocSink.onPartial } : {}),
+        ...(options.onLeaseTouch ? { onHeartbeat: options.onLeaseTouch } : {}),
+      },
+    );
   } finally {
     if (oocSink) await oocSink.flush();
   }
@@ -912,7 +946,12 @@ export async function runTurn(
   // Prefill AFTER preparePrompt so the final chat() list ends with an in-character stub.
   messages = withBreachAssistantPrefill(messages, breach);
   const partialSink =
-    opts?.ai?.db && opts.ai.taskId ? createPartialContentSink(opts.ai.db, opts.ai.taskId) : null;
+    opts?.ai?.db && opts.ai.taskId
+      ? createPartialContentSink(opts.ai.db, opts.ai.taskId, {
+          leaseOwner: opts.ai.leaseOwner,
+          onLeaseTouch: opts.ai.onLeaseTouch,
+        })
+      : null;
   let gm;
   try {
     gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, {
@@ -921,6 +960,7 @@ export async function runTurn(
       requestKind: opts?.ai?.requestKind || "story",
       skipCache: opts?.ai?.requestKind === "rewrite" || opts?.ai?.requestKind === "regenerate",
       ...(partialSink ? { onPartial: partialSink.onPartial } : {}),
+      ...(opts?.ai?.onLeaseTouch ? { onHeartbeat: opts.ai.onLeaseTouch } : {}),
     });
   } finally {
     if (partialSink) await partialSink.flush();

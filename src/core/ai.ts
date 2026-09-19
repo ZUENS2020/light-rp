@@ -41,6 +41,13 @@ export type AiRequestOptions = {
   skipOutputChannelRetry?: boolean;
   /** Progressive assistant text callback (enables OpenAI-compatible SSE stream:true). */
   onPartial?: (text: string) => void | Promise<void>;
+  /**
+   * Fired periodically during long LLM awaits (TTFT + stream gaps) so Workers can
+   * renew leases without relying on setInterval while blocked on fetch.
+   */
+  onHeartbeat?: () => void | Promise<void>;
+  /** Interval for onHeartbeat; defaults to 30s when onHeartbeat is set. */
+  heartbeatIntervalMs?: number;
   requestKind?:
     "story" | "ooc" | "tool" | "summary" | "compact" | "memory" | "rewrite" | "regenerate" | "correction" | "probe";
 };
