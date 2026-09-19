@@ -33,3 +33,12 @@ Worker Queue 消费者拿到租约后中途取消，D1 任务长期停在 `runni
 2. **Stale-running 回收**：`recoverGenerationTasks` 对 `running` 且 `updated_at` 超过 `STALE_RUNNING_GRACE_MS`（120s）的任务，即使 `lease_expires_at` 仍在未来也清租约、置 `pending`、清空 outbox `published_at`，由 cron 重新投递。健康流式会通过 partial 写入与 heartbeat 刷新 `updated_at`，不会被误杀。
 
 交互：heartbeat 保护活着的 isolate；zombie detector 在 heartbeat/partial 停止后约 2 分钟内回收，而不必等满 1200s 租约。
+
+## 2026-09-19 follow-up — setInterval heartbeat ineffective under long GLM awaits
+
+Production after PR #32 still showed `updated_at` frozen for 6+ minutes during TTFT /
+OpenRouter stream waits. Cloudflare Workers may not run `setInterval` callbacks while the
+isolate is blocked on a long AI Gateway `await`. Fix: concurrent `scheduler.wait` renew
+loop via `ctx.waitUntil`, plus lease renew on partial writes and `onHeartbeat` raced with
+the LLM fetch / SSE `reader.read()`. Stale-running recovery (`STALE_RUNNING_GRACE_MS=120s`)
+remains the backstop when an isolate dies entirely; cron `*/1` still calls `flushGenerationOutbox`.

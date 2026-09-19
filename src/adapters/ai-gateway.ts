@@ -202,11 +202,65 @@ function parseResponse(response: Response, rawText: string, requestBody: string,
   };
 }
 
+const DEFAULT_LLM_HEARTBEAT_MS = 30_000;
+
+async function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
+  if (typeof scheduler !== "undefined" && typeof scheduler.wait === "function") {
+    await scheduler.wait(ms, signal ? { signal } : undefined);
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    if (!signal) return;
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Wait was cancelled", "AbortError"));
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Keep a sibling renew loop alive for the duration of `work` (pre-stream TTFT). */
+async function withPeriodicHeartbeat<T>(
+  work: Promise<T>,
+  onHeartbeat: (() => void | Promise<void>) | undefined,
+  intervalMs: number,
+): Promise<T> {
+  if (!onHeartbeat) return work;
+  const abort = new AbortController();
+  const loop = (async () => {
+    while (!abort.signal.aborted) {
+      try {
+        await delayMs(intervalMs, abort.signal);
+      } catch {
+        break;
+      }
+      if (abort.signal.aborted) break;
+      try {
+        await onHeartbeat();
+      } catch {
+        // Lease loss is surfaced via assertHeld / touch on the consumer.
+      }
+    }
+  })();
+  try {
+    return await work;
+  } finally {
+    abort.abort();
+    await loop.catch(() => undefined);
+  }
+}
 
 /** OpenAI-compatible chat.completion.chunk SSE → accumulated assistant text. */
 export async function readChatCompletionSse(
   body: ReadableStream<Uint8Array>,
   onPartial?: (text: string) => void | Promise<void>,
+  onHeartbeat?: () => void | Promise<void>,
+  heartbeatIntervalMs = DEFAULT_LLM_HEARTBEAT_MS,
 ): Promise<{
   text: string;
   finish_reason?: string;
@@ -228,8 +282,28 @@ export async function readChatCompletionSse(
     await onPartial(text);
   };
 
+  const readChunk = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    if (!onHeartbeat) return reader.read();
+    const readPromise = reader.read();
+    while (true) {
+      const raced = await Promise.race([
+        readPromise.then((r) => ({ kind: "read" as const, r })),
+        delayMs(heartbeatIntervalMs).then(() => ({ kind: "tick" as const })),
+      ]);
+      if (raced.kind === "tick") {
+        try {
+          await onHeartbeat();
+        } catch {
+          /* consumer assertHeld handles lease loss */
+        }
+        continue;
+      }
+      return raced.r;
+    }
+  };
+
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readChunk();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const parts = buffer.split("\n");
@@ -251,14 +325,14 @@ export async function readChatCompletionSse(
       const delta = (choice.delta as Record<string, unknown> | undefined) || {};
       const message = (choice.message as Record<string, unknown> | undefined) || {};
       const piece =
-        typeof delta.content === "string"
-          ? delta.content
-          : typeof message.content === "string"
-            ? message.content
-            : "";
+        typeof delta.content === "string" ? delta.content : typeof message.content === "string" ? message.content : "";
       if (piece) {
         // Some providers resend the full message content on the final chunk.
-        if (typeof message.content === "string" && message.content.startsWith(text) && message.content.length >= text.length) {
+        if (
+          typeof message.content === "string" &&
+          message.content.startsWith(text) &&
+          message.content.length >= text.length
+        ) {
           text = message.content;
         } else {
           text += piece;
@@ -311,32 +385,32 @@ async function rawChat(
   const wantStream = Boolean(options.onPartial) && !normalizedTools?.length;
   if (wantStream) payload.stream = true;
   // request_body omits stream so cache keys / diagnostics stay comparable to non-stream.
-  const requestBody = stableStringify(
-    Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "stream")),
-  );
+  const requestBody = stableStringify(Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "stream")));
   const normalizedPayload = JSON.parse(stableStringify(payload)) as Record<string, unknown>;
   const cache = effectiveCache(options);
   const seconds = Math.max(1, timeoutSec || 120);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), seconds * 1000);
+  const heartbeatMs = options.heartbeatIntervalMs ?? DEFAULT_LLM_HEARTBEAT_MS;
   let response: Response;
   try {
-    if (model.transport === "cloudflare") {
-      response = await env.AI.run(model.model_id as keyof AiModels, normalizedPayload as never, {
-        returnRawResponse: true,
-        signal: controller.signal,
-        gateway: {
-          id: env.AI_GATEWAY_ID,
-          cacheTtl: cache.cacheTtl,
-          skipCache: cache.skipCache,
-          collectLog: false,
-          ...(cache.cacheKey ? { cacheKey: cache.cacheKey } : {}),
-        },
-        extraHeaders: options.affinityKey ? { "x-session-affinity": options.affinityKey } : undefined,
-      });
-    } else {
+    const invoke = async (): Promise<Response> => {
+      if (model.transport === "cloudflare") {
+        return env.AI.run(model.model_id as keyof AiModels, normalizedPayload as never, {
+          returnRawResponse: true,
+          signal: controller.signal,
+          gateway: {
+            id: env.AI_GATEWAY_ID,
+            cacheTtl: cache.cacheTtl,
+            skipCache: cache.skipCache,
+            collectLog: false,
+            ...(cache.cacheKey ? { cacheKey: cache.cacheKey } : {}),
+          },
+          extraHeaders: options.affinityKey ? { "x-session-affinity": options.affinityKey } : undefined,
+        });
+      }
       if (!model.provider_slug) throw new Error(`gateway model '${model.label}' is missing provider_slug`);
-      response = await env.AI.gateway(env.AI_GATEWAY_ID).run(
+      return env.AI.gateway(env.AI_GATEWAY_ID).run(
         {
           provider: model.provider_slug,
           endpoint: "chat/completions",
@@ -355,7 +429,8 @@ async function rawChat(
           extraHeaders: options.affinityKey ? { "x-session-affinity": options.affinityKey } : undefined,
         },
       );
-    }
+    };
+    response = await withPeriodicHeartbeat(invoke(), options.onHeartbeat, heartbeatMs);
   } catch (error) {
     const aborted = error instanceof Error && (error.name === "AbortError" || /aborted/i.test(error.message));
     if (aborted) throw new LlmTimeoutError(seconds);
@@ -369,7 +444,7 @@ async function rawChat(
   }
   const contentType = response.headers.get("content-type") || "";
   if (wantStream && response.body && (/event-stream|octet-stream|jsonl/i.test(contentType) || !contentType)) {
-    const streamed = await readChatCompletionSse(response.body, options.onPartial);
+    const streamed = await readChatCompletionSse(response.body, options.onPartial, options.onHeartbeat, heartbeatMs);
     return {
       text: streamed.text,
       tool_calls: [],
@@ -391,6 +466,8 @@ async function rawChat(
         },
       }),
       options.onPartial,
+      options.onHeartbeat,
+      heartbeatMs,
     );
     return {
       text: streamed.text,

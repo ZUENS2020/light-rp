@@ -455,19 +455,63 @@ export async function renewTaskLease(
   return (result.meta.changes || 0) > 0;
 }
 
+export type LeaseHeartbeat = {
+  stop: () => void;
+  assertHeld: () => Promise<void>;
+  /** Opportunistic renew from streaming partials; coalesced on one chain. */
+  touch: () => Promise<void>;
+};
+
+export type StartLeaseHeartbeatOptions = {
+  intervalMs?: number;
+  /**
+   * Register the wait-loop with the Queue/fetch ExecutionContext so renewals stay
+   * concurrent with a long `await` (AI Gateway / OpenRouter). Prefer this over
+   * relying on `setInterval`, which Workers may not fire while blocked on I/O.
+   */
+  waitUntil?: (promise: Promise<unknown>) => void;
+};
+
+/** Prefer Workers `scheduler.wait`; fall back for unit tests outside workerd. */
+async function heartbeatDelay(ms: number, signal: AbortSignal): Promise<void> {
+  if (typeof scheduler !== "undefined" && typeof scheduler.wait === "function") {
+    await scheduler.wait(ms, { signal });
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Wait was cancelled", "AbortError"));
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /**
  * Periodic lease renew for the duration of a Queue consumer run (pre-stream + stream).
- * Call `stop()` in finally; `assertHeld()` before completeTask to abort if recovery stole the lease.
+ *
+ * Uses a concurrent `scheduler.wait` loop (optionally via `ctx.waitUntil`) instead of
+ * `setInterval`, so renewals still run while the isolate is blocked on a long GLM
+ * `await`. Call `stop()` in finally; `assertHeld()` before completeTask; `touch()` from
+ * onPartial for belt-and-suspenders during active streams.
  */
 export function startLeaseHeartbeat(
   db: D1Database,
   taskId: string,
   owner: string,
-  intervalMs = LEASE_HEARTBEAT_INTERVAL_MS,
-): { stop: () => void; assertHeld: () => Promise<void> } {
+  options: StartLeaseHeartbeatOptions | number = {},
+): LeaseHeartbeat {
+  const opts: StartLeaseHeartbeatOptions = typeof options === "number" ? { intervalMs: options } : options;
+  const intervalMs = opts.intervalMs ?? LEASE_HEARTBEAT_INTERVAL_MS;
   let stopped = false;
   let lost: LeaseLostError | null = null;
   let chain: Promise<void> = Promise.resolve();
+  const abort = new AbortController();
 
   const tick = async () => {
     if (stopped || lost) return;
@@ -475,17 +519,33 @@ export function startLeaseHeartbeat(
     if (!ok) lost = new LeaseLostError(taskId);
   };
 
-  const timer = setInterval(() => {
+  const enqueue = () => {
     chain = chain.then(tick).catch((err) => {
       lost = err instanceof LeaseLostError ? err : new LeaseLostError(taskId);
     });
-  }, intervalMs);
+    return chain;
+  };
+
+  const loop = (async () => {
+    while (!stopped && !lost) {
+      try {
+        await heartbeatDelay(intervalMs, abort.signal);
+      } catch {
+        break;
+      }
+      if (stopped || lost) break;
+      await enqueue();
+    }
+  })();
+
+  opts.waitUntil?.(loop);
 
   return {
     stop: () => {
       stopped = true;
-      clearInterval(timer);
+      abort.abort();
     },
+    touch: () => enqueue(),
     assertHeld: async () => {
       await chain;
       if (!stopped && !lost) await tick();
@@ -498,16 +558,40 @@ export async function markRunning(db: D1Database, id: string): Promise<void> {
   await leaseTask(db, id, `legacy-${id}`);
 }
 
-/** Persist progressive assistant text while status=running (polled by Play UI). */
-export async function updateTaskPartialContent(db: D1Database, id: string, content: string): Promise<void> {
-  await db
+/**
+ * Persist progressive assistant text while status=running (polled by Play UI).
+ * When `leaseOwner` is set, also extends the lease and refuses writes if the lease
+ * was stolen (zombie consumer must not bump `updated_at` after recovery).
+ */
+export async function updateTaskPartialContent(
+  db: D1Database,
+  id: string,
+  content: string,
+  leaseOwner?: string,
+): Promise<boolean> {
+  const now = new Date();
+  const ts = now.toISOString();
+  if (leaseOwner) {
+    const expires = new Date(now.getTime() + LEASE_DURATION_SECONDS * 1000).toISOString();
+    const result = await db
+      .prepare(
+        `UPDATE generation_tasks
+         SET result_content = ?, updated_at = ?, lease_expires_at = ?
+         WHERE id = ? AND status = 'running' AND lease_owner = ?`,
+      )
+      .bind(content, ts, expires, id, leaseOwner)
+      .run();
+    return (result.meta.changes || 0) > 0;
+  }
+  const result = await db
     .prepare(
       `UPDATE generation_tasks
        SET result_content = ?, updated_at = ?
        WHERE id = ? AND status = 'running'`,
     )
-    .bind(content, nowIso(), id)
+    .bind(content, ts, id)
     .run();
+  return (result.meta.changes || 0) > 0;
 }
 
 export async function completeTask(db: D1Database, id: string, completion: TaskCompletion): Promise<void> {

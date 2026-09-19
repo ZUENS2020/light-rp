@@ -935,7 +935,15 @@ app.post("/api/v2/play/:id/:sid/space", async (c) => {
 export default {
   fetch: app.fetch,
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(flushGenerationOutbox(env));
+    // Await + waitUntil so a throw is logged and the isolate stays alive for D1/Queue I/O.
+    const flush = flushGenerationOutbox(env).catch((err) => {
+      console.error({
+        event: "generation.flush_failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    ctx.waitUntil(flush);
+    await flush;
   },
   async queue(
     batch: MessageBatch<{
@@ -974,7 +982,9 @@ export default {
           msg.ack();
           continue;
         }
-        const heartbeat = startLeaseHeartbeat(env.DB, taskId, owner);
+        const heartbeat = startLeaseHeartbeat(env.DB, taskId, owner, {
+          waitUntil: (job) => ctx.waitUntil(job),
+        });
         try {
           const workspaceId = leased.workspace_id;
           const fs = workspaceFs(env.BUCKET, workspaceId);
@@ -1071,6 +1081,8 @@ export default {
                 affinityKey: (await sessionRuntime(env.DB, sessionId)).affinity_key,
                 taskId,
                 db: env.DB,
+                leaseOwner: owner,
+                onLeaseTouch: () => heartbeat.touch(),
               })
             : await runTurn(
                 env,
@@ -1087,6 +1099,8 @@ export default {
                     db: env.DB,
                     taskId,
                     model,
+                    leaseOwner: owner,
+                    onLeaseTouch: () => heartbeat.touch(),
                     requestKind:
                       leased.kind === "rewrite" ? "rewrite" : leased.kind === "regenerate" ? "regenerate" : "story",
                   },
