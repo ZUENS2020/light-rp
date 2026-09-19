@@ -83,3 +83,11 @@ it("alarm interval aligns with lease heartbeat spirit", async () => {
   expect(RUNTIME_ALARM_INTERVAL_MS).toBe(LEASE_HEARTBEAT_INTERVAL_MS);
   expect(STALE_RUNNING_GRACE_MS).toBeGreaterThan(RUNTIME_ALARM_INTERVAL_MS);
 });
+
+it("touchActivity keeps status running without requiring partials", async () => {
+  const stub = getSessionRuntimeStub(env, `rt-${crypto.randomUUID()}`);
+  await stub.attachGeneration({ taskId: "task-touch" });
+  const touched = await stub.touchActivity({ taskId: "task-touch" });
+  expect(touched).toMatchObject({ status: "running", activeTaskId: "task-touch" });
+  expect(touched?.lastActivityAt).toBeTruthy();
+});

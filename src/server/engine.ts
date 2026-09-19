@@ -973,8 +973,14 @@ export async function runTurn(
     if (partialSink) await partialSink.flush();
   }
   const { visible, trailer } = parseTrailer(gm.text);
-  const truncated = gm.finish_reason === "length";
-  if (truncated) warnings.push("回复在 max_tokens 处被截断");
+  // length = hard cap; missing finish_reason after a streamed body usually means the
+  // upstream/gateway closed early (incomplete SSE) rather than a clean stop.
+  const truncated = gm.finish_reason === "length" || (Boolean(partialSink) && !gm.finish_reason);
+  if (truncated) {
+    warnings.push(
+      gm.finish_reason === "length" ? "回复在 max_tokens 处被截断" : "回复流提前结束（未收到 finish_reason）",
+    );
+  }
   // Strip echoed prefill if the model included it in the completion.
   let replyText = stripBreachAssistantPrefill(visible);
   if (truncated && replyText.trim()) replyText = `${replyText.trimEnd()}\n\n${TRUNCATION_NOTE}`;

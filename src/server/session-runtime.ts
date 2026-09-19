@@ -130,6 +130,23 @@ export class SessionRuntime extends DurableObject<Env> {
     return next;
   }
 
+  /**
+   * Lease/LLM heartbeat without new tokens — keeps DO alarm from marking a healthy
+   * reasoning/TTFT wait as stalled (partials only arrive after first visible token).
+   */
+  async touchActivity(input: { taskId: string }): Promise<SessionRuntimeSnapshot | null> {
+    const snapshot = await this.load();
+    if (snapshot.activeTaskId !== input.taskId || snapshot.status !== "running") return null;
+    if (snapshot.abort) return snapshot;
+    const next: SessionRuntimeSnapshot = {
+      ...snapshot,
+      lastActivityAt: nowIso(),
+      leaseExpiresAt: new Date(Date.now() + STALE_RUNNING_GRACE_MS * 2).toISOString(),
+    };
+    await this.save(next);
+    return next;
+  }
+
   async onComplete(input: { taskId: string; content: string }): Promise<SessionRuntimeSnapshot | null> {
     const snapshot = await this.load();
     if (snapshot.activeTaskId !== input.taskId) return null;
