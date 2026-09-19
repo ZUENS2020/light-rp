@@ -30,17 +30,14 @@ export type AppSettings = {
 };
 
 /** Story completions need headroom for ~2000 汉字 plus some GLM/OpenRouter reasoning tokens. */
-export const STORY_OUTPUT_TOKEN_FLOOR = 8_192;
-
-/** Stale R2 defaults still carrying the old 16k story budget. */
-export const LEGACY_STORY_MAX_TOKENS = 16_384;
+export const STORY_OUTPUT_TOKEN_FLOOR = 16_384;
 
 /** commit_turn is a small JSON tool call; never inherit the 180s story timeout. */
 export const TURN_COMMIT_TIMEOUT_SECONDS = 45;
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  // 8192 covers ~2000 汉字 of RP body plus modest reasoning; larger budgets grind GLM.
-  llm: { temperature: 1, max_tokens: 8_192, timeout: 180, breach: true },
+  // 16384 covers long RP body plus GLM/OpenRouter reasoning without truncating at 8k.
+  llm: { temperature: 1, max_tokens: 16_384, timeout: 180, breach: true },
   memory: { world_char_limit: 2500, player_char_limit: 1400, character_char_limit: 1200 },
   compact_after_turns: 40,
   compression_threshold: 0.5,
