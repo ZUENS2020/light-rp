@@ -1,5 +1,5 @@
 import { ChevronDown, CloudSun, LoaderCircle, MapPin, Users } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PlayState } from "../lib/api";
 import { Button } from "./ui/button";
 import { Hint, Textarea } from "./ui/field";
@@ -113,6 +113,11 @@ export function Transcript({
 }) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [state.messages.length, state.opening]);
 
   const lastAssistantIndex = (() => {
     for (let i = state.messages.length - 1; i >= 0; i -= 1) {
@@ -207,6 +212,7 @@ export function Transcript({
           </div>
         </article>
       ) : null}
+      <div ref={endRef} />
     </div>
   );
 }
