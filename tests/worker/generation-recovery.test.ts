@@ -9,10 +9,12 @@ import {
   leaseTask,
   listMessages,
   markOutboxPublished,
+  renewTaskLease,
 } from "../../src/server/tasks";
 import {
   MAX_GENERATION_ATTEMPTS,
   PENDING_NEVER_STARTED_GRACE_MS,
+  STALE_RUNNING_GRACE_MS,
   recoverGenerationTasks,
 } from "../../src/server/generation-recovery";
 
@@ -72,7 +74,9 @@ it("leaves a healthy lease alone", async () => {
   const task = await turn();
   await leaseTask(env.DB, task.id, "healthy-owner");
   await markOutboxPublished(env.DB, task.id);
-  await env.DB.prepare("UPDATE generation_tasks SET updated_at = ? WHERE id = ?").bind(old, task.id).run();
+  // Heartbeat / partial writes keep updated_at fresh; only then is the lease "healthy".
+  const recent = new Date(Date.now() - STALE_RUNNING_GRACE_MS / 2).toISOString();
+  await env.DB.prepare("UPDATE generation_tasks SET updated_at = ? WHERE id = ?").bind(recent, task.id).run();
   const { runtime, send } = queueEnv();
   await flushGenerationOutbox(runtime);
   expect(send).not.toHaveBeenCalled();
@@ -186,7 +190,7 @@ it("writes nothing when flush finds no stale or unpublished work", async () => {
   const task = await turn();
   await leaseTask(env.DB, task.id, "healthy-owner");
   await markOutboxPublished(env.DB, task.id);
-  const stamp = "2011-01-01T00:00:00.000Z";
+  const stamp = new Date(Date.now() - STALE_RUNNING_GRACE_MS / 2).toISOString();
   await env.DB.prepare("UPDATE generation_tasks SET updated_at = ? WHERE id = ?").bind(stamp, task.id).run();
   const publishedAt = await env.DB.prepare(
     "SELECT published_at FROM outbox_events WHERE aggregate_id = ? AND event_type = 'generation.requested'",
@@ -209,4 +213,60 @@ it("writes nothing when flush finds no stale or unpublished work", async () => {
       .bind(task.id)
       .first("published_at"),
   ).toBe(publishedAt);
+});
+
+it("recovers stale-running zombies while lease_expires_at is still in the future", async () => {
+  const task = await turn();
+  await leaseTask(env.DB, task.id, "dead-owner");
+  await markOutboxPublished(env.DB, task.id);
+  const futureLease = new Date(Date.now() + 600_000).toISOString();
+  const staleUpdated = new Date(Date.now() - STALE_RUNNING_GRACE_MS - 1_000).toISOString();
+  await env.DB.prepare("UPDATE generation_tasks SET lease_expires_at = ?, updated_at = ? WHERE id = ?")
+    .bind(futureLease, staleUpdated, task.id)
+    .run();
+  const { runtime, send } = queueEnv();
+  await flushGenerationOutbox(runtime);
+  expect(send).toHaveBeenCalledOnce();
+  expect(send).toHaveBeenCalledWith(expect.objectContaining({ taskId: task.id }));
+  expect(await getTask(env.DB, task.id)).toMatchObject({
+    status: "pending",
+    lease_owner: null,
+    lease_expires_at: null,
+    attempt_count: 1,
+    error_code: "TASK_LEASE_EXPIRED",
+  });
+});
+
+it("does not recover a heartbeating running task before stale grace", async () => {
+  const task = await turn();
+  await leaseTask(env.DB, task.id, "healthy-owner");
+  await markOutboxPublished(env.DB, task.id);
+  const futureLease = new Date(Date.now() + 600_000).toISOString();
+  const fresh = new Date(Date.now() - STALE_RUNNING_GRACE_MS / 2).toISOString();
+  await env.DB.prepare("UPDATE generation_tasks SET lease_expires_at = ?, updated_at = ? WHERE id = ?")
+    .bind(futureLease, fresh, task.id)
+    .run();
+  const { runtime, send } = queueEnv();
+  await flushGenerationOutbox(runtime);
+  expect(send).not.toHaveBeenCalled();
+  expect(await getTask(env.DB, task.id)).toMatchObject({
+    status: "running",
+    lease_owner: "healthy-owner",
+  });
+});
+
+it("renewTaskLease extends expiry and bumps updated_at for the owner", async () => {
+  const task = await turn();
+  await leaseTask(env.DB, task.id, "owner-a");
+  const before = await getTask(env.DB, task.id);
+  await env.DB.prepare("UPDATE generation_tasks SET updated_at = ?, lease_expires_at = ? WHERE id = ?")
+    .bind(old, old, task.id)
+    .run();
+  expect(await renewTaskLease(env.DB, task.id, "owner-a")).toBe(true);
+  const after = await getTask(env.DB, task.id);
+  expect(after).toMatchObject({ lease_owner: "owner-a", status: "running" });
+  expect(after!.updated_at > old).toBe(true);
+  expect(after!.lease_expires_at! > (before?.lease_expires_at || old)).toBe(true);
+  expect(await renewTaskLease(env.DB, task.id, "other-owner")).toBe(false);
+  expect(await getTask(env.DB, task.id)).toMatchObject({ lease_owner: "owner-a", status: "running" });
 });

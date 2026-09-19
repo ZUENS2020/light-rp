@@ -51,10 +51,12 @@ import {
   getActiveTask,
   getTask,
   insertPending,
+  LeaseLostError,
   leaseTask,
   markFailed,
   publishTask,
   replaceSessionTranscriptProjection,
+  startLeaseHeartbeat,
 } from "./tasks";
 import { MAX_GENERATION_ATTEMPTS } from "./generation-recovery";
 import { nowIso, parseYaml, stringifyYaml, workspaceIdOk, sessionIdNow } from "../core/util";
@@ -972,17 +974,124 @@ export default {
           msg.ack();
           continue;
         }
-        const workspaceId = leased.workspace_id;
-        const fs = workspaceFs(env.BUCKET, workspaceId);
-        const pack = await loadPack(fs, workspaceId);
-        const settings = await loadSettings(env.BUCKET);
-        const loaded = await loadSession(fs, sessionId);
-        const ooc = isOocMessage(leased.user_text);
-        const persistedAssistant = [...loaded.messages]
-          .reverse()
-          .find((message) => message.role === "assistant" && message.task_id === taskId);
-        if (persistedAssistant) {
-          const diagnostics = await loadTurnDiagnostics(fs, sessionId);
+        const heartbeat = startLeaseHeartbeat(env.DB, taskId, owner);
+        try {
+          const workspaceId = leased.workspace_id;
+          const fs = workspaceFs(env.BUCKET, workspaceId);
+          const pack = await loadPack(fs, workspaceId);
+          const settings = await loadSettings(env.BUCKET);
+          const loaded = await loadSession(fs, sessionId);
+          const ooc = isOocMessage(leased.user_text);
+          const persistedAssistant = [...loaded.messages]
+            .reverse()
+            .find((message) => message.role === "assistant" && message.task_id === taskId);
+          if (persistedAssistant) {
+            const diagnostics = await loadTurnDiagnostics(fs, sessionId);
+            if (!ooc) {
+              await mirrorCoreMemorySnapshot(env.DB, {
+                workspaceId,
+                sessionId,
+                taskId,
+                snapshot: await loadMemory(fs),
+              });
+            }
+            await heartbeat.assertHeld();
+            await completeTask(env.DB, taskId, {
+              content: persistedAssistant.content,
+              includeInPrompt: !ooc,
+              requestHash: diagnostics?.task_id === taskId ? diagnostics.request_hash || undefined : undefined,
+              cacheStatus: diagnostics?.task_id === taskId ? diagnostics.response_cache_status : undefined,
+              usage: diagnostics?.task_id === taskId ? diagnostics.ai_usage : undefined,
+              stablePrefixTokens: diagnostics?.task_id === taskId ? diagnostics.stable_prefix_tokens || 0 : undefined,
+              volatileTokens: diagnostics?.task_id === taskId ? diagnostics.volatile_tokens || 0 : undefined,
+              hiddenEvents: diagnostics?.task_id === taskId ? diagnostics.hidden_prompt_events || [] : undefined,
+              // Epoch rotate happens in background compact after apply — not on story complete.
+            });
+            if (!ooc && diagnostics?.task_id === taskId && (diagnostics.should_commit || diagnostics.should_compact)) {
+              const overlayMap = await overlays(fs);
+              const waitUntil = (job: Promise<unknown>) => ctx.waitUntil(job);
+              const model = JSON.parse(leased.model_snapshot_json) as AiModelConfig;
+              const affinity = (await sessionRuntime(env.DB, sessionId)).affinity_key;
+              const scene = await ensureSessionState(fs, sessionId, pack);
+              schedulePostTurnFollowup(waitUntil, {
+                commit:
+                  diagnostics.should_commit && !diagnostics.commit_applied
+                    ? () =>
+                        runDeferredTurnCommit({
+                          env,
+                          fs,
+                          pack,
+                          sessionId,
+                          userText: leased.user_text,
+                          assistantText: persistedAssistant.content,
+                          settings,
+                          overlays: overlayMap,
+                          sceneBefore: diagnostics.scene_before || scene,
+                          db: env.DB,
+                          ai: { taskId, model, affinityKey: affinity },
+                        })
+                    : undefined,
+                compact: diagnostics.should_compact
+                  ? () =>
+                      runDeferredPostTurnCompact({
+                        env,
+                        fs,
+                        pack,
+                        sessionId,
+                        settings,
+                        overlays: overlayMap,
+                        waitUntil,
+                        db: env.DB,
+                        ai: { model, affinityKey: affinity, requestKind: "compact" },
+                      })
+                  : undefined,
+              });
+            }
+            msg.ack();
+            continue;
+          }
+          const last = loaded.messages[loaded.messages.length - 1];
+          if (last?.role !== "user" || (last.task_id !== taskId && last.content !== leased.user_text)) {
+            await saveSession(
+              fs,
+              sessionId,
+              [...loaded.messages, { role: "user", content: leased.user_text, ts: leased.created_at, task_id: taskId }],
+              {
+                thread_id: loaded.thread_id,
+                nmem_space: loaded.nmem_space,
+                primary_character: loaded.primary_character,
+                title: loaded.title,
+              },
+            );
+          }
+          const model = JSON.parse(leased.model_snapshot_json) as AiModelConfig;
+          const result = ooc
+            ? await runOoc(env, fs, pack, sessionId, leased.user_text, settings, {
+                model,
+                affinityKey: (await sessionRuntime(env.DB, sessionId)).affinity_key,
+                taskId,
+                db: env.DB,
+              })
+            : await runTurn(
+                env,
+                fs,
+                pack,
+                sessionId,
+                leased.user_text,
+                settings,
+                await overlays(fs),
+                (job) => ctx.waitUntil(job),
+                {
+                  persistUser: false,
+                  ai: {
+                    db: env.DB,
+                    taskId,
+                    model,
+                    requestKind:
+                      leased.kind === "rewrite" ? "rewrite" : leased.kind === "regenerate" ? "regenerate" : "story",
+                  },
+                },
+              );
           if (!ooc) {
             await mirrorCoreMemorySnapshot(env.DB, {
               workspaceId,
@@ -991,42 +1100,41 @@ export default {
               snapshot: await loadMemory(fs),
             });
           }
+          await heartbeat.assertHeld();
           await completeTask(env.DB, taskId, {
-            content: persistedAssistant.content,
+            content: result.text,
             includeInPrompt: !ooc,
-            requestHash: diagnostics?.task_id === taskId ? diagnostics.request_hash || undefined : undefined,
-            cacheStatus: diagnostics?.task_id === taskId ? diagnostics.response_cache_status : undefined,
-            usage: diagnostics?.task_id === taskId ? diagnostics.ai_usage : undefined,
-            stablePrefixTokens: diagnostics?.task_id === taskId ? diagnostics.stable_prefix_tokens || 0 : undefined,
-            volatileTokens: diagnostics?.task_id === taskId ? diagnostics.volatile_tokens || 0 : undefined,
-            hiddenEvents: diagnostics?.task_id === taskId ? diagnostics.hidden_prompt_events || [] : undefined,
-            // Epoch rotate happens in background compact after apply — not on story complete.
+            requestHash: result.request_hash,
+            cacheStatus: result.response_cache_status,
+            usage: result.ai_usage,
+            stablePrefixTokens: result.stable_prefix_tokens,
+            volatileTokens: result.volatile_tokens,
+            hiddenEvents: (result as Partial<TurnOut>).hidden_prompt_events,
+            // Post-turn pressure compact / commit_turn run after the reply is visible.
           });
-          if (!ooc && diagnostics?.task_id === taskId && (diagnostics.should_commit || diagnostics.should_compact)) {
+          if (!ooc && ((result as Partial<TurnOut>).should_commit || (result as Partial<TurnOut>).should_compact)) {
             const overlayMap = await overlays(fs);
             const waitUntil = (job: Promise<unknown>) => ctx.waitUntil(job);
-            const model = JSON.parse(leased.model_snapshot_json) as AiModelConfig;
             const affinity = (await sessionRuntime(env.DB, sessionId)).affinity_key;
-            const scene = await ensureSessionState(fs, sessionId, pack);
+            const turn = result as TurnOut;
             schedulePostTurnFollowup(waitUntil, {
-              commit:
-                diagnostics.should_commit && !diagnostics.commit_applied
-                  ? () =>
-                      runDeferredTurnCommit({
-                        env,
-                        fs,
-                        pack,
-                        sessionId,
-                        userText: leased.user_text,
-                        assistantText: persistedAssistant.content,
-                        settings,
-                        overlays: overlayMap,
-                        sceneBefore: diagnostics.scene_before || scene,
-                        db: env.DB,
-                        ai: { taskId, model, affinityKey: affinity },
-                      })
-                  : undefined,
-              compact: diagnostics.should_compact
+              commit: turn.should_commit
+                ? () =>
+                    runDeferredTurnCommit({
+                      env,
+                      fs,
+                      pack,
+                      sessionId,
+                      userText: leased.user_text,
+                      assistantText: turn.text,
+                      settings,
+                      overlays: overlayMap,
+                      sceneBefore: turn.scene_before || turn.scene,
+                      db: env.DB,
+                      ai: { taskId, model, affinityKey: affinity },
+                    })
+                : undefined,
+              compact: turn.should_compact
                 ? () =>
                     runDeferredPostTurnCompact({
                       env,
@@ -1042,110 +1150,17 @@ export default {
                 : undefined,
             });
           }
+          await heartbeat.assertHeld();
+          msg.ack();
+        } finally {
+          heartbeat.stop();
+        }
+      } catch (err) {
+        if (err instanceof LeaseLostError) {
+          // Recovery or another consumer took the lease — do not markFailed / retry.
           msg.ack();
           continue;
         }
-        const last = loaded.messages[loaded.messages.length - 1];
-        if (last?.role !== "user" || (last.task_id !== taskId && last.content !== leased.user_text)) {
-          await saveSession(
-            fs,
-            sessionId,
-            [...loaded.messages, { role: "user", content: leased.user_text, ts: leased.created_at, task_id: taskId }],
-            {
-              thread_id: loaded.thread_id,
-              nmem_space: loaded.nmem_space,
-              primary_character: loaded.primary_character,
-              title: loaded.title,
-            },
-          );
-        }
-        const model = JSON.parse(leased.model_snapshot_json) as AiModelConfig;
-        const result = ooc
-          ? await runOoc(env, fs, pack, sessionId, leased.user_text, settings, {
-              model,
-              affinityKey: (await sessionRuntime(env.DB, sessionId)).affinity_key,
-              taskId,
-              db: env.DB,
-            })
-          : await runTurn(
-              env,
-              fs,
-              pack,
-              sessionId,
-              leased.user_text,
-              settings,
-              await overlays(fs),
-              (job) => ctx.waitUntil(job),
-              {
-                persistUser: false,
-                ai: {
-                  db: env.DB,
-                  taskId,
-                  model,
-                  requestKind:
-                    leased.kind === "rewrite" ? "rewrite" : leased.kind === "regenerate" ? "regenerate" : "story",
-                },
-              },
-            );
-        if (!ooc) {
-          await mirrorCoreMemorySnapshot(env.DB, {
-            workspaceId,
-            sessionId,
-            taskId,
-            snapshot: await loadMemory(fs),
-          });
-        }
-        await completeTask(env.DB, taskId, {
-          content: result.text,
-          includeInPrompt: !ooc,
-          requestHash: result.request_hash,
-          cacheStatus: result.response_cache_status,
-          usage: result.ai_usage,
-          stablePrefixTokens: result.stable_prefix_tokens,
-          volatileTokens: result.volatile_tokens,
-          hiddenEvents: (result as Partial<TurnOut>).hidden_prompt_events,
-          // Post-turn pressure compact / commit_turn run after the reply is visible.
-        });
-        if (!ooc && ((result as Partial<TurnOut>).should_commit || (result as Partial<TurnOut>).should_compact)) {
-          const overlayMap = await overlays(fs);
-          const waitUntil = (job: Promise<unknown>) => ctx.waitUntil(job);
-          const affinity = (await sessionRuntime(env.DB, sessionId)).affinity_key;
-          const turn = result as TurnOut;
-          schedulePostTurnFollowup(waitUntil, {
-            commit: turn.should_commit
-              ? () =>
-                  runDeferredTurnCommit({
-                    env,
-                    fs,
-                    pack,
-                    sessionId,
-                    userText: leased.user_text,
-                    assistantText: turn.text,
-                    settings,
-                    overlays: overlayMap,
-                    sceneBefore: turn.scene_before || turn.scene,
-                    db: env.DB,
-                    ai: { taskId, model, affinityKey: affinity },
-                  })
-              : undefined,
-            compact: turn.should_compact
-              ? () =>
-                  runDeferredPostTurnCompact({
-                    env,
-                    fs,
-                    pack,
-                    sessionId,
-                    settings,
-                    overlays: overlayMap,
-                    waitUntil,
-                    db: env.DB,
-                    ai: { model, affinityKey: affinity, requestKind: "compact" },
-                  })
-              : undefined,
-          });
-        }
-        msg.ack();
-      } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const code =
           err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code || "") : undefined;
