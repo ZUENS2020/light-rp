@@ -368,13 +368,17 @@ export async function publishTask(env: Env, task: GenerationTaskRow): Promise<vo
 }
 
 /**
- * Recover expired leases as well as sends lost after the input transaction.
+ * Recover expired / stale-running leases as well as sends lost after the input transaction.
  * Quiet ticks: recover + never-started reset early-return with zero writes when nothing
  * matches; the outbox SELECT only drives publishTask for published_at IS NULL rows.
  *
  * Never-started pending (attempt_count=0) with a published outbox older than
  * PENDING_NEVER_STARTED_GRACE_MS is force-reset so lost Queue deliveries republish
  * within ~30–60s (cron every minute) instead of waiting DELIVERY_GRACE_MS + cron lag.
+ *
+ * Stale-running (status=running, lease still in the future, updated_at older than
+ * STALE_RUNNING_GRACE_MS) is recovered so a dead Worker does not block the UI for
+ * the full lease window; live workers heartbeat updated_at via renew + partials.
  */
 export async function flushGenerationOutbox(env: Env): Promise<void> {
   await recoverGenerationTasks(env.DB);
@@ -390,12 +394,25 @@ export async function flushGenerationOutbox(env: Env): Promise<void> {
   }
 }
 
+/** Default lease length; GLM story turns often take 500–700s. */
+export const LEASE_DURATION_SECONDS = 1200;
+/** Renew while the isolate is alive so cron does not treat a live run as abandoned. */
+export const LEASE_HEARTBEAT_INTERVAL_MS = 45_000;
+
+export class LeaseLostError extends Error {
+  readonly code = "TASK_LEASE_LOST";
+  constructor(readonly taskId: string) {
+    super(`lease lost for task ${taskId}`);
+    this.name = "LeaseLostError";
+  }
+}
+
 export async function leaseTask(
   db: D1Database,
   id: string,
   owner: string,
   /** GLM story turns often take 500–700s; 180s caused false TASK_LEASE_EXPIRED mid-flight. */
-  seconds = 1200,
+  seconds = LEASE_DURATION_SECONDS,
 ): Promise<GenerationTaskRow | null> {
   const now = new Date();
   const expires = new Date(now.getTime() + seconds * 1000).toISOString();
@@ -412,6 +429,69 @@ export async function leaseTask(
     .run();
   const task = await getTask(db, id);
   return task?.lease_owner === owner && task.status === "running" ? task : null;
+}
+
+/**
+ * Extend an existing lease and bump `updated_at` so stale-running recovery leaves
+ * a live worker alone. Returns false if this owner no longer holds the lease.
+ */
+export async function renewTaskLease(
+  db: D1Database,
+  id: string,
+  owner: string,
+  seconds = LEASE_DURATION_SECONDS,
+): Promise<boolean> {
+  const now = new Date();
+  const expires = new Date(now.getTime() + seconds * 1000).toISOString();
+  const ts = now.toISOString();
+  const result = await db
+    .prepare(
+      `UPDATE generation_tasks
+       SET lease_expires_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'running' AND lease_owner = ?`,
+    )
+    .bind(expires, ts, id, owner)
+    .run();
+  return (result.meta.changes || 0) > 0;
+}
+
+/**
+ * Periodic lease renew for the duration of a Queue consumer run (pre-stream + stream).
+ * Call `stop()` in finally; `assertHeld()` before completeTask to abort if recovery stole the lease.
+ */
+export function startLeaseHeartbeat(
+  db: D1Database,
+  taskId: string,
+  owner: string,
+  intervalMs = LEASE_HEARTBEAT_INTERVAL_MS,
+): { stop: () => void; assertHeld: () => Promise<void> } {
+  let stopped = false;
+  let lost: LeaseLostError | null = null;
+  let chain: Promise<void> = Promise.resolve();
+
+  const tick = async () => {
+    if (stopped || lost) return;
+    const ok = await renewTaskLease(db, taskId, owner);
+    if (!ok) lost = new LeaseLostError(taskId);
+  };
+
+  const timer = setInterval(() => {
+    chain = chain.then(tick).catch((err) => {
+      lost = err instanceof LeaseLostError ? err : new LeaseLostError(taskId);
+    });
+  }, intervalMs);
+
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+    assertHeld: async () => {
+      await chain;
+      if (!stopped && !lost) await tick();
+      if (lost) throw lost;
+    },
+  };
 }
 
 export async function markRunning(db: D1Database, id: string): Promise<void> {

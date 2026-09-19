@@ -22,3 +22,14 @@ Worker Queue 消费者拿到租约后中途取消，D1 任务长期停在 `runni
 修复：`flushGenerationOutbox` 对从未启动的 pending 在 `PENDING_NEVER_STARTED_GRACE_MS=30s` 后强制重置 outbox 并 republish；cron 改为 `*/1`。`insertPending` 同步写入 outbox，HTTP play/rewrite 走 `publishTask`。
 
 剩余墙钟时间仍主要来自 GLM（Gateway→OpenRouter，非流式）；本修复只消除队列架构造成的假卡死。
+
+## 2026-09-19 补充：流式中途 Worker 死亡的 zombie `running`
+
+确认案例：GLM 长回合已向 `result_content` 写入约 1900 字 partial，Worker/Gateway 中途退出；任务仍 `status=running` 且 `lease_expires_at` 可达约 1200s，UI 卡在生成中，cron 只能等租约到期后才回收。
+
+修复：
+
+1. **Lease heartbeat**：Queue 消费者在持有租约期间每 ~45s `renewTaskLease`，延长 `lease_expires_at` 并 bump `updated_at`；续约失败（租约丢失）则干净 abort，不 `markFailed` / 不空耗重试。
+2. **Stale-running 回收**：`recoverGenerationTasks` 对 `running` 且 `updated_at` 超过 `STALE_RUNNING_GRACE_MS`（120s）的任务，即使 `lease_expires_at` 仍在未来也清租约、置 `pending`、清空 outbox `published_at`，由 cron 重新投递。健康流式会通过 partial 写入与 heartbeat 刷新 `updated_at`，不会被误杀。
+
+交互：heartbeat 保护活着的 isolate；zombie detector 在 heartbeat/partial 停止后约 2 分钟内回收，而不必等满 1200s 租约。
