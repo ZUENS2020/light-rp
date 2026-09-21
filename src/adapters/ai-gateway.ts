@@ -173,7 +173,7 @@ function isCommandCodeModel(model: AiModelConfig): boolean {
   return model.provider_slug === "commandcode" || model.transport === "openai_compatible";
 }
 
-/** Pull visible story text Command Code may place in reasoning / reasoning_details. */
+/** Read reasoning / thinking channel text (never shown to the player). */
 function reasoningChannelText(source: Record<string, unknown>): string {
   if (typeof source.reasoning === "string" && source.reasoning) return source.reasoning;
   if (typeof source.reasoning_content === "string" && source.reasoning_content) return source.reasoning_content;
@@ -473,7 +473,8 @@ async function rawChat(
   const reasoning = storyReasoningBudget(model, cappedMax, options.requestKind);
   if (reasoning) payload.reasoning = reasoning;
   const commandCode = isCommandCodeModel(model);
-  // GLM-on-Command-Code: without this, all tokens land in reasoning_tokens and content stays empty.
+  // GLM-on-Command-Code: disable thinking so story tokens go to content (not the reasoning channel).
+  // Reasoning may still appear briefly in SSE; we never promote it to onPartial / UI text.
   if (commandCode) payload.chat_template_kwargs = { enable_thinking: false };
   // Stream only for plain text completions with an onPartial sink (story TTFT).
   // Tool-call streaming is intentionally out of scope — keep the JSON path.
@@ -568,7 +569,7 @@ async function rawChat(
   const contentType = response.headers.get("content-type") || "";
   if (wantStream && response.body && (/event-stream|octet-stream|jsonl/i.test(contentType) || !contentType)) {
     const streamed = await readChatCompletionSse(response.body, options.onPartial, options.onHeartbeat, heartbeatMs, {
-      promoteReasoningAsContent: commandCode,
+      promoteReasoningAsContent: false,
     });
     return {
       text: streamed.text,
@@ -593,7 +594,7 @@ async function rawChat(
       options.onPartial,
       options.onHeartbeat,
       heartbeatMs,
-      { promoteReasoningAsContent: commandCode },
+      { promoteReasoningAsContent: false },
     );
     return {
       text: streamed.text,
@@ -606,20 +607,8 @@ async function rawChat(
     };
   }
   const parsed = parseResponse(response, rawText, requestBody, cache.skipCache);
-  if (commandCode && !parsed.text.trim()) {
-    try {
-      const data = JSON.parse(rawText) as Record<string, unknown>;
-      const choice = ((data.choices as Record<string, unknown>[] | undefined) || [])[0] || {};
-      const message = (choice.message as Record<string, unknown> | undefined) || {};
-      const promoted = reasoningChannelText(message) || reasoningChannelText(data);
-      if (promoted.trim()) {
-        parsed.text = promoted;
-        parsed.reasoningOnly = false;
-      }
-    } catch {
-      /* keep parsed as-is */
-    }
-  }
+  // Never promote Command Code reasoning into player-visible text (thinking stays hidden).
+  // With chat_template_kwargs.enable_thinking=false and enough max_tokens, story lands in content.
   if (wantStream && options.onPartial && parsed.text) await options.onPartial(parsed.text);
   return parsed;
 }
