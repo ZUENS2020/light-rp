@@ -17,7 +17,17 @@ import {
   setSessionModel,
   upsertModel,
 } from "./models";
-import { ActiveTaskConflict, createTurnTask, getActiveTask, getTask, getTaskByIdempotency, insertPending, listMessages, publishTask, replaceSessionTranscriptProjection } from "./tasks";
+import {
+  ActiveTaskConflict,
+  createTurnTask,
+  getActiveTask,
+  getTask,
+  getTaskByIdempotency,
+  insertPending,
+  listMessages,
+  publishTask,
+  replaceSessionTranscriptProjection,
+} from "./tasks";
 import { memoryStatus, mirrorCoreMemorySnapshot } from "./memory";
 import {
   invalidateSessionSceneState,
@@ -268,6 +278,7 @@ export function registerV2Routes(app: App): void {
         nmem_space: loaded.nmem_space,
         primary_character: loaded.primary_character,
         title: loaded.title,
+        allowTruncate: true,
       });
       await invalidateSessionSceneState(fs, sid, {
         present: loaded.primary_character ? [loaded.primary_character] : [],
@@ -280,6 +291,7 @@ export function registerV2Routes(app: App): void {
           nmem_space: loaded.nmem_space,
           primary_character: loaded.primary_character,
           title: loaded.title,
+          allowTruncate: true,
         });
       }
     }

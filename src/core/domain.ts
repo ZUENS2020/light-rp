@@ -1205,21 +1205,151 @@ export async function loadSession(
   };
 }
 
+/** Default newest-message window returned by Play state (dynamic history). */
+export const PLAY_MESSAGE_WINDOW = 40;
+
+export type MessageWindow = {
+  offset: number;
+  limit: number;
+  total: number;
+  has_older: boolean;
+};
+
+/** Newest-first window of a full transcript for Play UI (absolute offsets). */
+export function windowMessages(
+  messages: ChatMessage[],
+  limit: number = PLAY_MESSAGE_WINDOW,
+  before?: number,
+): { messages: ChatMessage[]; message_window: MessageWindow } {
+  const safeLimit = Math.min(100, Math.max(1, Math.floor(limit) || PLAY_MESSAGE_WINDOW));
+  const total = messages.length;
+  const end = before == null || !Number.isFinite(before) ? total : Math.max(0, Math.min(total, Math.floor(before)));
+  const start = Math.max(0, end - safeLimit);
+  return {
+    messages: messages.slice(start, end),
+    message_window: {
+      offset: start,
+      limit: safeLimit,
+      total,
+      has_older: start > 0,
+    },
+  };
+}
+
+/**
+ * Prefer the fresher Play transcript when two snapshots race.
+ * Never let a shorter/older total overwrite a longer one (stale R2 read / in-flight refetch).
+ */
+export function preferFresherPlayMessages<T extends { messages: ChatMessage[]; message_window?: MessageWindow }>(
+  current: T | undefined,
+  incoming: T,
+): T {
+  if (!current) return incoming;
+  const prevTotal = current.message_window?.total ?? current.messages.length;
+  const nextTotal = incoming.message_window?.total ?? incoming.messages.length;
+  if (nextTotal < prevTotal) {
+    return {
+      ...incoming,
+      messages: current.messages,
+      message_window: current.message_window ?? {
+        offset: Math.max(0, prevTotal - current.messages.length),
+        limit: current.messages.length,
+        total: prevTotal,
+        has_older: prevTotal > current.messages.length,
+      },
+    };
+  }
+  return incoming;
+}
+
+export type SaveSessionExtra = {
+  thread_id?: string | null;
+  nmem_space?: string | null;
+  title?: string | null;
+  primary_character?: string | null;
+  compact_roleplay_count?: number | null;
+  compact_at_message_count?: number | null;
+  last_compact_summary_chars?: number | null;
+  /**
+   * Rewrite/regenerate intentionally shorten the transcript.
+   * Without this flag, a shorter write against a longer on-disk transcript is rejected
+   * (guards deferred compact / stale turn saves from wiping newer messages).
+   */
+  allowTruncate?: boolean;
+};
+
+export class StaleTranscriptWriteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StaleTranscriptWriteError";
+  }
+}
+
+/**
+ * Append a finished turn onto the *current* R2 transcript (reload-merge).
+ * Avoids clobbering concurrent compact summary upserts or newer messages.
+ */
+export async function appendTurnMessages(
+  fs: R2Fs,
+  sessionId: string,
+  turn: {
+    userText: string;
+    assistant: ChatMessage;
+    taskId?: string | null;
+    userAlreadyPersisted?: boolean;
+  },
+  extra: SaveSessionExtra = {},
+): Promise<ChatMessage[]> {
+  const fresh = await loadSession(fs, sessionId);
+  const taskId = turn.taskId || turn.assistant.task_id || null;
+  if (taskId && fresh.messages.some((message) => message.role === "assistant" && message.task_id === taskId)) {
+    return fresh.messages;
+  }
+  let messages = fresh.messages;
+  const last = messages[messages.length - 1];
+  const tipIsUser =
+    last?.role === "user" && (Boolean(taskId && last.task_id === taskId) || last.content === turn.userText);
+  if (!tipIsUser) {
+    if (turn.userAlreadyPersisted) {
+      // Tip missing expected user — still append both so the assistant is not orphaned.
+      messages = [
+        ...messages,
+        {
+          role: "user",
+          content: turn.userText,
+          ts: turn.assistant.ts || new Date().toISOString(),
+          ...(taskId ? { task_id: taskId } : {}),
+        },
+      ];
+    } else {
+      messages = [
+        ...messages,
+        {
+          role: "user",
+          content: turn.userText,
+          ts: turn.assistant.ts || new Date().toISOString(),
+          ...(taskId ? { task_id: taskId } : {}),
+        },
+      ];
+    }
+  }
+  messages = [...messages, turn.assistant];
+  await saveSession(fs, sessionId, messages, extra);
+  return messages;
+}
+
 export async function saveSession(
   fs: R2Fs,
   sessionId: string,
   messages: ChatMessage[],
-  extra: {
-    thread_id?: string | null;
-    nmem_space?: string | null;
-    title?: string | null;
-    primary_character?: string | null;
-    compact_roleplay_count?: number | null;
-    compact_at_message_count?: number | null;
-    last_compact_summary_chars?: number | null;
-  } = {},
+  extra: SaveSessionExtra = {},
 ): Promise<void> {
   const previous = await loadSession(fs, sessionId).catch(() => null);
+  if (previous && previous.messages.length > messages.length && !extra.allowTruncate) {
+    throw new StaleTranscriptWriteError(
+      `refusing to overwrite transcript ${sessionId}: on-disk ${previous.messages.length} > write ${messages.length}`,
+    );
+  }
   const title = sessionTitle(messages, extra.title ?? previous?.title ?? "");
   const lines = messages.map((m) => JSON.stringify(m));
   await fs.put(`sessions/${sessionId}/transcript.jsonl`, lines.length ? lines.join("\n") + "\n" : "");

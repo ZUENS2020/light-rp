@@ -43,6 +43,7 @@ import {
   parseMentions,
   parseTrailer,
   persistMemory,
+  appendTurnMessages,
   saveSession,
   sceneLoreHaystack,
   sceneYaml,
@@ -368,21 +369,23 @@ export async function runOoc(
     ...(options.taskId ? { task_id: options.taskId } : {}),
   };
   if (!assistant.content) throw new LlmEmptyError();
-  const last = loaded.messages[loaded.messages.length - 1];
-  const messages =
-    last?.role === "user" && last.content === rawText
-      ? [...loaded.messages, assistant]
-      : [
-          ...loaded.messages,
-          { role: "user", content: rawText, ts: nowIso(), ...(options.taskId ? { task_id: options.taskId } : {}) },
-          assistant,
-        ];
-  await saveSession(fs, sessionId, messages, {
-    thread_id: loaded.thread_id,
-    nmem_space: loaded.nmem_space,
-    primary_character: loaded.primary_character,
-    title: loaded.title,
-  });
+  const tip = loaded.messages[loaded.messages.length - 1];
+  const messages = await appendTurnMessages(
+    fs,
+    sessionId,
+    {
+      userText: rawText,
+      assistant,
+      taskId: options.taskId,
+      userAlreadyPersisted: tip?.role === "user" && tip.content === rawText,
+    },
+    {
+      thread_id: loaded.thread_id,
+      nmem_space: loaded.nmem_space,
+      primary_character: loaded.primary_character,
+      title: loaded.title,
+    },
+  );
   return {
     text: assistant.content,
     messages,
@@ -1056,14 +1059,14 @@ export async function runTurn(
     ts: nowIso(),
     ...(opts?.ai?.taskId ? { task_id: opts.ai.taskId } : {}),
   };
-  const nextMessages = userAlreadyPersisted
+  const provisionalMessages = userAlreadyPersisted
     ? [...loaded.messages, assistant]
     : [
         ...loaded.messages,
         { role: "user", content: userText, ts: nowIso(), ...(opts?.ai?.taskId ? { task_id: opts.ai.taskId } : {}) },
         assistant,
       ];
-  const turnNumber = roleplayOnlyMessages(nextMessages).filter((m) => m.role === "user").length;
+  const turnNumber = roleplayOnlyMessages(provisionalMessages).filter((m) => m.role === "user").length;
   await appendTrace(fs, sessionId, {
     turn: turnNumber,
     primary: primaryId,
@@ -1083,11 +1086,22 @@ export async function runTurn(
     ts: nowIso(),
   });
   const threadId = loaded.thread_id;
-  await saveSession(fs, sessionId, nextMessages, {
-    thread_id: threadId,
-    nmem_space: loaded.nmem_space,
-    primary_character: primaryCharacter,
-  });
+  // Reload-merge: do not write the mid-turn snapshot over a concurrent compact or newer tip.
+  const nextMessages = await appendTurnMessages(
+    fs,
+    sessionId,
+    {
+      userText,
+      assistant,
+      taskId: opts?.ai?.taskId,
+      userAlreadyPersisted,
+    },
+    {
+      thread_id: threadId,
+      nmem_space: loaded.nmem_space,
+      primary_character: primaryCharacter,
+    },
+  );
   const aiUsage = addUsage(gm.usage, commitUsage);
   const pressureCompact = shouldCompactAfterTurn({
     promptTokens: aiUsage.prompt_tokens,
@@ -1386,7 +1400,12 @@ export async function runCompact(
 
   const formatted = formatCompactSummaryForStorage(summary);
   // Keep ALL user/assistant history; only replace the compact system summary message.
-  const next = upsertCompactSummaryMessage(messages, formatted, nowIso());
+  // CRITICAL: reload before write. Deferred compact runs while the next turn may already
+  // have appended user/assistant messages — saving the stale `messages` snapshot would
+  // wipe those newer turns (history "rolls back" to an older segment).
+  const fresh = await loadSession(fs, sessionId);
+  const next = upsertCompactSummaryMessage(fresh.messages, formatted, nowIso());
+  // Cursor counts only what this compact summarized, not messages that arrived mid-flight.
   await saveSession(fs, sessionId, next, {
     thread_id: loaded.thread_id,
     nmem_space: loaded.nmem_space,

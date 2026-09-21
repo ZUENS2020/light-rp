@@ -102,6 +102,10 @@ export function Transcript({
   pending,
   streamingText,
   disabled,
+  messageOffset = 0,
+  hasOlder,
+  loadingOlder,
+  onLoadOlder,
   onRewrite,
 }: {
   state: PlayState;
@@ -109,6 +113,11 @@ export function Transcript({
   /** Growing assistant text while a generation task is running. */
   streamingText?: string;
   disabled?: boolean;
+  /** Absolute start index of `state.messages` in the full transcript. */
+  messageOffset?: number;
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
   onRewrite?: (index: number, content: string) => void;
 }) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -134,10 +143,10 @@ export function Transcript({
     setDraft(content);
   }
 
-  function saveEdit(index: number) {
+  function saveEdit(localIndex: number) {
     const text = draft;
     setEditingIndex(null);
-    onRewrite?.(index, text);
+    onRewrite?.(messageOffset + localIndex, text);
   }
 
   return (
@@ -146,6 +155,20 @@ export function Transcript({
         <article className="whitespace-pre-wrap font-body text-base leading-relaxed">
           {stripHidden(state.opening)}
         </article>
+      ) : null}
+      {hasOlder && onLoadOlder ? (
+        <div className="flex justify-center">
+          <Button type="button" variant="secondary" disabled={loadingOlder || disabled} onClick={onLoadOlder}>
+            {loadingOlder ? (
+              <>
+                <LoaderCircle className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                加载中…
+              </>
+            ) : (
+              "加载更早"
+            )}
+          </Button>
+        </div>
       ) : null}
       {state.messages.map((item, index) => {
         const text = stripHidden(item.content);
@@ -201,15 +224,25 @@ export function Transcript({
       {lastAssistantIndex < 0 && (state.opening || state.messages.length === 0) ? <StateBar state={state} /> : null}
       {pending ? (
         <article className="flex flex-col gap-3" aria-live="polite" aria-busy="true">
-          {streamingText?.trim() ? (
+          {streamingText?.trim() &&
+          !(
+            lastAssistantIndex >= 0 &&
+            stripHidden(state.messages[lastAssistantIndex]?.content || "") === stripHidden(streamingText)
+          ) ? (
             <div className="whitespace-pre-wrap font-body text-base leading-relaxed opacity-90">
               {stripHidden(streamingText)}
             </div>
           ) : null}
-          <div className="flex items-center gap-2 font-ui text-sm text-secondary">
-            <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
-            {streamingText?.trim() ? "生成中…" : "正在生成…"}
-          </div>
+          {!(
+            streamingText?.trim() &&
+            lastAssistantIndex >= 0 &&
+            stripHidden(state.messages[lastAssistantIndex]?.content || "") === stripHidden(streamingText)
+          ) ? (
+            <div className="flex items-center gap-2 font-ui text-sm text-secondary">
+              <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
+              {streamingText?.trim() ? "生成中…" : "正在生成…"}
+            </div>
+          ) : null}
         </article>
       ) : null}
       <div ref={endRef} />

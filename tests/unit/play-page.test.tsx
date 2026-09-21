@@ -212,4 +212,43 @@ describe("Play Studio", () => {
     expect(await screen.findByText("门轴轻响，一缕夜风——")).toBeInTheDocument();
     expect(screen.getByText("生成中…")).toBeInTheDocument();
   });
+
+  it("keeps streamed assistant text visible after the task completes (no withdraw flash)", async () => {
+    stubApi();
+    let taskStatus: "running" | "completed" = "running";
+    vi.spyOn(api, "turn").mockResolvedValue({ task_id: "task-handoff", status: "running" });
+    vi.spyOn(api, "task").mockImplementation(async () => ({
+      id: "task-handoff",
+      status: taskStatus,
+      content: "门轴轻响，一缕夜风——",
+    }));
+    // After complete, play refetch should include the promoted assistant.
+    vi.spyOn(api, "play").mockImplementation(async () => ({
+      ...playState,
+      messages: [
+        ...playState.messages,
+        { role: "user", content: "推开门", ts: "2026-08-30T00:01:00Z" },
+        {
+          role: "assistant",
+          content: "门轴轻响，一缕夜风——",
+          ts: "2026-08-30T00:01:01Z",
+          task_id: "task-handoff",
+        },
+      ],
+      message_window: { offset: 0, limit: 40, total: 3, has_older: false },
+    }));
+    const user = userEvent.setup();
+    renderPlay();
+
+    const editor = await screen.findByLabelText("你的行动");
+    await user.type(editor, "推开门");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByText("门轴轻响，一缕夜风——")).toBeInTheDocument();
+
+    taskStatus = "completed";
+    await waitFor(() => {
+      expect(screen.getByText("门轴轻响，一缕夜风——")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("生成中…")).not.toBeInTheDocument();
+  });
 });

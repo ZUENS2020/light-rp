@@ -10,7 +10,7 @@ import {
   PanelRight,
   SlidersHorizontal,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Composer } from "../components/Composer";
 import { SessionList } from "../components/SessionList";
@@ -31,6 +31,7 @@ import {
   type PlayState,
 } from "../lib/api";
 import { parseSystemCommand, SYSTEM_COMMANDS } from "../../core/commands";
+import { absorbTipSlide, mergePlayState, prependOlderMessages, promoteCompletedAssistant } from "../lib/play-history";
 
 function formatError(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message;
@@ -245,8 +246,34 @@ export function PlayPage() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [commandHelpOpen, setCommandHelpOpen] = useState(false);
+  const [olderMessages, setOlderMessages] = useState<PlayState["messages"]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderWindow, setOlderWindow] = useState<PlayState["message_window"]>();
 
-  const playQuery = useQuery({ queryKey: ["play", worldId, sessionId], queryFn: () => api.play(worldId, sessionId) });
+  const tipRef = useRef<{ offset: number; messages: PlayState["messages"] }>({ offset: 0, messages: [] });
+  /** Rewrite/regenerate intentionally shorten the transcript — allow one shorter play fetch. */
+  const acceptShorterRef = useRef(false);
+
+  useEffect(() => {
+    setOlderMessages([]);
+    setOlderWindow(undefined);
+    tipRef.current = { offset: 0, messages: [] };
+    acceptShorterRef.current = false;
+  }, [worldId, sessionId]);
+
+  const playQuery = useQuery({
+    queryKey: ["play", worldId, sessionId],
+    queryFn: async () => {
+      const incoming = await api.play(worldId, sessionId);
+      if (acceptShorterRef.current) {
+        acceptShorterRef.current = false;
+        return incoming;
+      }
+      const current = queryClient.getQueryData<PlayState>(["play", worldId, sessionId]);
+      return mergePlayState(current, incoming);
+    },
+    placeholderData: (previous) => previous,
+  });
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: api.models, staleTime: 60_000 });
   const modelQuery = useQuery({
     queryKey: ["session-model", sessionId],
@@ -281,6 +308,14 @@ export function PlayPage() {
     },
   });
   const state = playQuery.data;
+
+  useEffect(() => {
+    if (!state) return;
+    const nextOffset = state.message_window?.offset ?? 0;
+    const prev = tipRef.current;
+    setOlderMessages((prefix) => absorbTipSlide(prefix, prev.messages, prev.offset, state.messages, nextOffset));
+    tipRef.current = { offset: nextOffset, messages: state.messages };
+  }, [state]);
 
   useEffect(() => {
     const active = activeQuery.data?.task;
@@ -321,13 +356,22 @@ export function PlayPage() {
       }
       if (msg.type === "completed" && msg.taskId) {
         setTaskId(msg.taskId);
+        const content = typeof msg.content === "string" ? msg.content : undefined;
         queryClient.setQueryData(["task", msg.taskId], (prev: GenerationTask | undefined) => ({
           ...(prev || { id: msg.taskId! }),
           id: msg.taskId!,
           status: "completed" as const,
-          content: typeof msg.content === "string" ? msg.content : prev?.content,
+          content: content ?? prev?.content,
           error: null,
         }));
+        // Promote in-place so the streaming bubble never unmounts into a blank gap.
+        queryClient.setQueryData(["play", worldId, sessionId], (prev: PlayState | undefined) =>
+          promoteCompletedAssistant(prev, {
+            id: msg.taskId!,
+            status: "completed",
+            content: content ?? queryClient.getQueryData<GenerationTask>(["task", msg.taskId!])?.content,
+          }),
+        );
         return;
       }
       if (msg.type === "failed" && msg.taskId) {
@@ -400,6 +444,9 @@ export function PlayPage() {
     if (!task || task.status === "pending" || task.status === "running") return;
     if (task.status === "completed") {
       setOptimisticText("");
+      queryClient.setQueryData(["play", worldId, sessionId], (prev: PlayState | undefined) =>
+        promoteCompletedAssistant(prev, task),
+      );
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ["play", worldId, sessionId] }),
         queryClient.invalidateQueries({ queryKey: ["session-cache", sessionId] }),
@@ -438,6 +485,10 @@ export function PlayPage() {
     mutationFn: ({ index, content }: { index: number; content: string }) =>
       api.rewrite(worldId, sessionId, index, content),
     onSuccess: async (next) => {
+      acceptShorterRef.current = true;
+      setOlderMessages([]);
+      setOlderWindow(undefined);
+      tipRef.current = { offset: next.message_window?.offset ?? 0, messages: next.messages };
       queryClient.setQueryData(["play", worldId, sessionId], next);
       if (next.task_id) setTaskId(next.task_id);
     },
@@ -455,7 +506,12 @@ export function PlayPage() {
 
   const regenerateMutation = useMutation({
     mutationFn: () => api.regenerate(sessionId, crypto.randomUUID()),
-    onSuccess: (accepted) => setTaskId(accepted.task_id),
+    onSuccess: (accepted) => {
+      acceptShorterRef.current = true;
+      setOlderMessages([]);
+      setOlderWindow(undefined);
+      setTaskId(accepted.task_id);
+    },
   });
 
   const compactMutation = useMutation({
@@ -469,13 +525,8 @@ export function PlayPage() {
     onSuccess: refreshPlay,
   });
 
-  const streamingText =
-    taskQuery.data &&
-    (taskQuery.data.status === "pending" || taskQuery.data.status === "running") &&
-    typeof taskQuery.data.content === "string"
-      ? taskQuery.data.content
-      : "";
   const activeStatus = taskQuery.data?.status;
+  const taskContent = taskQuery.data && typeof taskQuery.data.content === "string" ? taskQuery.data.content : "";
   const busy =
     turnMutation.isPending ||
     regenerateMutation.isPending ||
@@ -525,14 +576,65 @@ export function PlayPage() {
   }
 
   const displayed = useMemo<PlayState | undefined>(() => {
-    if (!state || !optimisticText) return state;
-    const last = state.messages[state.messages.length - 1];
-    if (last?.role === "user" && last.content === optimisticText) return state;
+    if (!state) return state;
+    const baseMessages = olderMessages.length ? [...olderMessages, ...state.messages] : state.messages;
+    const withOptimistic = (() => {
+      if (!optimisticText) return baseMessages;
+      const last = baseMessages[baseMessages.length - 1];
+      if (last?.role === "user" && last.content === optimisticText) return baseMessages;
+      return [...baseMessages, { role: "user", content: optimisticText, ts: new Date().toISOString() }];
+    })();
+    const windowMeta = state.message_window;
+    const tipOff = windowMeta?.offset ?? 0;
+    const absoluteOffset = Math.max(0, tipOff - olderMessages.length);
+    const hasOlder = Boolean(olderWindow?.has_older) || Boolean(windowMeta?.has_older) || absoluteOffset > 0;
     return {
       ...state,
-      messages: [...state.messages, { role: "user", content: optimisticText, ts: new Date().toISOString() }],
+      messages: withOptimistic,
+      message_window: windowMeta
+        ? {
+            ...windowMeta,
+            offset: absoluteOffset,
+            has_older: hasOlder,
+            total: windowMeta.total,
+          }
+        : {
+            offset: absoluteOffset,
+            limit: withOptimistic.length,
+            total: withOptimistic.length,
+            has_older: hasOlder,
+          },
     };
-  }, [optimisticText, state]);
+  }, [olderMessages, olderWindow, optimisticText, state]);
+
+  const tipCaughtUp = useMemo(() => {
+    if (!taskId || !taskContent || !displayed) return true;
+    if (activeStatus === "pending" || activeStatus === "running") return false;
+    return displayed.messages.some(
+      (message) => message.role === "assistant" && (message.task_id === taskId || message.content === taskContent),
+    );
+  }, [activeStatus, displayed, taskContent, taskId]);
+
+  const streamingText =
+    taskContent && (activeStatus === "pending" || activeStatus === "running" || !tipCaughtUp) ? taskContent : "";
+
+  async function loadOlderMessages() {
+    if (!displayed?.message_window || loadingOlder) return;
+    const before = displayed.message_window.offset;
+    if (before <= 0) return;
+    setLoadingOlder(true);
+    try {
+      const page = await api.playMessages(worldId, sessionId, {
+        before,
+        limit: displayed.message_window.limit || 40,
+      });
+      const merged = prependOlderMessages(olderMessages, page);
+      setOlderMessages(merged.older);
+      setOlderWindow(merged.window);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
 
   async function createSession() {
     if (!state) return;
@@ -757,9 +859,13 @@ export function PlayPage() {
           <div className="min-h-0 flex-1 overflow-y-auto">
             <Transcript
               state={displayed}
-              pending={busy}
+              pending={busy || Boolean(streamingText)}
               streamingText={streamingText}
               disabled={busy}
+              messageOffset={displayed.message_window?.offset ?? 0}
+              hasOlder={Boolean(displayed.message_window?.has_older)}
+              loadingOlder={loadingOlder}
+              onLoadOlder={() => void loadOlderMessages()}
               onRewrite={(index, content) => rewriteMutation.mutate({ index, content })}
             />
           </div>
