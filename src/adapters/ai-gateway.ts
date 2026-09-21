@@ -168,6 +168,26 @@ function parseToolCalls(message: Record<string, unknown>): ToolCall[] {
   return calls;
 }
 
+
+function isCommandCodeModel(model: AiModelConfig): boolean {
+  return model.provider_slug === "commandcode" || model.transport === "openai_compatible";
+}
+
+/** Pull visible story text Command Code may place in reasoning / reasoning_details. */
+function reasoningChannelText(source: Record<string, unknown>): string {
+  if (typeof source.reasoning === "string" && source.reasoning) return source.reasoning;
+  if (typeof source.reasoning_content === "string" && source.reasoning_content) return source.reasoning_content;
+  const details = source.reasoning_details;
+  if (!Array.isArray(details)) return "";
+  let out = "";
+  for (const item of details) {
+    if (item && typeof item === "object" && typeof (item as Record<string, unknown>).text === "string") {
+      out += String((item as Record<string, unknown>).text);
+    }
+  }
+  return out;
+}
+
 function publicResult(parsed: ParsedResponse): ChatResult {
   return {
     text: parsed.text,
@@ -263,6 +283,7 @@ export async function readChatCompletionSse(
   onPartial?: (text: string) => void | Promise<void>,
   onHeartbeat?: () => void | Promise<void>,
   heartbeatIntervalMs = DEFAULT_LLM_HEARTBEAT_MS,
+  options?: { promoteReasoningAsContent?: boolean },
 ): Promise<{
   text: string;
   finish_reason?: string;
@@ -272,13 +293,18 @@ export async function readChatCompletionSse(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let text = "";
+  let contentText = "";
+  let reasoningText = "";
   let finish_reason: string | undefined;
   let usage: AiUsage = { prompt_tokens: 0, completion_tokens: 0, cached_input_tokens: 0 };
   let reasoningPresent = false;
   let lastEmitted = "";
+  const promote = Boolean(options?.promoteReasoningAsContent);
+
+  const visibleText = () => (contentText.trim() ? contentText : promote ? reasoningText : contentText);
 
   const emit = async () => {
+    const text = visibleText();
     if (!onPartial || text === lastEmitted) return;
     lastEmitted = text;
     await onPartial(text);
@@ -332,17 +358,37 @@ export async function readChatCompletionSse(
         // Some providers resend the full message content on the final chunk.
         if (
           typeof message.content === "string" &&
-          message.content.startsWith(text) &&
-          message.content.length >= text.length
+          message.content.startsWith(contentText) &&
+          message.content.length >= contentText.length
         ) {
-          text = message.content;
+          contentText = message.content;
         } else {
-          text += piece;
+          contentText += piece;
         }
         await emit();
       }
-      if (delta.reasoning_content || delta.reasoning || message.reasoning_content || message.reasoning) {
+      const reasoningPiece = reasoningChannelText(delta) || reasoningChannelText(message);
+      if (reasoningPiece || delta.reasoning_content || delta.reasoning || message.reasoning_content || message.reasoning) {
         reasoningPresent = true;
+      }
+      if (promote && reasoningPiece) {
+        // Prefer incremental delta append; full-message reasoning replaces when it extends.
+        if (
+          typeof message.reasoning === "string" &&
+          message.reasoning.startsWith(reasoningText) &&
+          message.reasoning.length >= reasoningText.length
+        ) {
+          reasoningText = message.reasoning;
+        } else if (
+          typeof message.reasoning_content === "string" &&
+          message.reasoning_content.startsWith(reasoningText) &&
+          message.reasoning_content.length >= reasoningText.length
+        ) {
+          reasoningText = message.reasoning_content;
+        } else {
+          reasoningText += reasoningPiece;
+        }
+        if (!contentText.trim()) await emit();
       }
       if (choice.finish_reason) finish_reason = String(choice.finish_reason);
       if (parsed.usage && typeof parsed.usage === "object") {
@@ -351,6 +397,7 @@ export async function readChatCompletionSse(
     }
   }
   await emit();
+  const text = visibleText();
   return {
     text,
     finish_reason,
@@ -425,6 +472,9 @@ async function rawChat(
   }
   const reasoning = storyReasoningBudget(model, cappedMax, options.requestKind);
   if (reasoning) payload.reasoning = reasoning;
+  const commandCode = isCommandCodeModel(model);
+  // GLM-on-Command-Code: without this, all tokens land in reasoning_tokens and content stays empty.
+  if (commandCode) payload.chat_template_kwargs = { enable_thinking: false };
   // Stream only for plain text completions with an onPartial sink (story TTFT).
   // Tool-call streaming is intentionally out of scope — keep the JSON path.
   const wantStream = Boolean(options.onPartial) && !normalizedTools?.length;
@@ -517,7 +567,9 @@ async function rawChat(
   }
   const contentType = response.headers.get("content-type") || "";
   if (wantStream && response.body && (/event-stream|octet-stream|jsonl/i.test(contentType) || !contentType)) {
-    const streamed = await readChatCompletionSse(response.body, options.onPartial, options.onHeartbeat, heartbeatMs);
+    const streamed = await readChatCompletionSse(response.body, options.onPartial, options.onHeartbeat, heartbeatMs, {
+      promoteReasoningAsContent: commandCode,
+    });
     return {
       text: streamed.text,
       tool_calls: [],
@@ -541,6 +593,7 @@ async function rawChat(
       options.onPartial,
       options.onHeartbeat,
       heartbeatMs,
+      { promoteReasoningAsContent: commandCode },
     );
     return {
       text: streamed.text,
@@ -553,6 +606,20 @@ async function rawChat(
     };
   }
   const parsed = parseResponse(response, rawText, requestBody, cache.skipCache);
+  if (commandCode && !parsed.text.trim()) {
+    try {
+      const data = JSON.parse(rawText) as Record<string, unknown>;
+      const choice = ((data.choices as Record<string, unknown>[] | undefined) || [])[0] || {};
+      const message = (choice.message as Record<string, unknown> | undefined) || {};
+      const promoted = reasoningChannelText(message) || reasoningChannelText(data);
+      if (promoted.trim()) {
+        parsed.text = promoted;
+        parsed.reasoningOnly = false;
+      }
+    } catch {
+      /* keep parsed as-is */
+    }
+  }
   if (wantStream && options.onPartial && parsed.text) await options.onPartial(parsed.text);
   return parsed;
 }
