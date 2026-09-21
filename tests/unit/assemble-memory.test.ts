@@ -64,10 +64,11 @@ describe("character memory assembly", () => {
       "继续晨练",
     );
 
-    expect(result.epoch_checkpoint).toContain("当前状态");
+    // Scene is per-turn (turn_context) so deferred commit / R2 updates are not frozen in the epoch checkpoint.
+    expect(result.turn_context).toContain("当前状态");
+    expect(result.epoch_checkpoint).not.toContain("当前状态");
     expect(result.epoch_checkpoint).toContain("每周一与训练员晨练");
     expect(result.epoch_checkpoint).not.toContain("Nowledge Mem");
-    expect(result.turn_context).not.toContain("当前状态");
     expect(result.turn_context).not.toContain("每周一与训练员晨练");
     expect(result.system).toContain("每周一与训练员晨练");
     expect(result.system).not.toContain("Nowledge Mem");

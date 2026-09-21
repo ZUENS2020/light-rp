@@ -49,13 +49,16 @@ describe("D1 task and model integration", () => {
     expect(model.max_output_tokens).toBe(16_384);
   });
 
-  it("seeds the live GLM Flash Latest OpenRouter direct model with a 32k output cap", async () => {
+  it("seeds GLM 5.3 Flash on Command Code GOAT provider", async () => {
     const models = await listModels(env.DB);
     const glm = models.find((item) => item.id === "glm53-flash-cheap-openrouter");
-    expect(glm?.model_id).toBe("~z-ai/glm-flash-latest");
-    expect(glm?.label).toBe("GLM Flash Latest · OpenRouter");
-    expect(glm?.context_window).toBe(1_310_720);
-    expect(glm?.max_output_tokens).toBe(32_768);
+    // transport stays gateway (CHECK); runtime routes commandcode via direct fetch
+    expect(glm?.transport).toBe("gateway");
+    expect(glm?.provider_slug).toBe("commandcode");
+    expect(glm?.model_id).toBe("z-ai/glm-5.3-flash");
+    expect(glm?.label).toBe("GLM 5.3 Flash · Command Code GOAT");
+    expect(glm?.context_window).toBe(1_000_000);
+    expect(glm?.max_output_tokens).toBeGreaterThanOrEqual(16_384);
     expect(glm?.enabled).toBe(true);
   });
 

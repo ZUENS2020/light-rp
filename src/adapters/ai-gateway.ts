@@ -366,11 +366,37 @@ function storyReasoningBudget(
   requestKind?: AiRequestOptions["requestKind"],
 ): Record<string, unknown> | null {
   if (!model.supports_reasoning) return null;
+  // Command Code GOAT / openai_compatible: omitting reasoning yields visible content.
+  // Passing effort:low still burns the budget into reasoning_tokens and returns empty content.
+  if ((model.transport === "openai_compatible" || model.provider_slug === "commandcode")) return null;
   const story =
     requestKind == null || requestKind === "story" || requestKind === "rewrite" || requestKind === "regenerate";
   if (!story) return null;
   // OpenRouter: pass effort OR max_tokens, not both. GLM defaults to "max" which starves visible output.
   return { effort: "low" };
+}
+
+
+const COMMANDCODE_CHAT_URL = "https://api.commandcode.ai/provider/v1/chat/completions";
+const OPENAI_COMPAT_USER_AGENT = "light-rp/1.0";
+
+function openaiCompatibleEndpoint(providerSlug: string): string {
+  if (providerSlug === "commandcode") return COMMANDCODE_CHAT_URL;
+  throw new Error(`unsupported openai_compatible provider '${providerSlug}'`);
+}
+
+function openaiCompatibleApiKey(env: Env, providerSlug: string): string {
+  if (providerSlug === "commandcode") {
+    const key = env.COMMANDCODE_API_KEY?.trim();
+    if (!key) throw new Error("COMMANDCODE_API_KEY is not configured");
+    return key;
+  }
+  throw new Error(`unsupported openai_compatible provider '${providerSlug}'`);
+}
+
+function reasoningRejected(status: number, body: string): boolean {
+  if (status !== 400 && status !== 422) return false;
+  return /reason(ing)?|effort|thinking/i.test(body);
 }
 
 async function rawChat(
@@ -405,7 +431,7 @@ async function rawChat(
   if (wantStream) payload.stream = true;
   // request_body omits stream so cache keys / diagnostics stay comparable to non-stream.
   const requestBody = stableStringify(Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "stream")));
-  const normalizedPayload = JSON.parse(stableStringify(payload)) as Record<string, unknown>;
+  let normalizedPayload = JSON.parse(stableStringify(payload)) as Record<string, unknown>;
   const cache = effectiveCache(options);
   const seconds = Math.max(1, timeoutSec || 120);
   const controller = new AbortController();
@@ -413,9 +439,9 @@ async function rawChat(
   const heartbeatMs = options.heartbeatIntervalMs ?? DEFAULT_LLM_HEARTBEAT_MS;
   let response: Response;
   try {
-    const invoke = async (): Promise<Response> => {
+    const invoke = async (payload: Record<string, unknown>): Promise<Response> => {
       if (model.transport === "cloudflare") {
-        return env.AI.run(model.model_id as keyof AiModels, normalizedPayload as never, {
+        return env.AI.run(model.model_id as keyof AiModels, payload as never, {
           returnRawResponse: true,
           signal: controller.signal,
           gateway: {
@@ -428,13 +454,30 @@ async function rawChat(
           extraHeaders: options.affinityKey ? { "x-session-affinity": options.affinityKey } : undefined,
         });
       }
+      if ((model.transport === "openai_compatible" || model.provider_slug === "commandcode")) {
+        const slug = model.provider_slug || "commandcode";
+        const endpoint = openaiCompatibleEndpoint(slug);
+        const apiKey = openaiCompatibleApiKey(env, slug);
+        return fetch(endpoint, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            Authorization: `Bearer ${apiKey}`,
+            "User-Agent": OPENAI_COMPAT_USER_AGENT,
+            ...(options.affinityKey ? { "x-session-affinity": options.affinityKey } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+      }
       if (!model.provider_slug) throw new Error(`gateway model '${model.label}' is missing provider_slug`);
       return env.AI.gateway(env.AI_GATEWAY_ID).run(
         {
           provider: model.provider_slug,
           endpoint: "chat/completions",
           headers: { "Content-Type": "application/json" },
-          query: normalizedPayload,
+          query: payload,
         },
         {
           signal: controller.signal,
@@ -449,7 +492,18 @@ async function rawChat(
         },
       );
     };
-    response = await withPeriodicHeartbeat(invoke(), options.onHeartbeat, heartbeatMs);
+    response = await withPeriodicHeartbeat(invoke(normalizedPayload), options.onHeartbeat, heartbeatMs);
+    if (!response.ok && reasoning && (model.transport === "openai_compatible" || model.provider_slug === "commandcode")) {
+      const errBody = await response.text();
+      if (reasoningRejected(response.status, errBody)) {
+        const withoutReasoning = { ...normalizedPayload };
+        delete withoutReasoning.reasoning;
+        normalizedPayload = withoutReasoning;
+        response = await withPeriodicHeartbeat(invoke(normalizedPayload), options.onHeartbeat, heartbeatMs);
+      } else {
+        throw new LlmHttpError(response.status, errBody.slice(0, 800));
+      }
+    }
   } catch (error) {
     const aborted = error instanceof Error && (error.name === "AbortError" || /aborted/i.test(error.message));
     if (aborted) throw new LlmTimeoutError(seconds);
