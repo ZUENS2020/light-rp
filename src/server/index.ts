@@ -1023,9 +1023,6 @@ export default {
           msg.ack();
           continue;
         }
-        const heartbeat = startLeaseHeartbeat(env.DB, taskId, owner, {
-          waitUntil: (job) => ctx.waitUntil(job),
-        });
         const runtime = env.SESSION_RUNTIME && sessionId ? getSessionRuntimeStub(env, sessionId) : null;
         const notifyRuntimePartial = (content: string) =>
           runtime
@@ -1041,6 +1038,11 @@ export default {
                 .then(() => undefined)
                 .catch(() => undefined)
             : Promise.resolve();
+        const heartbeat = startLeaseHeartbeat(env.DB, taskId, owner, {
+          waitUntil: (job) => ctx.waitUntil(job),
+          // DO lastActivityAt must move during long CoT even when no UI partials yet.
+          onTick: () => notifyRuntimeTouch(),
+        });
         const onLeaseTouch = async () => {
           await heartbeat.touch();
           await notifyRuntimeTouch();

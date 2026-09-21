@@ -299,6 +299,7 @@ export async function readChatCompletionSse(
   let usage: AiUsage = { prompt_tokens: 0, completion_tokens: 0, cached_input_tokens: 0 };
   let reasoningPresent = false;
   let lastEmitted = "";
+  let lastReasoningTouchMs = 0;
   const promote = Boolean(options?.promoteReasoningAsContent);
 
   const visibleText = () => (contentText.trim() ? contentText : promote ? reasoningText : contentText);
@@ -370,6 +371,18 @@ export async function readChatCompletionSse(
       const reasoningPiece = reasoningChannelText(delta) || reasoningChannelText(message);
       if (reasoningPiece || delta.reasoning_content || delta.reasoning || message.reasoning_content || message.reasoning) {
         reasoningPresent = true;
+        // Keep lease/DO alive during CoT even when we do not emit partials to the UI.
+        if (onHeartbeat && !contentText.trim()) {
+          const now = Date.now();
+          if (now - lastReasoningTouchMs >= 15_000) {
+            lastReasoningTouchMs = now;
+            try {
+              await onHeartbeat();
+            } catch {
+              /* consumer assertHeld handles lease loss */
+            }
+          }
+        }
       }
       if (promote && reasoningPiece) {
         // Prefer incremental delta append; full-message reasoning replaces when it extends.
@@ -413,8 +426,8 @@ function storyReasoningBudget(
   requestKind?: AiRequestOptions["requestKind"],
 ): Record<string, unknown> | null {
   if (!model.supports_reasoning) return null;
-  // Command Code GOAT / openai_compatible: omitting reasoning yields visible content.
-  // Passing effort:low still burns the budget into reasoning_tokens and returns empty content.
+  // Command Code: do NOT send OpenAI-style reasoning:{effort} — that still burns a long
+  // CoT channel. Top-level reasoning_effort:"low" is set in rawChat instead (Z.AI / docs).
   if ((model.transport === "openai_compatible" || model.provider_slug === "commandcode")) return null;
   const story =
     requestKind == null || requestKind === "story" || requestKind === "rewrite" || requestKind === "regenerate";
@@ -473,9 +486,11 @@ async function rawChat(
   const reasoning = storyReasoningBudget(model, cappedMax, options.requestKind);
   if (reasoning) payload.reasoning = reasoning;
   const commandCode = isCommandCodeModel(model);
-  // GLM-on-Command-Code: disable thinking so story tokens go to content (not the reasoning channel).
-  // Reasoning may still appear briefly in SSE; we never promote it to onPartial / UI text.
-  if (commandCode) payload.chat_template_kwargs = { enable_thinking: false };
+  // GLM-5.3 / 5.3-Flash: thinking cannot be disabled (docs.z.ai). Use top-level
+  // reasoning_effort:"low" — Command Code maps this to mild CoT; OpenAI-style
+  // reasoning:{effort} still burns a long reasoning channel. Never promote
+  // reasoning_* into player-visible text (see readChatCompletionSse).
+  if (commandCode) payload.reasoning_effort = "low";
   // Stream only for plain text completions with an onPartial sink (story TTFT).
   // Tool-call streaming is intentionally out of scope — keep the JSON path.
   const wantStream = Boolean(options.onPartial) && !normalizedTools?.length;
@@ -607,8 +622,8 @@ async function rawChat(
     };
   }
   const parsed = parseResponse(response, rawText, requestBody, cache.skipCache);
-  // Never promote Command Code reasoning into player-visible text (thinking stays hidden).
-  // With chat_template_kwargs.enable_thinking=false and enough max_tokens, story lands in content.
+  // Never promote reasoning into player-visible text. With reasoning_effort:low,
+  // GLM-5.3 Flash usually returns only content; any leftover CoT stays in reasoning_*.
   if (wantStream && options.onPartial && parsed.text) await options.onPartial(parsed.text);
   return parsed;
 }
