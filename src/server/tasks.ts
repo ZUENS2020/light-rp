@@ -470,6 +470,8 @@ export type StartLeaseHeartbeatOptions = {
    * relying on `setInterval`, which Workers may not fire while blocked on I/O.
    */
   waitUntil?: (promise: Promise<unknown>) => void;
+  /** Fired after each successful lease renew (e.g. SessionRuntime.touchActivity). */
+  onTick?: () => void | Promise<void>;
 };
 
 /** Prefer Workers `scheduler.wait`; fall back for unit tests outside workerd. */
@@ -516,7 +518,17 @@ export function startLeaseHeartbeat(
   const tick = async () => {
     if (stopped || lost) return;
     const ok = await renewTaskLease(db, taskId, owner);
-    if (!ok) lost = new LeaseLostError(taskId);
+    if (!ok) {
+      lost = new LeaseLostError(taskId);
+      return;
+    }
+    if (opts.onTick) {
+      try {
+        await opts.onTick();
+      } catch {
+        /* runtime touch failures should not kill the lease loop */
+      }
+    }
   };
 
   const enqueue = () => {
