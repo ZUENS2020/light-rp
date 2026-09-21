@@ -130,6 +130,15 @@ export type SettingsPut = {
   mini: AppSettings["mini"];
 };
 
+export type PlayMessage = { role: string; content: string; ts: string; task_id?: string };
+
+export type MessageWindow = {
+  offset: number;
+  limit: number;
+  total: number;
+  has_older: boolean;
+};
+
 export type PlayState = {
   world: WorldSummary;
   session_id: string;
@@ -152,7 +161,9 @@ export type PlayState = {
   player: string;
   player_memory?: string;
   character_memory?: Record<string, string[]>;
-  messages: { role: string; content: string; ts: string; task_id?: string }[];
+  messages: PlayMessage[];
+  /** Absolute window into the full R2 transcript (newest page by default). */
+  message_window?: MessageWindow;
   reply?: string;
   spotlight?: string[];
   turn_warnings?: string[];
@@ -283,6 +294,15 @@ export const api = {
   open: (worldId: string, body: { new?: boolean; session_id?: string; space?: string | null }) =>
     request<PlayState>(`/api/v2/worlds/${worldId}/sessions`, { method: "POST", body: JSON.stringify(body) }),
   play: (worldId: string, sessionId: string) => request<PlayState>(`/api/v2/play/${worldId}/${sessionId}`),
+  playMessages: (worldId: string, sessionId: string, params?: { before?: number; limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.before != null) query.set("before", String(params.before));
+    if (params?.limit != null) query.set("limit", String(params.limit));
+    const suffix = query.size ? `?${query}` : "";
+    return request<{ messages: PlayMessage[]; message_window: MessageWindow }>(
+      `/api/v2/play/${worldId}/${sessionId}/messages${suffix}`,
+    );
+  },
   turn: (sessionId: string, text: string, idempotencyKey: string) =>
     request<TurnAccepted>(`/api/v2/sessions/${sessionId}/turn`, {
       method: "POST",

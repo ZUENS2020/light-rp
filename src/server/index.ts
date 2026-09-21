@@ -20,6 +20,8 @@ import {
   saveCast,
   saveMini,
   saveSession,
+  windowMessages,
+  PLAY_MESSAGE_WINDOW,
   saveWorldMeta,
   sessionInfoFrom,
   deleteSession,
@@ -210,7 +212,7 @@ async function playState(
     player: memory.userSetting,
     player_memory: memory.player.join("\n§\n"),
     character_memory: memory.characters,
-    messages: loaded.messages,
+    ...windowMessages(loaded.messages, PLAY_MESSAGE_WINDOW),
     context_report: contextReport,
     turn_warnings: Array.isArray(lastTurn?.warnings) ? lastTurn.warnings.map(String) : [],
     remembered: Array.isArray(lastTurn?.remembered) ? lastTurn.remembered.map(String) : [],
@@ -660,6 +662,22 @@ app.get("/api/v2/play/:id/:sid", async (c) => {
   return c.json(await playState(c.env, fs, pack, c.req.param("sid")));
 });
 
+/** Older transcript pages for Play (R2 source of truth). `before` is an absolute end offset. */
+app.get("/api/v2/play/:id/:sid/messages", async (c) => {
+  const fs = workspaceFs(c.env.BUCKET, c.req.param("id"));
+  await loadPack(fs, c.req.param("id"));
+  const sid = c.req.param("sid");
+  const loaded = await loadSession(fs, sid);
+  const beforeRaw = c.req.query("before");
+  const limitRaw = c.req.query("limit");
+  const before = beforeRaw != null && beforeRaw !== "" ? Number(beforeRaw) : undefined;
+  const limit = limitRaw != null && limitRaw !== "" ? Number(limitRaw) : PLAY_MESSAGE_WINDOW;
+  if ((beforeRaw && !Number.isInteger(before)) || !Number.isInteger(limit)) {
+    throw new HTTPException(400, { message: "invalid before or limit" });
+  }
+  return c.json(windowMessages(loaded.messages, limit, before));
+});
+
 app.post("/api/v2/play/:id/:sid/turn", async (c) => {
   const body = (await c.req.json()) as { text?: string };
   const text = (body.text || "").trim();
@@ -769,6 +787,7 @@ app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
     nmem_space: loaded.nmem_space,
     primary_character: loaded.primary_character,
     title: loaded.title,
+    allowTruncate: true,
   });
   await invalidateSessionSceneState(fs, sid, {
     present: loaded.primary_character ? [loaded.primary_character] : [],
@@ -781,6 +800,7 @@ app.post("/api/v2/play/:id/:sid/rewrite", async (c) => {
       nmem_space: loaded.nmem_space,
       primary_character: loaded.primary_character,
       title: loaded.title,
+      allowTruncate: true,
     });
   }
   if (c.env.DB) {
