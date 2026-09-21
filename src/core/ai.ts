@@ -3,7 +3,7 @@ import type { LlmMessage, ToolCall } from "./assemble";
 export const OUTPUT_CHANNEL_CONTRACT =
   "不要把叙事正文、对白、状态块、摘要、工具所需结果或任何应用需要读取的输出写入 reasoning_content、analysis 或思考通道。思考可以省略；完整结果必须写入 assistant.content 或正式 tool_calls。不要在正文中解释这条约束。";
 
-export type AiTransport = "cloudflare" | "gateway";
+export type AiTransport = "cloudflare" | "gateway" | "openai_compatible";
 
 export type AiModelConfig = {
   id: string;

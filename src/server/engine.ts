@@ -79,7 +79,7 @@ import {
   type AppSettings,
 } from "./settings";
 import { nowIso } from "../core/util";
-import { createPromptEpoch, preparePrompt } from "./prompt-state";
+import { appendHiddenPromptEvents, createPromptEpoch, preparePrompt } from "./prompt-state";
 import { getCachedToolExecution, recordToolExecution, updateTaskPartialContent } from "./tasks";
 import { parseSystemCommand, roleplayOnlyMessages } from "../core/commands";
 import {
@@ -1706,6 +1706,21 @@ export async function runDeferredTurnCommit(input: DeferredTurnCommitInput): Pro
     });
   }
 
+  let promptEventsWritten = 0;
+  if (input.db && hiddenPromptEvents.length) {
+    try {
+      promptEventsWritten = await appendHiddenPromptEvents(
+        input.db,
+        input.sessionId,
+        hiddenPromptEvents,
+        taskId,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      warnings.push(`prompt event append failed: ${message}`);
+    }
+  }
+
   await mergeLastTurnDiagnostics(
     input.fs,
     input.sessionId,
@@ -1715,6 +1730,7 @@ export async function runDeferredTurnCommit(input: DeferredTurnCommitInput): Pro
       state_updated: !skipState,
       remembered,
       hidden_prompt_events: hiddenPromptEvents,
+      prompt_events_written: promptEventsWritten,
       background_commit_completed_at: nowIso(),
       background_commit_usage: commit.usage,
     },

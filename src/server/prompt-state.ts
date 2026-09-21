@@ -302,3 +302,31 @@ export async function appendToolResultEvent(
     hashSeed,
   });
 }
+
+/** Persist deferred-commit scene/memory deltas into the live prompt epoch. */
+export async function appendHiddenPromptEvents(
+  db: D1Database,
+  sessionId: string,
+  events: Array<{ kind: "context" | "memory"; content: string; hashSeed?: string }>,
+  taskId?: string | null,
+): Promise<number> {
+  if (!events.length) return 0;
+  const runtime = await sessionRuntime(db, sessionId);
+  let written = 0;
+  for (const event of events) {
+    const ok = await appendEvent(db, {
+      sessionId,
+      epoch: runtime.prompt_epoch,
+      kind: event.kind,
+      role: "user",
+      payload: {
+        content: event.content,
+        ...(taskId ? { task_id: taskId } : {}),
+      },
+      hashSeed: event.hashSeed || event.content,
+      stable: false,
+    });
+    if (ok) written += 1;
+  }
+  return written;
+}
