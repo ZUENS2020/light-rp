@@ -21,7 +21,7 @@ function settingsPayload(data: AppSettings): SettingsPut {
     worlds_dir: data.worlds_dir,
     home: data.home,
     compact_after_turns: data.compact_after_turns,
-    compression_threshold: data.compression_threshold ?? 0.5,
+    compression_threshold: data.compression_threshold ?? 0.35,
     lore_scan_depth: data.lore_scan_depth,
     lore_token_budget: data.lore_token_budget,
     max_tool_rounds: data.max_tool_rounds,

@@ -40,12 +40,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   llm: { temperature: 1, max_tokens: 16_384, timeout: 180, breach: true },
   memory: { world_char_limit: 2500, player_char_limit: 1400, character_char_limit: 1200 },
   compact_after_turns: 40,
-  compression_threshold: 0.5,
+  compression_threshold: 0.35,
   lore_scan_depth: 4,
   lore_token_budget: 8_192,
   max_tool_rounds: 4,
   // Message ceiling only; Hermes lean token budget is the primary assemble bound.
-  transcript_keep_after_compact: 12,
+  transcript_keep_after_compact: 8,
   context: structuredClone(DEFAULT_CONTEXT),
   mini: { ...DEFAULT_MINI },
 };

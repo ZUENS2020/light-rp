@@ -15,6 +15,7 @@ import {
   LEGACY_DEFAULT_CONTEXT_MAX_TOKENS,
   LEGACY_MINI_MAX_TOKENS,
   WORKING_CONTEXT_CAP,
+  REQUEST_CONTEXT_HARD_CAP,
   isLegacySectionBudget,
   leanTailTokenBudget,
   memoryIsDuplicate,
@@ -175,11 +176,11 @@ export function effectiveContextConfig(settings: AppSettings, model?: AiModelCon
   const configuredWindow = Math.max(1, Math.floor(settings.context.max_tokens));
   const modelWindow = model ? Math.max(1, Math.floor(model.context_window)) : configuredWindow;
   // Stale R2 settings still at the old 32k default should not pin GLM (~1.3M) to 32k.
-  // Always hard-cap at WORKING_CONTEXT_CAP (64k) — full provider windows are too costly/slow.
+  // Cap at WORKING_CONTEXT_CAP (32k), never above REQUEST_CONTEXT_HARD_CAP (128k).
   const staleSmallWindow =
     configuredWindow <= LEGACY_DEFAULT_CONTEXT_MAX_TOKENS && modelWindow > LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;
   const raisedWindow = staleSmallWindow
-    ? Math.min(WORKING_CONTEXT_CAP, DEFAULT_CONTEXT.max_tokens, modelWindow)
+    ? Math.min(WORKING_CONTEXT_CAP, DEFAULT_CONTEXT.max_tokens, modelWindow, REQUEST_CONTEXT_HARD_CAP)
     : configuredWindow;
   const budget =
     staleSmallWindow && isLegacySectionBudget(settings.context.budget)
@@ -198,7 +199,7 @@ export function effectiveContextConfig(settings: AppSettings, model?: AiModelCon
     ...settings.context,
     budget,
     history,
-    max_tokens: Math.min(raisedWindow, modelWindow, WORKING_CONTEXT_CAP),
+    max_tokens: Math.min(raisedWindow, modelWindow, WORKING_CONTEXT_CAP, REQUEST_CONTEXT_HARD_CAP),
     generation_reserve: Math.min(reserved, modelOutputCap),
   });
 }
