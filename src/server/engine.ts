@@ -7,7 +7,13 @@ import {
   storySummary,
   type LlmMessage,
 } from "../core/assemble";
-import { stripBreachAssistantPrefill, withBreachAssistantPrefill } from "../core/breach";
+import {
+  dropPolicyRefusalAssistants,
+  isPolicyRefusal,
+  reinforceBreachMessages,
+  stripBreachAssistantPrefill,
+  withBreachAssistantPrefill,
+} from "../core/breach";
 import {
   DEFAULT_CONTEXT,
   DEFAULT_MINI,
@@ -882,11 +888,12 @@ export async function runTurn(
     .join("\n\n");
   const extraSystem = breachSystem(library, breach);
   const phi = [breachPhi(library, breach), cardPhi].filter(Boolean).join("\n\n");
-  const historyForAssemble = sliceRoleplayHistoryForAssemble(
+  let historyForAssemble = sliceRoleplayHistoryForAssemble(
     historyMessages,
     settings.transcript_keep_after_compact,
     leanTailBudget,
   ).map((m) => ({ role: m.role, content: m.content }));
+  if (breach) historyForAssemble = dropPolicyRefusalAssistants(historyForAssemble);
   const assembled = assembleBudgeted(
     library,
     pack,
@@ -931,6 +938,8 @@ export async function runTurn(
     volatileTokens = prepared.volatileTokens;
   }
   // Prefill AFTER preparePrompt so the final chat() list ends with an in-character stub.
+  // When breach is on, strip prior policy-refusal assistants so they cannot train the next refusal.
+  if (breach) messages = dropPolicyRefusalAssistants(messages);
   messages = withBreachAssistantPrefill(messages, breach);
   const partialSink =
     opts?.ai?.db && opts.ai.taskId
@@ -970,6 +979,18 @@ export async function runTurn(
       });
       gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, baseChatOpts);
       // Replace in-memory buffer with the retry body so flush does not persist the cut.
+      if (partialSink) partialSink.onPartial(gm.text || "");
+    }
+    // Breach on + policy refusal: one reinforced full regenerate (non-stream). Not 续写.
+    const refused = breach && isPolicyRefusal(stripBreachAssistantPrefill(gm.text || ""));
+    if (refused) {
+      console.warn({
+        event: "llm.breach_refusal_retry",
+        chars: gm.text.length,
+        finish_reason: gm.finish_reason || null,
+      });
+      const reinforced = reinforceBreachMessages(messages);
+      gm = await chat(env, reinforced, null, settings.llm.temperature, outputTokens, settings.llm.timeout, baseChatOpts);
       if (partialSink) partialSink.onPartial(gm.text || "");
     }
   } finally {

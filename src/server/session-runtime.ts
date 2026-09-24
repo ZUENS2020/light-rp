@@ -11,7 +11,13 @@
  *   { type: "status", taskId, status, partialContent, leaseExpiresAt, lastActivityAt, abort }
  */
 import { DurableObject } from "cloudflare:workers";
-import { STALE_RUNNING_GRACE_MS } from "./generation-recovery";
+/**
+ * After nuclear SSE isolation (#54), story turns no longer push mid-stream partials.
+ * lastActivityAt only moves on attach / lease touchActivity / complete.
+ * Do NOT reuse STALE_RUNNING_GRACE_MS (120s) here — that marks the Play UI failed while
+ * a healthy Command Code call (timeout 240s) is still running with no token updates.
+ */
+export const RUNTIME_GENERATION_STALE_MS = 6 * 60_000;
 
 export type SessionRuntimeStatus = "idle" | "running" | "completed" | "failed";
 
@@ -104,7 +110,7 @@ export class SessionRuntime extends DurableObject<Env> {
       activeTaskId: input.taskId,
       status: "running",
       partialContent: "",
-      leaseExpiresAt: new Date(Date.now() + STALE_RUNNING_GRACE_MS * 2).toISOString(),
+      leaseExpiresAt: new Date(Date.now() + RUNTIME_GENERATION_STALE_MS).toISOString(),
       lastActivityAt: now,
       abort: false,
     };
@@ -123,7 +129,7 @@ export class SessionRuntime extends DurableObject<Env> {
       ...snapshot,
       partialContent: input.content,
       lastActivityAt: nowIso(),
-      leaseExpiresAt: new Date(Date.now() + STALE_RUNNING_GRACE_MS * 2).toISOString(),
+      leaseExpiresAt: new Date(Date.now() + RUNTIME_GENERATION_STALE_MS).toISOString(),
     };
     await this.save(next);
     this.broadcast({ type: "partial", taskId: input.taskId, content: input.content });
@@ -141,14 +147,17 @@ export class SessionRuntime extends DurableObject<Env> {
     const next: SessionRuntimeSnapshot = {
       ...snapshot,
       lastActivityAt: nowIso(),
-      leaseExpiresAt: new Date(Date.now() + STALE_RUNNING_GRACE_MS * 2).toISOString(),
+      leaseExpiresAt: new Date(Date.now() + RUNTIME_GENERATION_STALE_MS).toISOString(),
     };
     await this.save(next);
+    // Status-only keepalive for Play (no content) — generation may have no mid-stream partials.
+    this.broadcast(this.statusEvent(next));
     return next;
   }
 
   async onComplete(input: { taskId: string; content: string }): Promise<SessionRuntimeSnapshot | null> {
     const snapshot = await this.load();
+    // Same taskId may already be "failed" from a false stale alarm while the Worker still finished.
     if (snapshot.activeTaskId !== input.taskId) return null;
     const next: SessionRuntimeSnapshot = {
       activeTaskId: input.taskId,
@@ -206,7 +215,8 @@ export class SessionRuntime extends DurableObject<Env> {
       return;
     }
     const last = snapshot.lastActivityAt ? Date.parse(snapshot.lastActivityAt) : 0;
-    const stalled = !last || Date.now() - last > STALE_RUNNING_GRACE_MS;
+    // Wall-clock stall for Play UI only. D1 lease recovery still uses STALE_RUNNING_GRACE_MS.
+    const stalled = !last || Date.now() - last > RUNTIME_GENERATION_STALE_MS;
     if (stalled) {
       const next: SessionRuntimeSnapshot = {
         ...snapshot,
@@ -227,7 +237,7 @@ export class SessionRuntime extends DurableObject<Env> {
     // Healthy: bump soft lease marker and reschedule.
     const next: SessionRuntimeSnapshot = {
       ...snapshot,
-      leaseExpiresAt: new Date(Date.now() + STALE_RUNNING_GRACE_MS * 2).toISOString(),
+      leaseExpiresAt: new Date(Date.now() + RUNTIME_GENERATION_STALE_MS).toISOString(),
     };
     await this.save(next);
     await this.scheduleAlarm();
