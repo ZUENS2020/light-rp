@@ -336,6 +336,78 @@ export async function readChatCompletionSse(
     }
   };
 
+  const processSseLine = async (line: string): Promise<void> => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith(":")) return;
+    if (!trimmed.startsWith("data:")) return;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    const choices = (parsed.choices as Record<string, unknown>[] | undefined) || [];
+    const choice = choices[0] || {};
+    const delta = (choice.delta as Record<string, unknown> | undefined) || {};
+    const message = (choice.message as Record<string, unknown> | undefined) || {};
+    const piece =
+      typeof delta.content === "string" ? delta.content : typeof message.content === "string" ? message.content : "";
+    if (piece) {
+      // Some providers resend the full message content on the final chunk.
+      if (
+        typeof message.content === "string" &&
+        message.content.startsWith(contentText) &&
+        message.content.length >= contentText.length
+      ) {
+        contentText = message.content;
+      } else {
+        contentText += piece;
+      }
+      await emit();
+    }
+    const reasoningPiece = reasoningChannelText(delta) || reasoningChannelText(message);
+    if (reasoningPiece || delta.reasoning_content || delta.reasoning || message.reasoning_content || message.reasoning) {
+      reasoningPresent = true;
+      // Keep lease/DO alive during CoT even when we do not emit partials to the UI.
+      if (onHeartbeat && !contentText.trim()) {
+        const now = Date.now();
+        if (now - lastReasoningTouchMs >= 15_000) {
+          lastReasoningTouchMs = now;
+          try {
+            await onHeartbeat();
+          } catch {
+            /* consumer assertHeld handles lease loss */
+          }
+        }
+      }
+    }
+    if (promote && reasoningPiece) {
+      // Prefer incremental delta append; full-message reasoning replaces when it extends.
+      if (
+        typeof message.reasoning === "string" &&
+        message.reasoning.startsWith(reasoningText) &&
+        message.reasoning.length >= reasoningText.length
+      ) {
+        reasoningText = message.reasoning;
+      } else if (
+        typeof message.reasoning_content === "string" &&
+        message.reasoning_content.startsWith(reasoningText) &&
+        message.reasoning_content.length >= reasoningText.length
+      ) {
+        reasoningText = message.reasoning_content;
+      } else {
+        reasoningText += reasoningPiece;
+      }
+      if (!contentText.trim()) await emit();
+    }
+    if (choice.finish_reason) finish_reason = String(choice.finish_reason);
+    if (parsed.usage && typeof parsed.usage === "object") {
+      usage = parseUsage(parsed);
+    }
+  };
+
   while (true) {
     const { done, value } = await readChunk();
     if (done) break;
@@ -343,76 +415,15 @@ export async function readChatCompletionSse(
     const parts = buffer.split("\n");
     buffer = parts.pop() || "";
     for (const line of parts) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith(":")) continue;
-      if (!trimmed.startsWith("data:")) continue;
-      const data = trimmed.slice(5).trim();
-      if (!data || data === "[DONE]") continue;
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(data) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-      const choices = (parsed.choices as Record<string, unknown>[] | undefined) || [];
-      const choice = choices[0] || {};
-      const delta = (choice.delta as Record<string, unknown> | undefined) || {};
-      const message = (choice.message as Record<string, unknown> | undefined) || {};
-      const piece =
-        typeof delta.content === "string" ? delta.content : typeof message.content === "string" ? message.content : "";
-      if (piece) {
-        // Some providers resend the full message content on the final chunk.
-        if (
-          typeof message.content === "string" &&
-          message.content.startsWith(contentText) &&
-          message.content.length >= contentText.length
-        ) {
-          contentText = message.content;
-        } else {
-          contentText += piece;
-        }
-        await emit();
-      }
-      const reasoningPiece = reasoningChannelText(delta) || reasoningChannelText(message);
-      if (reasoningPiece || delta.reasoning_content || delta.reasoning || message.reasoning_content || message.reasoning) {
-        reasoningPresent = true;
-        // Keep lease/DO alive during CoT even when we do not emit partials to the UI.
-        if (onHeartbeat && !contentText.trim()) {
-          const now = Date.now();
-          if (now - lastReasoningTouchMs >= 15_000) {
-            lastReasoningTouchMs = now;
-            try {
-              await onHeartbeat();
-            } catch {
-              /* consumer assertHeld handles lease loss */
-            }
-          }
-        }
-      }
-      if (promote && reasoningPiece) {
-        // Prefer incremental delta append; full-message reasoning replaces when it extends.
-        if (
-          typeof message.reasoning === "string" &&
-          message.reasoning.startsWith(reasoningText) &&
-          message.reasoning.length >= reasoningText.length
-        ) {
-          reasoningText = message.reasoning;
-        } else if (
-          typeof message.reasoning_content === "string" &&
-          message.reasoning_content.startsWith(reasoningText) &&
-          message.reasoning_content.length >= reasoningText.length
-        ) {
-          reasoningText = message.reasoning_content;
-        } else {
-          reasoningText += reasoningPiece;
-        }
-        if (!contentText.trim()) await emit();
-      }
-      if (choice.finish_reason) finish_reason = String(choice.finish_reason);
-      if (parsed.usage && typeof parsed.usage === "object") {
-        usage = parseUsage(parsed);
-      }
+      await processSseLine(line);
     }
+  }
+  // Providers often omit a trailing newline on the final event (finish_reason / usage).
+  // Flush TextDecoder leftovers and any incomplete last line before treating the stream as done.
+  buffer += decoder.decode();
+  if (buffer.length) {
+    await processSseLine(buffer);
+    buffer = "";
   }
   await emit();
   const text = visibleText();
