@@ -355,7 +355,7 @@ export async function readChatCompletionSse(
     }
   };
 
-  const processSseLine = async (line: string): Promise<void> => {
+  const processSseLine = (line: string): void => {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith(":")) return;
     if (!trimmed.startsWith("data:")) return;
@@ -441,14 +441,14 @@ export async function readChatCompletionSse(
     const parts = buffer.split("\n");
     buffer = parts.pop() || "";
     for (const line of parts) {
-      await processSseLine(line);
+      processSseLine(line);
     }
   }
   // Providers often omit a trailing newline on the final event (finish_reason / usage).
   // Flush TextDecoder leftovers and any incomplete last line before treating the stream as done.
   buffer += decoder.decode();
   if (buffer.length) {
-    await processSseLine(buffer);
+    processSseLine(buffer);
     buffer = "";
   }
   emit();
@@ -642,6 +642,61 @@ async function rawChat(
         throw new LlmHttpError(response.status, errBody.slice(0, 800));
       }
     }
+    if (!response.ok) {
+      const rawText = await response.text();
+      throw new LlmHttpError(response.status, rawText.slice(0, 800));
+    }
+    const contentType = response.headers.get("content-type") || "";
+    if (wantStream && response.body && (/event-stream|octet-stream|jsonl/i.test(contentType) || !contentType)) {
+      // Never renew leases from inside the SSE reader: D1/DO there backpressures the TCP
+      // consumer and Command Code closes before the usage chunk (prompt_tokens=0 cuts).
+      // Queue consumer already runs startLeaseHeartbeat via waitUntil.
+      // Keep AbortSignal armed until the body is fully drained (timeout covers whole turn).
+      const streamed = await readChatCompletionSse(response.body, options.onPartial, undefined, heartbeatMs, {
+        promoteReasoningAsContent: false,
+      });
+      return {
+        text: streamed.text,
+        tool_calls: [],
+        finish_reason: streamed.finish_reason,
+        stream_done: streamed.stream_done,
+        usage: streamed.usage,
+        response_cache_status: responseCacheStatus(response, cache.skipCache),
+        request_body: requestBody,
+        reasoningOnly: streamed.reasoningOnly,
+      };
+    }
+    // Fallback: provider ignored stream or returned a full JSON body.
+    const rawText = await response.text();
+    if (wantStream && rawText.trim().startsWith("data:")) {
+      const streamed = await readChatCompletionSse(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(rawText));
+            controller.close();
+          },
+        }),
+        options.onPartial,
+        undefined,
+        heartbeatMs,
+        { promoteReasoningAsContent: false },
+      );
+      return {
+        text: streamed.text,
+        tool_calls: [],
+        finish_reason: streamed.finish_reason,
+        stream_done: streamed.stream_done,
+        usage: streamed.usage,
+        response_cache_status: responseCacheStatus(response, cache.skipCache),
+        request_body: requestBody,
+        reasoningOnly: streamed.reasoningOnly,
+      };
+    }
+    const parsed = parseResponse(response, rawText, requestBody, cache.skipCache);
+    // Never promote reasoning into player-visible text. With reasoning_effort:low,
+    // GLM-5.3 Flash usually returns only content; any leftover CoT stays in reasoning_*.
+    if (wantStream && options.onPartial && parsed.text) await options.onPartial(parsed.text);
+    return parsed;
   } catch (error) {
     const aborted = error instanceof Error && (error.name === "AbortError" || /aborted/i.test(error.message));
     if (aborted) throw new LlmTimeoutError(seconds);
@@ -649,58 +704,8 @@ async function rawChat(
   } finally {
     clearTimeout(timer);
   }
-  if (!response.ok) {
-    const rawText = await response.text();
-    throw new LlmHttpError(response.status, rawText.slice(0, 800));
-  }
-  const contentType = response.headers.get("content-type") || "";
-  if (wantStream && response.body && (/event-stream|octet-stream|jsonl/i.test(contentType) || !contentType)) {
-    const streamed = await readChatCompletionSse(response.body, options.onPartial, options.onHeartbeat, heartbeatMs, {
-      promoteReasoningAsContent: false,
-    });
-    return {
-      text: streamed.text,
-      tool_calls: [],
-      finish_reason: streamed.finish_reason,
-      stream_done: streamed.stream_done,
-      usage: streamed.usage,
-      response_cache_status: responseCacheStatus(response, cache.skipCache),
-      request_body: requestBody,
-      reasoningOnly: streamed.reasoningOnly,
-    };
-  }
-  // Fallback: provider ignored stream or returned a full JSON body.
-  const rawText = await response.text();
-  if (wantStream && rawText.trim().startsWith("data:")) {
-    const streamed = await readChatCompletionSse(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(rawText));
-          controller.close();
-        },
-      }),
-      options.onPartial,
-      options.onHeartbeat,
-      heartbeatMs,
-      { promoteReasoningAsContent: false },
-    );
-    return {
-      text: streamed.text,
-      tool_calls: [],
-      finish_reason: streamed.finish_reason,
-      stream_done: streamed.stream_done,
-      usage: streamed.usage,
-      response_cache_status: responseCacheStatus(response, cache.skipCache),
-      request_body: requestBody,
-      reasoningOnly: streamed.reasoningOnly,
-    };
-  }
-  const parsed = parseResponse(response, rawText, requestBody, cache.skipCache);
-  // Never promote reasoning into player-visible text. With reasoning_effort:low,
-  // GLM-5.3 Flash usually returns only content; any leftover CoT stays in reasoning_*.
-  if (wantStream && options.onPartial && parsed.text) await options.onPartial(parsed.text);
-  return parsed;
 }
+
 
 export async function chat(
   env: Env,
