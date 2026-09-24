@@ -243,66 +243,103 @@ export function effectiveLoreTokenBudget(
   return contextCfg.budget.lore;
 }
 
-/** Throttle D1 partial writes during SSE (avoid rows_written blowups). */
+/**
+ * Progressive UI updates during SSE. Critical: onPartial must return void and never
+ * make the SSE reader await D1/DO. Concurrent subrequests while draining Command Code
+ * streams cause dirty TCP closes (prompt_tokens=0, mid-sentence cuts).
+ *
+ * - DO/runtime: fire-and-forget, ~400ms throttle (Play WS).
+ * - D1 result_content: fire-and-forget, ~2s throttle (poll fallback + lease bump).
+ * - Lease renew during long CoT with no content is owned by startLeaseHeartbeat.
+ */
 function createPartialContentSink(
   db: D1Database,
   taskId: string,
   options: {
     intervalMs?: number;
+    d1IntervalMs?: number;
     leaseOwner?: string;
     onLeaseTouch?: () => Promise<void>;
     onRuntimePartial?: (content: string) => Promise<void>;
   } = {},
 ) {
-  const intervalMs = options.intervalMs ?? 400;
-  let lastAt = 0;
+  const runtimeIntervalMs = options.intervalMs ?? 400;
+  const d1IntervalMs = options.d1IntervalMs ?? 2_000;
+  let lastRuntimeAt = 0;
+  let lastD1At = 0;
   let lastText = "";
   let chain: Promise<void> = Promise.resolve();
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let runtimeTimer: ReturnType<typeof setTimeout> | null = null;
+  let d1Timer: ReturnType<typeof setTimeout> | null = null;
 
-  const write = (content: string) => {
-    lastText = content;
+  const writeD1 = (content: string) => {
     chain = chain
       .then(async () => {
         const ok = await updateTaskPartialContent(db, taskId, content, options.leaseOwner);
-        // When leaseOwner is set, the UPDATE already extends the lease. Otherwise
-        // call onLeaseTouch so the scheduler heartbeat can renew updated_at.
         if (ok && !options.leaseOwner && options.onLeaseTouch) await options.onLeaseTouch();
-        // Stolen lease: nudge heartbeat so assertHeld fails instead of completing.
         if (!ok && options.leaseOwner && options.onLeaseTouch) await options.onLeaseTouch();
-        if (ok && options.onRuntimePartial) await options.onRuntimePartial(content);
       })
       .catch(() => undefined);
-    return chain;
+  };
+
+  const writeRuntime = (content: string) => {
+    if (!options.onRuntimePartial) return;
+    chain = chain
+      .then(async () => {
+        await options.onRuntimePartial!(content);
+      })
+      .catch(() => undefined);
+  };
+
+  const schedule = (text: string) => {
+    lastText = text;
+    const now = Date.now();
+    if (now - lastRuntimeAt >= runtimeIntervalMs) {
+      lastRuntimeAt = now;
+      if (runtimeTimer) {
+        clearTimeout(runtimeTimer);
+        runtimeTimer = null;
+      }
+      writeRuntime(text);
+    } else if (!runtimeTimer) {
+      const wait = Math.max(0, runtimeIntervalMs - (now - lastRuntimeAt));
+      runtimeTimer = setTimeout(() => {
+        runtimeTimer = null;
+        lastRuntimeAt = Date.now();
+        writeRuntime(lastText);
+      }, wait);
+    }
+    if (now - lastD1At >= d1IntervalMs) {
+      lastD1At = now;
+      if (d1Timer) {
+        clearTimeout(d1Timer);
+        d1Timer = null;
+      }
+      writeD1(text);
+    } else if (!d1Timer) {
+      const wait = Math.max(0, d1IntervalMs - (now - lastD1At));
+      d1Timer = setTimeout(() => {
+        d1Timer = null;
+        lastD1At = Date.now();
+        writeD1(lastText);
+      }, wait);
+    }
   };
 
   return {
-    onPartial: (text: string) => {
-      const now = Date.now();
-      if (text === lastText) return chain;
-      if (now - lastAt >= intervalMs) {
-        lastAt = now;
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
-        return write(text);
-      }
-      if (!timer) {
-        const wait = Math.max(0, intervalMs - (now - lastAt));
-        timer = setTimeout(() => {
-          timer = null;
-          lastAt = Date.now();
-          void write(lastText);
-        }, wait);
-      }
-      lastText = text;
-      return chain;
+    // Sync + void: adapters fire-and-forget; never hand them a Promise to await.
+    onPartial: (text: string): void => {
+      if (text === lastText) return;
+      schedule(text);
     },
     flush: async () => {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
+      if (runtimeTimer) {
+        clearTimeout(runtimeTimer);
+        runtimeTimer = null;
+      }
+      if (d1Timer) {
+        clearTimeout(d1Timer);
+        d1Timer = null;
       }
       await chain;
       if (lastText) {
@@ -983,29 +1020,51 @@ export async function runTurn(
     skipCache: storyRequestKind === "rewrite" || storyRequestKind === "regenerate",
     ...(opts?.ai?.onLeaseTouch ? { onHeartbeat: opts.ai.onLeaseTouch } : {}),
   } as const;
+  const storyChatOpts = {
+    ...baseChatOpts,
+    ...(partialSink ? { onPartial: partialSink.onPartial } : {}),
+  } as const;
+  const isDirtyStream = (result: Awaited<ReturnType<typeof chat>>) =>
+    Boolean(partialSink) && !(result.usage?.prompt_tokens > 0) && result.finish_reason !== "length";
+
   let gm: Awaited<ReturnType<typeof chat>>;
   try {
-    gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, {
-      ...baseChatOpts,
-      ...(partialSink ? { onPartial: partialSink.onPartial } : {}),
-    });
+    gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, storyChatOpts);
+    // Dirty close (no usage): full regenerate once — not mid-text 续写. Transient TCP cuts
+    // after D1/DO contention often succeed on a clean second drain.
+    if (isDirtyStream(gm)) {
+      console.warn({
+        event: "llm.stream_incomplete_retry",
+        finish_reason: gm.finish_reason || null,
+        stream_done: Boolean(gm.stream_done),
+        chars: gm.text.length,
+      });
+      await partialSink?.flush().catch(() => undefined);
+      gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, storyChatOpts);
+    }
   } finally {
     if (partialSink) await partialSink.flush();
   }
-    const { visible, trailer } = parseTrailer(gm.text);
+  const { visible, trailer } = parseTrailer(gm.text);
   // length = provider hit max_tokens (GLM CoT shares this pool); missing finish_reason after a
   // streamed body usually means the upstream closed early (incomplete SSE).
   const hitLength = gm.finish_reason === "length";
   // Command Code is asked for stream_options.include_usage. Clean completions always carry
-  // prompt_tokens>0. A stop/[DONE] with usage=0 means the socket died before the usage chunk
-  // (often after a stalled heartbeat/onPartial) — treat as incomplete even if finish_reason
-  // looked like stop.
+  // prompt_tokens>0. A stop/[DONE] with usage=0 means the socket died before the usage chunk.
   const missingStreamUsage = Boolean(partialSink) && !(gm.usage?.prompt_tokens > 0);
   const incompleteStream =
     Boolean(partialSink) && missingStreamUsage && gm.finish_reason !== "length";
   const truncated = hitLength || incompleteStream;
   if (hitLength) warnings.push("回复在 max_tokens 处被截断");
   else if (incompleteStream) warnings.push("回复流提前结束（未收到 usage / 流未完整收尾）");
+  if (incompleteStream) {
+    console.warn({
+      event: "llm.stream_incomplete",
+      finish_reason: gm.finish_reason || null,
+      stream_done: Boolean(gm.stream_done),
+      chars: gm.text.length,
+    });
+  }
   // Strip echoed prefill if the model included it in the completion.
   let replyText = stripBreachAssistantPrefill(visible);
   if (truncated && replyText.trim()) {
