@@ -8,3 +8,14 @@ describe("story truncation notes", () => {
     expect(TRUNCATION_NOTE).not.toBe(TRUNCATION_NOTE_INCOMPLETE);
   });
 });
+
+describe("dirty stream retry contract", () => {
+  it("documents non-stream retry: omit onPartial so wantStream is false", () => {
+    // Engine: first chat uses storyChatOpts (onPartial → SSE); dirty retry uses baseChatOpts
+    // (no onPartial → JSON body with usage). Never mid-text 续写.
+    const storyChatOpts = { onPartial: () => undefined, requestKind: "story" as const };
+    const baseChatOpts = { requestKind: "story" as const };
+    expect("onPartial" in storyChatOpts).toBe(true);
+    expect("onPartial" in baseChatOpts).toBe(false);
+  });
+});

@@ -244,108 +244,36 @@ export function effectiveLoreTokenBudget(
 }
 
 /**
- * Progressive UI updates during SSE. Critical: onPartial must return void and never
- * make the SSE reader await D1/DO. Concurrent subrequests while draining Command Code
- * streams cause dirty TCP closes (prompt_tokens=0, mid-sentence cuts).
+ * Progressive UI buffer during SSE. Nuclear isolation: onPartial MUST only mutate
+ * in-memory state. Any D1 / SessionRuntime DO write concurrent with draining a
+ * Command Code fetch body causes dirty TCP closes (prompt_tokens=0, mid-sentence cuts)
+ * even when fire-and-forget — Workers subrequest slots still contend with the body reader.
  *
- * - DO/runtime: fire-and-forget, ~400ms throttle (Play WS).
- * - D1 result_content: fire-and-forget, ~2s throttle (poll fallback + lease bump).
- * - Lease renew during long CoT with no content is owned by startLeaseHeartbeat.
+ * Flush D1 + DO exactly once after chat() returns. Lease renew during long CoT is owned
+ * by startLeaseHeartbeat (waitUntil), not by this sink.
  */
-function createPartialContentSink(
+export function createPartialContentSink(
   db: D1Database,
   taskId: string,
   options: {
-    intervalMs?: number;
-    d1IntervalMs?: number;
     leaseOwner?: string;
     onLeaseTouch?: () => Promise<void>;
     onRuntimePartial?: (content: string) => Promise<void>;
   } = {},
 ) {
-  const runtimeIntervalMs = options.intervalMs ?? 400;
-  const d1IntervalMs = options.d1IntervalMs ?? 2_000;
-  let lastRuntimeAt = 0;
-  let lastD1At = 0;
   let lastText = "";
-  let chain: Promise<void> = Promise.resolve();
-  let runtimeTimer: ReturnType<typeof setTimeout> | null = null;
-  let d1Timer: ReturnType<typeof setTimeout> | null = null;
-
-  const writeD1 = (content: string) => {
-    chain = chain
-      .then(async () => {
-        const ok = await updateTaskPartialContent(db, taskId, content, options.leaseOwner);
-        if (ok && !options.leaseOwner && options.onLeaseTouch) await options.onLeaseTouch();
-        if (!ok && options.leaseOwner && options.onLeaseTouch) await options.onLeaseTouch();
-      })
-      .catch(() => undefined);
-  };
-
-  const writeRuntime = (content: string) => {
-    if (!options.onRuntimePartial) return;
-    chain = chain
-      .then(async () => {
-        await options.onRuntimePartial!(content);
-      })
-      .catch(() => undefined);
-  };
-
-  const schedule = (text: string) => {
-    lastText = text;
-    const now = Date.now();
-    if (now - lastRuntimeAt >= runtimeIntervalMs) {
-      lastRuntimeAt = now;
-      if (runtimeTimer) {
-        clearTimeout(runtimeTimer);
-        runtimeTimer = null;
-      }
-      writeRuntime(text);
-    } else if (!runtimeTimer) {
-      const wait = Math.max(0, runtimeIntervalMs - (now - lastRuntimeAt));
-      runtimeTimer = setTimeout(() => {
-        runtimeTimer = null;
-        lastRuntimeAt = Date.now();
-        writeRuntime(lastText);
-      }, wait);
-    }
-    if (now - lastD1At >= d1IntervalMs) {
-      lastD1At = now;
-      if (d1Timer) {
-        clearTimeout(d1Timer);
-        d1Timer = null;
-      }
-      writeD1(text);
-    } else if (!d1Timer) {
-      const wait = Math.max(0, d1IntervalMs - (now - lastD1At));
-      d1Timer = setTimeout(() => {
-        d1Timer = null;
-        lastD1At = Date.now();
-        writeD1(lastText);
-      }, wait);
-    }
-  };
 
   return {
-    // Sync + void: adapters fire-and-forget; never hand them a Promise to await.
+    /** Sync + void: store only. Never schedule D1/DO/timers here. */
     onPartial: (text: string): void => {
-      if (text === lastText) return;
-      schedule(text);
+      lastText = text;
     },
+    peek: (): string => lastText,
     flush: async () => {
-      if (runtimeTimer) {
-        clearTimeout(runtimeTimer);
-        runtimeTimer = null;
-      }
-      if (d1Timer) {
-        clearTimeout(d1Timer);
-        d1Timer = null;
-      }
-      await chain;
-      if (lastText) {
-        const ok = await updateTaskPartialContent(db, taskId, lastText, options.leaseOwner).catch(() => false);
-        if (ok && options.onRuntimePartial) await options.onRuntimePartial(lastText).catch(() => undefined);
-      }
+      if (!lastText) return;
+      const ok = await updateTaskPartialContent(db, taskId, lastText, options.leaseOwner).catch(() => false);
+      if (options.onRuntimePartial) await options.onRuntimePartial(lastText).catch(() => undefined);
+      if (ok && options.onLeaseTouch) await options.onLeaseTouch().catch(() => undefined);
     },
   };
 }
@@ -1030,8 +958,9 @@ export async function runTurn(
   let gm: Awaited<ReturnType<typeof chat>>;
   try {
     gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, storyChatOpts);
-    // Dirty close (no usage): full regenerate once — not mid-text 续写. Transient TCP cuts
-    // after D1/DO contention often succeed on a clean second drain.
+    // Dirty close (no usage): one full regenerate WITHOUT onPartial so wantStream is false.
+    // Streaming again with a sink (even zero-I/O) still races Worker fetch-body draining;
+    // non-stream JSON returns usage reliably. Not mid-text 续写.
     if (isDirtyStream(gm)) {
       console.warn({
         event: "llm.stream_incomplete_retry",
@@ -1039,8 +968,9 @@ export async function runTurn(
         stream_done: Boolean(gm.stream_done),
         chars: gm.text.length,
       });
-      await partialSink?.flush().catch(() => undefined);
-      gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, storyChatOpts);
+      gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, baseChatOpts);
+      // Replace in-memory buffer with the retry body so flush does not persist the cut.
+      if (partialSink) partialSink.onPartial(gm.text || "");
     }
   } finally {
     if (partialSink) await partialSink.flush();
