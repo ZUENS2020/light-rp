@@ -340,8 +340,12 @@ export async function readChatCompletionSse(
         delayMs(heartbeatIntervalMs).then(() => ({ kind: "tick" as const })),
       ]);
       if (raced.kind === "tick") {
+        // Fire-and-forget: awaiting D1/DO here stalls SSE drain and upstream closes early.
         try {
-          await onHeartbeat();
+          const maybe = onHeartbeat();
+          if (maybe && typeof (maybe as Promise<void>).then === "function") {
+            void (maybe as Promise<void>).catch(() => undefined);
+          }
         } catch {
           /* consumer assertHeld handles lease loss */
         }
@@ -395,7 +399,10 @@ export async function readChatCompletionSse(
         if (now - lastReasoningTouchMs >= 15_000) {
           lastReasoningTouchMs = now;
           try {
-            await onHeartbeat();
+            const maybe = onHeartbeat();
+            if (maybe && typeof (maybe as Promise<void>).then === "function") {
+              void (maybe as Promise<void>).catch(() => undefined);
+            }
           } catch {
             /* consumer assertHeld handles lease loss */
           }
@@ -446,9 +453,11 @@ export async function readChatCompletionSse(
   }
   emit();
   const text = visibleText();
+  // Do NOT synthesize finish_reason from [DONE] alone: a dirty close can still emit
+  // stop/[DONE] before usage. Missing usage (with include_usage) is the dirty signal.
   return {
     text,
-    finish_reason: finish_reason || (sawDone ? "stop" : undefined),
+    finish_reason,
     stream_done: sawDone,
     usage,
     reasoningOnly: reasoningPresent && !text.trim(),

@@ -62,7 +62,7 @@ describe("readChatCompletionSse", () => {
   });
 
 
-  it("treats [DONE] without finish_reason as a clean stop", async () => {
+  it("records stream_done on [DONE] without synthesizing finish_reason", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         const enc = new TextEncoder();
@@ -74,7 +74,9 @@ describe("readChatCompletionSse", () => {
     const result = await readChatCompletionSse(stream);
     expect(result.text).toBe("你好");
     expect(result.stream_done).toBe(true);
-    expect(result.finish_reason).toBe("stop");
+    // Dirty closes can emit [DONE] without usage; engine treats missing usage as incomplete.
+    expect(result.finish_reason).toBeUndefined();
+    expect(result.usage.prompt_tokens).toBe(0);
   });
 
   it("does not await a slow onPartial while draining SSE", async () => {
@@ -104,6 +106,64 @@ describe("readChatCompletionSse", () => {
     expect(result.finish_reason).toBe("stop");
     expect(blockedCalls).toBeGreaterThanOrEqual(1);
     release();
+  });
+
+  it("does not await a slow onHeartbeat while draining SSE", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let heartbeatCalls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const enc = new TextEncoder();
+        controller.enqueue(enc.encode(`data: ${chunk("慢")}\n\n`));
+        // Hold the next chunk past one heartbeat tick so the race fires.
+        await new Promise((r) => setTimeout(r, 40));
+        controller.enqueue(
+          enc.encode(
+            `data: ${JSON.stringify({
+              choices: [{ delta: { content: "完" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 5, completion_tokens: 2 },
+            })}\n\n`,
+          ),
+        );
+        controller.enqueue(enc.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const started = Date.now();
+    const result = await readChatCompletionSse(
+      stream,
+      undefined,
+      async () => {
+        heartbeatCalls += 1;
+        await gate;
+      },
+      10,
+    );
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(result.text).toBe("慢完");
+    expect(result.finish_reason).toBe("stop");
+    expect(result.usage.prompt_tokens).toBe(5);
+    expect(heartbeatCalls).toBeGreaterThanOrEqual(1);
+    release();
+  });
+
+  it("keeps finish_reason undefined and usage zero when stop arrives without usage", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const enc = new TextEncoder();
+        controller.enqueue(enc.encode(`data: ${chunk("半截", "stop")}\n\n`));
+        controller.enqueue(enc.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const result = await readChatCompletionSse(stream);
+    expect(result.text).toBe("半截");
+    expect(result.finish_reason).toBe("stop");
+    expect(result.stream_done).toBe(true);
+    expect(result.usage.prompt_tokens).toBe(0);
   });
 
   it("captures finish_reason and usage when the final SSE line has no trailing newline", async () => {
