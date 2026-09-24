@@ -14,6 +14,8 @@ export type ChatResult = {
   text: string;
   tool_calls: ToolCall[];
   finish_reason?: string;
+  /** True when the SSE stream ended with data: [DONE]. */
+  stream_done?: boolean;
   usage: AiUsage;
   response_cache_status: ResponseCacheStatus;
   request_body: string;
@@ -198,6 +200,7 @@ function publicResult(parsed: ParsedResponse): ChatResult {
     text: parsed.text,
     tool_calls: parsed.tool_calls,
     ...(parsed.finish_reason ? { finish_reason: parsed.finish_reason } : {}),
+    ...(parsed.stream_done ? { stream_done: true } : {}),
     usage: parsed.usage,
     response_cache_status: parsed.response_cache_status,
     request_body: parsed.request_body,
@@ -292,6 +295,7 @@ export async function readChatCompletionSse(
 ): Promise<{
   text: string;
   finish_reason?: string;
+  stream_done: boolean;
   usage: AiUsage;
   reasoningOnly: boolean;
 }> {
@@ -301,6 +305,7 @@ export async function readChatCompletionSse(
   let contentText = "";
   let reasoningText = "";
   let finish_reason: string | undefined;
+  let sawDone = false;
   let usage: AiUsage = { prompt_tokens: 0, completion_tokens: 0, reasoning_tokens: 0, cached_input_tokens: 0 };
   let reasoningPresent = false;
   let lastEmitted = "";
@@ -309,11 +314,21 @@ export async function readChatCompletionSse(
 
   const visibleText = () => (contentText.trim() ? contentText : promote ? reasoningText : contentText);
 
-  const emit = async () => {
+  // Never await onPartial while draining the SSE body: D1/DO writes backpressure the
+  // TCP consumer and upstream often closes mid-stream (no finish_reason / usage).
+  // engine.ts still awaits partialSink.flush() after chat() returns.
+  const emit = () => {
     const text = visibleText();
     if (!onPartial || text === lastEmitted) return;
     lastEmitted = text;
-    await onPartial(text);
+    try {
+      const maybe = onPartial(text);
+      if (maybe && typeof (maybe as Promise<void>).then === "function") {
+        void (maybe as Promise<void>).catch(() => undefined);
+      }
+    } catch {
+      /* partial sink errors must not abort SSE drain */
+    }
   };
 
   const readChunk = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
@@ -341,7 +356,11 @@ export async function readChatCompletionSse(
     if (!trimmed || trimmed.startsWith(":")) return;
     if (!trimmed.startsWith("data:")) return;
     const data = trimmed.slice(5).trim();
-    if (!data || data === "[DONE]") return;
+    if (!data) return;
+    if (data === "[DONE]") {
+      sawDone = true;
+      return;
+    }
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(data) as Record<string, unknown>;
@@ -365,7 +384,7 @@ export async function readChatCompletionSse(
       } else {
         contentText += piece;
       }
-      await emit();
+      emit();
     }
     const reasoningPiece = reasoningChannelText(delta) || reasoningChannelText(message);
     if (reasoningPiece || delta.reasoning_content || delta.reasoning || message.reasoning_content || message.reasoning) {
@@ -400,7 +419,7 @@ export async function readChatCompletionSse(
       } else {
         reasoningText += reasoningPiece;
       }
-      if (!contentText.trim()) await emit();
+      if (!contentText.trim()) emit();
     }
     if (choice.finish_reason) finish_reason = String(choice.finish_reason);
     if (parsed.usage && typeof parsed.usage === "object") {
@@ -425,11 +444,12 @@ export async function readChatCompletionSse(
     await processSseLine(buffer);
     buffer = "";
   }
-  await emit();
+  emit();
   const text = visibleText();
   return {
     text,
-    finish_reason,
+    finish_reason: finish_reason || (sawDone ? "stop" : undefined),
+    stream_done: sawDone,
     usage,
     reasoningOnly: reasoningPresent && !text.trim(),
   };
@@ -633,6 +653,7 @@ async function rawChat(
       text: streamed.text,
       tool_calls: [],
       finish_reason: streamed.finish_reason,
+      stream_done: streamed.stream_done,
       usage: streamed.usage,
       response_cache_status: responseCacheStatus(response, cache.skipCache),
       request_body: requestBody,
@@ -658,6 +679,7 @@ async function rawChat(
       text: streamed.text,
       tool_calls: [],
       finish_reason: streamed.finish_reason,
+      stream_done: streamed.stream_done,
       usage: streamed.usage,
       response_cache_status: responseCacheStatus(response, cache.skipCache),
       request_body: requestBody,

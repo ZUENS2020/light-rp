@@ -996,7 +996,10 @@ export async function runTurn(
   // length = provider hit max_tokens (GLM CoT shares this pool); missing finish_reason after a
   // streamed body usually means the upstream closed early (incomplete SSE).
   const hitLength = gm.finish_reason === "length";
-  const incompleteStream = Boolean(partialSink) && !gm.finish_reason;
+  // Missing finish_reason after a body used to mean "upstream closed early". After we stopped
+  // awaiting D1 onPartial mid-SSE, a clean [DONE] without finish_reason is treated as stop
+  // (adapters set finish_reason/stream_done). Only flag incomplete when the stream died dirty.
+  const incompleteStream = Boolean(partialSink) && !gm.finish_reason && !gm.stream_done;
   const truncated = hitLength || incompleteStream;
   if (hitLength) warnings.push("回复在 max_tokens 处被截断");
   else if (incompleteStream) warnings.push("回复流提前结束（未收到 finish_reason）");

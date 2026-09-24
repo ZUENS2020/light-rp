@@ -61,6 +61,51 @@ describe("readChatCompletionSse", () => {
     expect(result.finish_reason).toBe("stop");
   });
 
+
+  it("treats [DONE] without finish_reason as a clean stop", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const enc = new TextEncoder();
+        controller.enqueue(enc.encode(`data: ${chunk("你好")}\n\n`));
+        controller.enqueue(enc.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const result = await readChatCompletionSse(stream);
+    expect(result.text).toBe("你好");
+    expect(result.stream_done).toBe(true);
+    expect(result.finish_reason).toBe("stop");
+  });
+
+  it("does not await a slow onPartial while draining SSE", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let blockedCalls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const enc = new TextEncoder();
+        controller.enqueue(enc.encode(`data: ${chunk("一")}\n\n`));
+        controller.enqueue(enc.encode(`data: ${chunk("二", "stop")}\n\n`));
+        controller.enqueue(enc.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const started = Date.now();
+    const resultP = readChatCompletionSse(stream, async () => {
+      blockedCalls += 1;
+      await gate;
+    });
+    // Drain must finish even while onPartial is still blocked.
+    const result = await resultP;
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(result.text).toBe("一二");
+    expect(result.finish_reason).toBe("stop");
+    expect(blockedCalls).toBeGreaterThanOrEqual(1);
+    release();
+  });
+
   it("captures finish_reason and usage when the final SSE line has no trailing newline", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
