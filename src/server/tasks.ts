@@ -617,7 +617,7 @@ export async function completeTask(db: D1Database, id: string, completion: TaskC
   const contentHash = await sha256(completion.content);
   const hiddenEvents = includeInPrompt ? completion.hiddenEvents || [] : [];
   const firstEventSequence = includeInPrompt ? await nextPromptEventSequence(db, task.session_id) : 0;
-  const usage = completion.usage || { prompt_tokens: 0, completion_tokens: 0, cached_input_tokens: 0 };
+  const usage = completion.usage || { prompt_tokens: 0, completion_tokens: 0, reasoning_tokens: 0, cached_input_tokens: 0 };
   const nextEpoch = completion.rotatePromptEpochReason ? runtime.prompt_epoch + 1 : null;
   const nextAffinity =
     nextEpoch == null

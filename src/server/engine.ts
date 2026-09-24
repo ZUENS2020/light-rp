@@ -67,6 +67,7 @@ import {
   stableStringify,
   type AiModelConfig,
   type AiRequestOptions,
+  REASONING_OUTPUT_HEADROOM,
   type AiUsage,
   type ResponseCacheStatus,
 } from "../core/ai";
@@ -168,7 +169,16 @@ export function effectiveOutputTokens(
   const configured = Math.max(1, Math.floor(settings.llm.max_tokens));
   // Story kinds: never below STORY_OUTPUT_TOKEN_FLOOR; no legacy remap that would lower a 16k+ setting.
   const wanted = isStoryOutputKind(requestKind) ? Math.max(configured, STORY_OUTPUT_TOKEN_FLOOR) : configured;
-  return model ? Math.min(wanted, Math.max(1, Math.floor(model.max_output_tokens))) : wanted;
+  if (!model) return wanted;
+  const modelCap = Math.max(1, Math.floor(model.max_output_tokens));
+  // Reasoning models: assemble reserves visible content only; API adds REASONING_OUTPUT_HEADROOM.
+  if (isStoryOutputKind(requestKind) && model.supports_reasoning) {
+    const withHeadroom = modelCap - REASONING_OUTPUT_HEADROOM;
+    // Only split when the model ceiling has room for both content floor and CoT slack.
+    const contentCap = withHeadroom >= STORY_OUTPUT_TOKEN_FLOOR ? withHeadroom : modelCap;
+    return Math.min(wanted, contentCap);
+  }
+  return Math.min(wanted, modelCap);
 }
 
 export function effectiveContextConfig(settings: AppSettings, model?: AiModelConfig) {
@@ -659,6 +669,7 @@ function addUsage(a: AiUsage, b: AiUsage): AiUsage {
   return {
     prompt_tokens: a.prompt_tokens + b.prompt_tokens,
     completion_tokens: a.completion_tokens + b.completion_tokens,
+    reasoning_tokens: (a.reasoning_tokens || 0) + (b.reasoning_tokens || 0),
     cached_input_tokens: a.cached_input_tokens + b.cached_input_tokens,
   };
 }
@@ -1022,6 +1033,7 @@ export async function runTurn(
         usage: {
           prompt_tokens: (gm.usage?.prompt_tokens || 0) + (continued.usage?.prompt_tokens || 0),
           completion_tokens: (gm.usage?.completion_tokens || 0) + (continued.usage?.completion_tokens || 0),
+          reasoning_tokens: (gm.usage?.reasoning_tokens || 0) + (continued.usage?.reasoning_tokens || 0),
           cached_input_tokens: (gm.usage?.cached_input_tokens || 0) + (continued.usage?.cached_input_tokens || 0),
         },
       };
@@ -1048,7 +1060,7 @@ export async function runTurn(
   const deferCommit = Boolean(opts?.ai);
   const nextScene = Object.keys(trailer).length ? applyScenePatch(scene, trailer) : scene;
   const remembered: string[] = [];
-  const commitUsage: AiUsage = { prompt_tokens: 0, completion_tokens: 0, cached_input_tokens: 0 };
+  const commitUsage: AiUsage = { prompt_tokens: 0, completion_tokens: 0, reasoning_tokens: 0, cached_input_tokens: 0 };
   let events = trailerEvents(trailer);
   let memoryOps = [
     ...trailerMemoryCandidates(trailer),

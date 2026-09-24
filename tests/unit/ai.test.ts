@@ -53,9 +53,9 @@ describe("AI prompt and cache invariants", () => {
   it("rejects mutated prefixes", () =>
     expect(isMessagePrefix([{ role: "user", content: "a" }], [{ role: "user", content: "changed" }])).toBe(false));
   it("computes cache ratio", () =>
-    expect(cacheRatio({ prompt_tokens: 1_000, completion_tokens: 50, cached_input_tokens: 600 })).toBe(0.6));
+    expect(cacheRatio({ prompt_tokens: 1_000, completion_tokens: 50, reasoning_tokens: 0, cached_input_tokens: 600 })).toBe(0.6));
   it("returns zero cache ratio without prompt tokens", () =>
-    expect(cacheRatio({ prompt_tokens: 0, completion_tokens: 0, cached_input_tokens: 0 })).toBe(0));
+    expect(cacheRatio({ prompt_tokens: 0, completion_tokens: 0, reasoning_tokens: 0, cached_input_tokens: 0 })).toBe(0));
   it("rotates affinity by epoch", async () =>
     expect(
       await affinityKey(

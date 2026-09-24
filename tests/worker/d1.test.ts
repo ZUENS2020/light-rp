@@ -127,7 +127,7 @@ describe("D1 task and model integration", () => {
     await completeTask(env.DB, created.task.id, {
       content: "world",
       cacheStatus: "HIT",
-      usage: { prompt_tokens: 1_000, completion_tokens: 20, cached_input_tokens: 700 },
+      usage: { prompt_tokens: 1_000, completion_tokens: 20, reasoning_tokens: 0, cached_input_tokens: 700 },
       stablePrefixTokens: 800,
       volatileTokens: 200,
     });
