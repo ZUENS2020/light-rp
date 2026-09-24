@@ -428,10 +428,13 @@ function apiMaxTokensFor(model: AiModelConfig, contentMax: number, requestKind?:
   const cappedContent = Math.min(Math.max(1, contentMax), model.max_output_tokens);
   const story =
     requestKind == null || requestKind === "story" || requestKind === "rewrite" || requestKind === "regenerate";
-  // GLM shares one completion pool between CoT and visible text. Request the full model
-  // ceiling for story so thinking cannot exhaust a content-sized max_tokens; assemble()
-  // still only reserves the visible content budget in the working window.
-  if (story && model.supports_reasoning) return Math.max(1, Math.floor(model.max_output_tokens));
+  // GLM-5.3 always thinks and shares one max_tokens pool with visible text. Requesting the
+  // full model ceiling (e.g. 32k) makes Flash burn the pool on CoT and return tiny length
+  // truncations. Keep the call near the content budget with only a small CoT headroom.
+  if (story && model.supports_reasoning) {
+    const cotHeadroom = 2_048;
+    return Math.min(model.max_output_tokens, cappedContent + cotHeadroom);
+  }
   return cappedContent;
 }
 
@@ -510,7 +513,11 @@ async function rawChat(
   // Stream only for plain text completions with an onPartial sink (story TTFT).
   // Tool-call streaming is intentionally out of scope — keep the JSON path.
   const wantStream = Boolean(options.onPartial) && !normalizedTools?.length;
-  if (wantStream) payload.stream = true;
+  if (wantStream) {
+    payload.stream = true;
+    // Without this, Command Code often omits usage on SSE (live truncations showed prompt_tokens=0).
+    payload.stream_options = { include_usage: true };
+  }
   // request_body omits stream so cache keys / diagnostics stay comparable to non-stream.
   const requestBody = stableStringify(Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "stream")));
   let normalizedPayload = JSON.parse(stableStringify(payload)) as Record<string, unknown>;

@@ -10,7 +10,6 @@ import { cloneAppSettings, DEFAULT_SETTINGS, LEGACY_LORE_TOKEN_BUDGET } from "..
 import { DEFAULT_MODEL, REASONING_OUTPUT_HEADROOM, type AiModelConfig } from "../../src/core/ai";
 import {
   DEFAULT_CONTEXT,
-  DEFAULT_MINI,
   DEFAULT_SECTION_BUDGET,
   LEGACY_DEFAULT_CONTEXT_MAX_TOKENS,
   LEGACY_SECTION_BUDGET,
@@ -147,7 +146,7 @@ describe("runtime model limits", () => {
   it("does not let callers mutate DEFAULT_SETTINGS through a clone", () => {
     const cloned = cloneAppSettings(DEFAULT_SETTINGS);
     cloned.llm.max_tokens = 1;
-    expect(DEFAULT_SETTINGS.llm.max_tokens).toBe(32_768);
+    expect(DEFAULT_SETTINGS.llm.max_tokens).toBe(16_384);
   });
 
   it("keeps configured 16k story max_tokens (no legacy downgrade to 8k)", () => {

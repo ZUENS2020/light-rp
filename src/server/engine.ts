@@ -439,10 +439,6 @@ async function triggered(
 
 export const TRUNCATION_NOTE = "（回复在 max_tokens 处被截断）";
 export const TRUNCATION_NOTE_INCOMPLETE = "（回复流提前结束）";
-/** GLM reasoning shares max_tokens with visible content; continue a few times before giving up. */
-export const STORY_LENGTH_CONTINUES = 3;
-const STORY_CONTINUE_PROMPT =
-  "【续写】上文因输出长度限制在句中断开。请从断点无缝接着写完，不要重复已写内容，不要解释截断或道歉。";
 
 export function openingFor(cards: CharacterCard[], playerName: string, primaryId?: string | null): string {
   const preferred = primaryId ? cards.filter((card) => card.id === primaryId || card.name === primaryId) : [];
@@ -993,61 +989,16 @@ export async function runTurn(
       ...baseChatOpts,
       ...(partialSink ? { onPartial: partialSink.onPartial } : {}),
     });
-    // GLM-5.3 thinking shares max_tokens with visible content. When the provider
-    // returns finish_reason=length with some body, continue rather than stop mid-beat.
-    let continues = 0;
-    while (
-      gm.finish_reason === "length" &&
-      continues < STORY_LENGTH_CONTINUES &&
-      stripBreachAssistantPrefill(parseTrailer(gm.text).visible).trim()
-    ) {
-      continues += 1;
-      warnings.push(`输出触达 max_tokens，自动续写 ${continues}/${STORY_LENGTH_CONTINUES}`);
-      const prefix: string = gm.text || "";
-      const continueMessages: LlmMessage[] = [
-        ...messages,
-        { role: "assistant", content: prefix },
-        { role: "user", content: STORY_CONTINUE_PROMPT },
-      ];
-      const continued = await chat(
-        env,
-        continueMessages,
-        null,
-        settings.llm.temperature,
-        outputTokens,
-        settings.llm.timeout,
-        {
-          ...baseChatOpts,
-          requestKind: "story",
-          skipCache: true,
-          ...(partialSink
-            ? {
-                onPartial: (text: string) => partialSink.onPartial(`${prefix}${text}`),
-              }
-            : {}),
-        },
-      );
-      gm = {
-        ...continued,
-        text: `${prefix}${continued.text || ""}`,
-        usage: {
-          prompt_tokens: (gm.usage?.prompt_tokens || 0) + (continued.usage?.prompt_tokens || 0),
-          completion_tokens: (gm.usage?.completion_tokens || 0) + (continued.usage?.completion_tokens || 0),
-          reasoning_tokens: (gm.usage?.reasoning_tokens || 0) + (continued.usage?.reasoning_tokens || 0),
-          cached_input_tokens: (gm.usage?.cached_input_tokens || 0) + (continued.usage?.cached_input_tokens || 0),
-        },
-      };
-    }
   } finally {
     if (partialSink) await partialSink.flush();
   }
-  const { visible, trailer } = parseTrailer(gm.text);
-  // length = hard cap after continues; missing finish_reason after a streamed body usually
-  // means the upstream closed early (incomplete SSE) rather than a clean stop.
+    const { visible, trailer } = parseTrailer(gm.text);
+  // length = provider hit max_tokens (GLM CoT shares this pool); missing finish_reason after a
+  // streamed body usually means the upstream closed early (incomplete SSE).
   const hitLength = gm.finish_reason === "length";
   const incompleteStream = Boolean(partialSink) && !gm.finish_reason;
   const truncated = hitLength || incompleteStream;
-  if (hitLength) warnings.push("回复在 max_tokens 处被截断（续写后仍未写完）");
+  if (hitLength) warnings.push("回复在 max_tokens 处被截断");
   else if (incompleteStream) warnings.push("回复流提前结束（未收到 finish_reason）");
   // Strip echoed prefill if the model included it in the completion.
   let replyText = stripBreachAssistantPrefill(visible);
