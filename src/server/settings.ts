@@ -37,7 +37,7 @@ export const TURN_COMMIT_TIMEOUT_SECONDS = 45;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   // 16384 covers long RP body plus GLM/OpenRouter reasoning without truncating at 8k.
-  llm: { temperature: 1, max_tokens: 16_384, timeout: 180, breach: true },
+  llm: { temperature: 1, max_tokens: 16_384, timeout: 240, breach: true },
   memory: { world_char_limit: 2500, player_char_limit: 1400, character_char_limit: 1200 },
   compact_after_turns: 40,
   compression_threshold: 0.35,
