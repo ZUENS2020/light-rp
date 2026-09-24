@@ -60,6 +60,30 @@ describe("readChatCompletionSse", () => {
     expect(partials).toEqual(["你好", "你好，世界"]);
     expect(result.finish_reason).toBe("stop");
   });
+
+  it("captures finish_reason and usage when the final SSE line has no trailing newline", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const enc = new TextEncoder();
+        controller.enqueue(enc.encode(`data: ${chunk("你好")}\n\n`));
+        // Final event + usage often arrive without a trailing newline before close.
+        controller.enqueue(
+          enc.encode(
+            `data: ${JSON.stringify({
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+            })}`,
+          ),
+        );
+        controller.close();
+      },
+    });
+    const result = await readChatCompletionSse(stream);
+    expect(result.text).toBe("你好");
+    expect(result.finish_reason).toBe("stop");
+    expect(result.usage.prompt_tokens).toBe(12);
+    expect(result.usage.completion_tokens).toBe(3);
+  });
 });
 
 describe("chat() streaming via onPartial", () => {
