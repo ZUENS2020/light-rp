@@ -61,7 +61,7 @@ describe("structured turn commit", () => {
       previous,
       pack,
       { id: "call-1", name: "commit_turn", arguments: {} },
-      { prompt_tokens: 10, completion_tokens: 5, cached_input_tokens: 2 },
+      { prompt_tokens: 10, completion_tokens: 5, reasoning_tokens: 0, cached_input_tokens: 2 },
     );
 
     expect(commit.state).toMatchObject({

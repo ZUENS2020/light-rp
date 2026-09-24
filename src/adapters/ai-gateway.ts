@@ -113,13 +113,18 @@ function responseCacheStatus(response: Response, skipped: boolean): ResponseCach
 
 function parseUsage(raw: Record<string, unknown>): AiUsage {
   const usage = (raw.usage as Record<string, unknown> | undefined) || {};
-  const details = (usage.prompt_tokens_details as Record<string, unknown> | undefined) || {};
+  const promptDetails = (usage.prompt_tokens_details as Record<string, unknown> | undefined) || {};
+  const completionDetails = (usage.completion_tokens_details as Record<string, unknown> | undefined) || {};
   const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
   const completion = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
-  const cached = Number(usage.cached_input_tokens ?? usage.cached_tokens ?? details.cached_tokens ?? 0);
+  const reasoning = Number(
+    usage.reasoning_tokens ?? completionDetails.reasoning_tokens ?? completionDetails.reasoning ?? 0,
+  );
+  const cached = Number(usage.cached_input_tokens ?? usage.cached_tokens ?? promptDetails.cached_tokens ?? 0);
   return {
     prompt_tokens: Number.isFinite(prompt) ? prompt : 0,
     completion_tokens: Number.isFinite(completion) ? completion : 0,
+    reasoning_tokens: Number.isFinite(reasoning) ? reasoning : 0,
     cached_input_tokens: Number.isFinite(cached) ? cached : 0,
   };
 }
@@ -296,7 +301,7 @@ export async function readChatCompletionSse(
   let contentText = "";
   let reasoningText = "";
   let finish_reason: string | undefined;
-  let usage: AiUsage = { prompt_tokens: 0, completion_tokens: 0, cached_input_tokens: 0 };
+  let usage: AiUsage = { prompt_tokens: 0, completion_tokens: 0, reasoning_tokens: 0, cached_input_tokens: 0 };
   let reasoningPresent = false;
   let lastEmitted = "";
   let lastReasoningTouchMs = 0;
@@ -419,6 +424,17 @@ export async function readChatCompletionSse(
   };
 }
 
+function apiMaxTokensFor(model: AiModelConfig, contentMax: number, requestKind?: AiRequestOptions["requestKind"]): number {
+  const cappedContent = Math.min(Math.max(1, contentMax), model.max_output_tokens);
+  const story =
+    requestKind == null || requestKind === "story" || requestKind === "rewrite" || requestKind === "regenerate";
+  // GLM shares one completion pool between CoT and visible text. Request the full model
+  // ceiling for story so thinking cannot exhaust a content-sized max_tokens; assemble()
+  // still only reserves the visible content budget in the working window.
+  if (story && model.supports_reasoning) return Math.max(1, Math.floor(model.max_output_tokens));
+  return cappedContent;
+}
+
 /** Keep reasoning from consuming the whole max_tokens budget (GLM defaults to max effort). */
 function storyReasoningBudget(
   model: AiModelConfig,
@@ -472,7 +488,7 @@ async function rawChat(
   if (!model.enabled && options.requestKind !== "probe") throw new Error(`model '${model.label}' is disabled`);
   const canonical = canonicalMessages(messages);
   const normalizedTools = canonicalTools(tools);
-  const cappedMax = Math.min(maxTokens, model.max_output_tokens);
+  const cappedMax = apiMaxTokensFor(model, maxTokens, options.requestKind);
   const payload: Record<string, unknown> = {
     model: model.model_id,
     messages: canonical.map(toApiMessage),

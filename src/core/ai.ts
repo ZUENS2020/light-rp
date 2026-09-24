@@ -21,9 +21,17 @@ export type AiModelConfig = {
   source?: "application" | "workspace" | "session";
 };
 
+/** Extra completion tokens reserved for hidden CoT on reasoning models.
+ *  Providers like GLM still share one max_tokens pool; we request content+headroom
+ *  from the API while assemble() only reserves the visible content budget.
+ */
+export const REASONING_OUTPUT_HEADROOM = 16_384;
+
 export type AiUsage = {
   prompt_tokens: number;
   completion_tokens: number;
+  /** Hidden chain-of-thought tokens (subset of completion_tokens when the provider reports them). */
+  reasoning_tokens: number;
   cached_input_tokens: number;
 };
 
@@ -59,7 +67,7 @@ export const DEFAULT_MODEL: AiModelConfig = {
   provider_slug: "openrouter",
   model_id: "@preset/dsf0731-cheap",
   context_window: 131_072,
-  max_output_tokens: 16_384,
+  max_output_tokens: 32_768,
   supports_tools: true,
   supports_reasoning: true,
   enabled: true,
