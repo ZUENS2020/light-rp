@@ -509,7 +509,12 @@ async function rawChat(
   // reasoning_effort:"low" — Command Code maps this to mild CoT; OpenAI-style
   // reasoning:{effort} still burns a long reasoning channel. Never promote
   // reasoning_* into player-visible text (see readChatCompletionSse).
-  if (commandCode) payload.reasoning_effort = "low";
+  if (commandCode) {
+    // GLM-5.3 cannot disable thinking. Cap CoT so it cannot starve visible content
+    // (live NSFW scenes were finish_reason=length at ~300–500 chars while CoT filled the pool).
+    payload.reasoning_effort = "low";
+    payload.thinking = { type: "enabled", budget_tokens: 256 };
+  }
   // Stream only for plain text completions with an onPartial sink (story TTFT).
   // Tool-call streaming is intentionally out of scope — keep the JSON path.
   const wantStream = Boolean(options.onPartial) && !normalizedTools?.length;
@@ -582,11 +587,15 @@ async function rawChat(
       );
     };
     response = await withPeriodicHeartbeat(invoke(normalizedPayload), options.onHeartbeat, heartbeatMs);
-    if (!response.ok && reasoning && (model.transport === "openai_compatible" || model.provider_slug === "commandcode")) {
+    const hasThinkingControls =
+      Boolean(reasoning) || Boolean(normalizedPayload.thinking) || Boolean(normalizedPayload.reasoning_effort);
+    if (!response.ok && hasThinkingControls && (model.transport === "openai_compatible" || model.provider_slug === "commandcode")) {
       const errBody = await response.text();
       if (reasoningRejected(response.status, errBody)) {
         const withoutReasoning = { ...normalizedPayload };
         delete withoutReasoning.reasoning;
+        delete withoutReasoning.thinking;
+        // Keep reasoning_effort:low if present — disabling thinking entirely is illegal on GLM-5.3.
         normalizedPayload = withoutReasoning;
         response = await withPeriodicHeartbeat(invoke(normalizedPayload), options.onHeartbeat, heartbeatMs);
       } else {

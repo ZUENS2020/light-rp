@@ -53,5 +53,7 @@ describe("reasoning vs content token split", () => {
     expect(result.usage.reasoning_tokens).toBe(40);
     const body = JSON.parse((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string);
     expect(body.max_tokens).toBe(16_384 + 2_048);
+    expect(body.reasoning_effort).toBe("low");
+    expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 256 });
   });
 });
