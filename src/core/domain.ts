@@ -627,22 +627,64 @@ export function miniPath(characterId: string): string {
   return `characters/${characterId}.mini.yaml`;
 }
 
-export function generateMini(card: CharacterCard, blurb = ""): MiniCard {
+function clipText(text: string, limit: number): string {
+  const trimmed = (text || "").trim();
+  return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit - 1)}…`;
+}
+
+/** Pre-2026-09 auto mini (blurb + scenario). Used to detect and upgrade untouched auto minis. */
+export function generateMiniLegacy(card: CharacterCard, blurb = ""): MiniCard {
   const first =
     (card.personality || "")
       .split(/\n/)
       .map((line) => line.trim())
       .find(Boolean) || "";
-  const clip = (text: string, limit = 450) => {
-    const trimmed = text.trim();
-    return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit - 1)}…`;
-  };
   return {
     id: card.id,
     name: card.name,
-    summary: clip(blurb || first || card.personality),
-    behavior_notes: clip(card.behavior || card.scenario || card.post_history_instructions),
+    summary: clipText(blurb || first || card.personality, 450),
+    behavior_notes: clipText(card.behavior || card.scenario || card.post_history_instructions, 450),
     relations: "",
+  };
+}
+
+function anchorLine(texts: string[], labels: string[]): string {
+  for (const text of texts) {
+    for (const raw of (text || "").split(/\n/)) {
+      const line = raw.trim();
+      for (const label of labels) {
+        if (line.startsWith(`${label}：`) || line.startsWith(`${label}:`)) return line.slice(label.length + 1).trim();
+      }
+    }
+  }
+  return "";
+}
+
+/**
+ * Auto mini that actually distinguishes characters in an ensemble scene: core personality,
+ * voice (speech / 语言锚点) and relationship anchor. The legacy version copied the shared
+ * world scenario into behavior_notes, so every NPC's mini read the same.
+ */
+export function generateMini(card: CharacterCard, blurb = ""): MiniCard {
+  const paragraphs = (card.personality || "")
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const core = paragraphs.find((part) => !/^(说话|日常钩子|语言锚点|关系锚点)[：:]/.test(part)) || blurb;
+  const speech = card.speech.trim() || anchorLine([card.personality, card.system_prompt], ["说话", "语言锚点", "口吻"]);
+  const relation =
+    anchorLine([card.system_prompt, card.personality], ["关系锚点", "关系"]) ||
+    paragraphs.find((part) => part !== core && /训练员|\{\{user\}\}/.test(part)) ||
+    "";
+  const behavior = card.behavior.trim();
+  return {
+    id: card.id,
+    name: card.name,
+    summary: clipText(core || blurb || card.description, 180),
+    behavior_notes: [speech ? `说话：${clipText(speech, 110)}` : "", behavior ? clipText(behavior, 110) : ""]
+      .filter(Boolean)
+      .join("\n"),
+    relations: clipText(relation, 110),
   };
 }
 
@@ -678,9 +720,18 @@ export async function saveMini(fs: R2Fs, mini: MiniCard): Promise<void> {
   );
 }
 
+function sameMini(a: MiniCard, b: MiniCard): boolean {
+  return (
+    a.summary.trim() === b.summary.trim() &&
+    a.behavior_notes.trim() === b.behavior_notes.trim() &&
+    a.relations.trim() === b.relations.trim()
+  );
+}
+
 export async function ensureMini(fs: R2Fs, member: CastMember, card: CharacterCard): Promise<MiniCard> {
   const existing = await loadMini(fs, member.id);
-  if (existing) return existing;
+  // Keep hand-written / LLM-generated minis; only upgrade untouched legacy auto minis.
+  if (existing && !sameMini(existing, generateMiniLegacy(card, member.blurb))) return existing;
   const mini = generateMini(card, member.blurb);
   mini.id = member.id;
   await saveMini(fs, mini);
@@ -935,6 +986,44 @@ export function applyMemoryBatch(
     message: `applied ${applied.length} memory operation(s)`,
     applied,
     touched: [...touched.values()],
+  };
+}
+
+export type MemoryBestEffortResult = MemoryBatchResult & {
+  failed: Array<{ operation: MemoryMutation; message: string }>;
+};
+
+/**
+ * Try the batch atomically first (so remove/replace can free room for adds); if that fails,
+ * apply each operation on its own and keep the ones that fit. One stale old_text or a full
+ * world store used to discard every other valid op in the same commit (memory silently frozen).
+ */
+export function applyMemoryBestEffort(
+  store: MemoryStore,
+  operations: MemoryMutation[],
+  limits: { world: number; player: number; character: number },
+): MemoryBestEffortResult {
+  const whole = applyMemoryBatch(store, operations, limits);
+  if (whole.success) return { ...whole, failed: [] };
+  const applied: MemoryMutation[] = [];
+  const touched = new Map<string, { target: MemoryTarget; characterId: string | null }>();
+  const failed: MemoryBestEffortResult["failed"] = [];
+  for (const operation of operations) {
+    const result = applyMemoryBatch(store, [operation], limits);
+    if (result.success) {
+      applied.push(...result.applied);
+      for (const item of result.touched) touched.set(`${item.target}:${item.characterId || ""}`, item);
+    } else {
+      failed.push({ operation, message: result.message });
+    }
+  }
+  return {
+    success: applied.length > 0,
+    message: `applied ${applied.length}/${operations.length} memory operation(s); ${failed.length} failed`,
+    applied,
+    touched: [...touched.values()],
+    currentEntries: whole.currentEntries,
+    failed,
   };
 }
 

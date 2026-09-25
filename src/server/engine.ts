@@ -37,6 +37,7 @@ import {
   appendEvents,
   applyMemory,
   applyMemoryBatch,
+  applyMemoryBestEffort,
   applyScenePatch,
   ensembleActing,
   enrichRecord,
@@ -83,6 +84,7 @@ import type { R2Fs } from "../adapters/r2";
 import {
   LEGACY_LORE_TOKEN_BUDGET,
   STORY_OUTPUT_TOKEN_FLOOR,
+  TURN_COMMIT_MAX_TOKENS,
   TURN_COMMIT_TIMEOUT_SECONDS,
   type AppSettings,
 } from "./settings";
@@ -198,10 +200,11 @@ export function effectiveContextConfig(settings: AppSettings, model?: AiModelCon
   const raisedWindow = staleSmallWindow
     ? Math.min(WORKING_CONTEXT_CAP, DEFAULT_CONTEXT.max_tokens, modelWindow, REQUEST_CONTEXT_HARD_CAP)
     : configuredWindow;
-  const budget =
-    staleSmallWindow && isLegacySectionBudget(settings.context.budget)
-      ? { ...DEFAULT_SECTION_BUDGET }
-      : settings.context.budget;
+  // Untouched legacy caps (memory 2500 / mini 1200 / state 800) predate the 32k working
+  // window; upgrade them whenever they are still the exact legacy set.
+  const budget = isLegacySectionBudget(settings.context.budget)
+    ? { ...DEFAULT_SECTION_BUDGET }
+    : settings.context.budget;
   const history =
     staleSmallWindow && settings.context.history.protect_recent_turns < DEFAULT_CONTEXT.history.protect_recent_turns
       ? {
@@ -216,6 +219,9 @@ export function effectiveContextConfig(settings: AppSettings, model?: AiModelCon
     budget,
     history,
     max_tokens: Math.min(raisedWindow, modelWindow, WORKING_CONTEXT_CAP, REQUEST_CONTEXT_HARD_CAP),
+    // Completion reserve is carved from the provider window above the working window
+    // (GLM: 128k request vs 32k working), not from memory/cast/lore section room.
+    ...(model ? { request_window: Math.min(modelWindow, REQUEST_CONTEXT_HARD_CAP) } : {}),
     generation_reserve: Math.min(reserved, modelOutputCap),
   });
 }
@@ -226,12 +232,11 @@ export function effectiveMiniConfig(
   contextCfg?: ContextConfig,
   model?: AiModelConfig,
 ): MiniSelectConfig {
-  const cfg = contextCfg ?? effectiveContextConfig(settings, model);
+  void contextCfg;
+  void model;
   const mini = parseMiniConfig(settings.mini);
-  const configuredWindow = Math.max(1, Math.floor(settings.context.max_tokens));
-  const staleSmallWindow =
-    configuredWindow <= LEGACY_DEFAULT_CONTEXT_MAX_TOKENS && cfg.max_tokens > LEGACY_DEFAULT_CONTEXT_MAX_TOKENS;
-  if (staleSmallWindow && mini.max_tokens <= LEGACY_MINI_MAX_TOKENS) {
+  // Legacy 1.2k mini cap fits ~2 thin minis; ensemble scenes need every present NPC.
+  if (mini.max_tokens <= LEGACY_MINI_MAX_TOKENS) {
     return parseMiniConfig({ ...mini, max_tokens: DEFAULT_MINI.max_tokens });
   }
   return mini;
@@ -595,6 +600,46 @@ export function validTurnCommitArguments(args: Record<string, unknown>): boolean
   });
 }
 
+/** Words that name the player / nobody rather than an NPC. */
+const NON_NPC_PRESENT = new Set(["训练员", "玩家", "user", "{{user}}", "你", "我", "无", "none"]);
+
+/**
+ * Map present entries to cast ids; keep off-roster NPCs (e.g. a recurring character with no
+ * card) by name instead of silently dropping them, so the scene state does not lose them and
+ * the model does not re-cast their lines onto roster characters. Player name is excluded.
+ */
+export function normalizePresentList(raw: string[], pack: WorldPack, maxOffRoster = 4): string[] {
+  const out: string[] = [];
+  let offRoster = 0;
+  for (const entry of raw) {
+    const name = entry.trim();
+    if (!name) continue;
+    const member = pack.cast.find(
+      (item) => item.id === name || item.name === name || item.aliases.some((alias) => alias === name),
+    );
+    if (member) {
+      out.push(member.id);
+      continue;
+    }
+    if (name === pack.player_name || NON_NPC_PRESENT.has(name.toLowerCase()) || name.length > 24) continue;
+    if (offRoster >= maxOffRoster) continue;
+    offRoster += 1;
+    out.push(name);
+  }
+  return [...new Set(out)];
+}
+
+/** Characters whose memory the commit extractor should see (present + named this turn). */
+export function commitFocusCharacterIds(pack: WorldPack, scene: SceneState, text: string): string[] {
+  const ids = new Set<string>();
+  for (const member of pack.cast) {
+    const names = [member.id, member.name, ...member.aliases].filter(Boolean);
+    const present = scene.present.some((entry) => names.includes(entry));
+    if (present || names.some((name) => text.includes(name))) ids.add(member.id);
+  }
+  return [...ids];
+}
+
 export function normalizeTurnCommit(
   args: Record<string, unknown>,
   previous: SceneState,
@@ -607,14 +652,7 @@ export function normalizeTurnCommit(
       ? (args.state as Record<string, unknown>)
       : {};
   const hasPresent = Array.isArray(rawState.present);
-  const present = stringList(rawState.present)
-    .map(
-      (rawId) =>
-        pack.cast.find(
-          (member) => member.id === rawId || member.name === rawId || member.aliases.some((alias) => alias === rawId),
-        )?.id,
-    )
-    .filter((id): id is string => Boolean(id));
+  const present = normalizePresentList(stringList(rawState.present), pack);
   const state: SceneState = {
     time: textField(rawState.time, previous.time),
     season: textField(rawState.season, previous.season),
@@ -733,10 +771,15 @@ async function extractTurnCommit(
   memoryFeedback = "",
 ): Promise<TurnCommit> {
   const tool = turnCommitToolSpec(library);
+  // Only present / named characters' memory: the full store (~20k chars in long sessions)
+  // made the commit call slow enough to hit its timeout on about half the turns.
+  const focusIds = commitFocusCharacterIds(pack, scene, `${userText}\n${assistantText}`);
   const memorySnapshot = {
     world: memory.world,
     player: memory.player,
-    characters: memory.characters,
+    characters: Object.fromEntries(
+      focusIds.filter((id) => memory.characters[id]).map((id) => [id, memory.characters[id]]),
+    ),
   };
   const messages: LlmMessage[] = [
     {
@@ -749,7 +792,7 @@ async function extractTurnCommit(
       content: [
         `可用角色 id：${pack.cast.map((member) => `${member.id}=${member.name}`).join("；") || "无"}`,
         `旧状态：\n${sceneYaml(scene)}`,
-        `已有长期记忆：\n${stableStringify(memorySnapshot)}`,
+        `已有长期记忆（characters 只列出在场/本轮提到的角色；不要 replace/remove 未列出的条目）：\n${stableStringify(memorySnapshot)}`,
         `用户本轮：\n${userText}`,
         `助手正式叙事：\n${assistantText}`,
         memoryFeedback
@@ -760,7 +803,9 @@ async function extractTurnCommit(
         .join("\n\n"),
     },
   ];
-  const commitMaxTokens = Math.min(1_536, effectiveOutputTokens(settings, options.model, "tool"));
+  // Full state snapshot alone is ~1.5k tokens in long ensemble scenes; 1.5k cut the call
+  // (finish_reason=length → no valid commit_turn → state/memory silently not saved).
+  const commitMaxTokens = TURN_COMMIT_MAX_TOKENS;
   const commitTimeout = turnCommitTimeoutSeconds(settings.llm.timeout);
   const requestKind = (memoryFeedback ? "correction" : "memory") as "correction" | "memory";
   const commitOptions = {
@@ -931,6 +976,9 @@ export async function runTurn(
       userContent: promptUser,
       tools: null,
       model: opts.ai.model,
+      seedHistory: assembled.history,
+      contextParts: assembled.turn_context_parts,
+      memoryParts: assembled.character_memory_parts,
     });
     messages = prepared.messages;
     affinity = prepared.affinityKey;
@@ -990,7 +1038,15 @@ export async function runTurn(
         finish_reason: gm.finish_reason || null,
       });
       const reinforced = reinforceBreachMessages(messages);
-      gm = await chat(env, reinforced, null, settings.llm.temperature, outputTokens, settings.llm.timeout, baseChatOpts);
+      gm = await chat(
+        env,
+        reinforced,
+        null,
+        settings.llm.temperature,
+        outputTokens,
+        settings.llm.timeout,
+        baseChatOpts,
+      );
       if (partialSink) partialSink.onPartial(gm.text || "");
     }
   } finally {
@@ -1003,8 +1059,7 @@ export async function runTurn(
   // Command Code is asked for stream_options.include_usage. Clean completions always carry
   // prompt_tokens>0. A stop/[DONE] with usage=0 means the socket died before the usage chunk.
   const missingStreamUsage = Boolean(partialSink) && !(gm.usage?.prompt_tokens > 0);
-  const incompleteStream =
-    Boolean(partialSink) && missingStreamUsage && gm.finish_reason !== "length";
+  const incompleteStream = Boolean(partialSink) && missingStreamUsage && gm.finish_reason !== "length";
   const truncated = hitLength || incompleteStream;
   if (hitLength) warnings.push("回复在 max_tokens 处被截断");
   else if (incompleteStream) warnings.push("回复流提前结束（未收到 usage / 流未完整收尾）");
@@ -1523,6 +1578,30 @@ export async function runDeferredPostTurnCompact(input: DeferredPostTurnCompactI
   return compactResult;
 }
 
+function memoryFailureFeedback(
+  memory: MemoryStore,
+  failed: Array<{ operation: MemoryMutation; message: string }>,
+): string {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const { operation, message } of failed) {
+    lines.push(
+      `- 失败：${stableStringify({ action: operation.action, target: operation.target, character_id: operation.characterId || null, content: operation.content || "", old_text: operation.oldText || "" })} → ${message}`,
+    );
+    const key = `${operation.target}:${operation.characterId || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const entries =
+      operation.target === "world"
+        ? memory.world
+        : operation.target === "player"
+          ? memory.player
+          : memory.characters[operation.characterId || ""] || [];
+    lines.push(`  当前 ${key} 条目（${entries.join("\n§\n").length} 字）：${stableStringify(entries)}`);
+  }
+  return lines.join("\n");
+}
+
 export type DeferredTurnCommitInput = {
   env: Env;
   fs: R2Fs;
@@ -1690,14 +1769,44 @@ export async function runDeferredTurnCommit(input: DeferredTurnCommitInput): Pro
     character: input.settings.memory.character_char_limit,
   };
   const planned = planMemoryChanges(input.pack, nextScene, memoryOps);
-  const batch = applyMemoryBatch(memory, planned.mutations, limits);
-  let appliedMemoryOps: MemoryMutation[] = [];
+  const batch = applyMemoryBestEffort(memory, planned.mutations, limits);
+  let appliedMemoryOps: MemoryMutation[] = [...batch.applied];
+  const touched = new Map(batch.touched.map((item) => [`${item.target}:${item.characterId || ""}`, item]));
+  let failedOps = batch.failed;
+  let memoryRetryUsage: AiUsage | null = null;
+  if (failedOps.length) {
+    warnings.push(`长期记忆部分写入失败：${batch.message}`);
+    // One correction round with the concrete errors + live entries (Hermes-style consolidate).
+    try {
+      const feedback = memoryFailureFeedback(memory, failedOps);
+      const retry = await extractTurnCommit(
+        input.env,
+        library,
+        input.pack,
+        input.sceneBefore,
+        memory,
+        input.userText,
+        input.assistantText,
+        input.settings,
+        { model: input.ai?.model, affinityKey: input.ai?.affinityKey },
+        feedback,
+      );
+      memoryRetryUsage = retry.usage;
+      const retryPlanned = planMemoryChanges(input.pack, nextScene, retry.memoryOps);
+      const retryBatch = applyMemoryBestEffort(memory, retryPlanned.mutations, limits);
+      appliedMemoryOps = [...appliedMemoryOps, ...retryBatch.applied];
+      for (const item of retryBatch.touched) touched.set(`${item.target}:${item.characterId || ""}`, item);
+      failedOps = retryBatch.failed;
+      if (failedOps.length) warnings.push(`长期记忆纠正后仍有失败：${retryBatch.message}`);
+    } catch (error) {
+      warnings.push(`长期记忆纠正重试失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const remembered: string[] = [];
-  if (batch.success) {
-    appliedMemoryOps = batch.applied;
-    await persistMemoryChanges(input.fs, memory, batch.touched);
+  if (appliedMemoryOps.length) {
+    await persistMemoryChanges(input.fs, memory, [...touched.values()]);
     remembered.push(
-      ...batch.applied
+      ...appliedMemoryOps
         .filter((operation) => operation.action !== "remove")
         .map((operation) =>
           String(operation.content || "")
@@ -1705,8 +1814,6 @@ export async function runDeferredTurnCommit(input: DeferredTurnCommitInput): Pro
             .slice(0, 80),
         ),
     );
-  } else {
-    warnings.push(`长期记忆写入失败：${batch.message}`);
   }
 
   await appendEvents(input.fs, input.sessionId, [
@@ -1743,12 +1850,7 @@ export async function runDeferredTurnCommit(input: DeferredTurnCommitInput): Pro
   let promptEventsWritten = 0;
   if (input.db && hiddenPromptEvents.length) {
     try {
-      promptEventsWritten = await appendHiddenPromptEvents(
-        input.db,
-        input.sessionId,
-        hiddenPromptEvents,
-        taskId,
-      );
+      promptEventsWritten = await appendHiddenPromptEvents(input.db, input.sessionId, hiddenPromptEvents, taskId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       warnings.push(`prompt event append failed: ${message}`);
@@ -1766,7 +1868,10 @@ export async function runDeferredTurnCommit(input: DeferredTurnCommitInput): Pro
       hidden_prompt_events: hiddenPromptEvents,
       prompt_events_written: promptEventsWritten,
       background_commit_completed_at: nowIso(),
-      background_commit_usage: commit.usage,
+      background_commit_usage: memoryRetryUsage ? addUsage(commit.usage, memoryRetryUsage) : commit.usage,
+      memory_ops_requested: planned.mutations.length,
+      memory_ops_applied: appliedMemoryOps.length,
+      memory_ops_failed: failedOps.length,
     },
     warnings,
   );

@@ -20,10 +20,7 @@ import {
   recordToolExecution,
   replaceSessionTranscriptProjection,
 } from "../../src/server/tasks";
-import {
-  memoryStatus,
-  mirrorCoreMemorySnapshot,
-} from "../../src/server/memory";
+import { memoryStatus, mirrorCoreMemorySnapshot } from "../../src/server/memory";
 import { appendToolCallEvent, preparePrompt } from "../../src/server/prompt-state";
 
 const migrations = inject("D1_MIGRATIONS");
@@ -311,6 +308,68 @@ describe("D1 task and model integration", () => {
       { sequence: 2, kind: "context" },
       { sequence: 3, kind: "user" },
     ]);
+  });
+
+  it("replays the recent tail after a new epoch checkpoint and dedupes per-epoch parts", async () => {
+    const id = await seedSession();
+    const first = await createTurnTask(env.DB, {
+      workspaceId: "world-1",
+      sessionId: id,
+      text: "第三轮",
+      idempotencyKey: "seed-first",
+    });
+    const common = {
+      sessionId: id,
+      systemParts: ["稳定规则"],
+      checkpoint: "新检查点",
+      dynamicContext: "## 当前状态\npresent: [suzuka]",
+      tools: null,
+      seedHistory: [
+        { role: "user", content: "第一轮" },
+        { role: "assistant", content: "铃鹿回答第一轮" },
+      ],
+      contextParts: [{ key: "mini:vodka", content: "## Mini 卡\n伏特加" }],
+      memoryParts: [{ key: "charmem:suzuka", content: "## 角色记忆\n铃鹿记得晨练约定" }],
+    };
+    const prepared = await preparePrompt(env.DB, { ...common, taskId: first.task.id, userContent: "第三轮" });
+    const firstContents = prepared.messages.map((m) => `${m.role}:${m.content}`);
+    expect(firstContents).toEqual([
+      "system:稳定规则",
+      "user:## Epoch 初始上下文检查点\n新检查点",
+      "user:第一轮",
+      "assistant:铃鹿回答第一轮",
+      "user:## 角色记忆\n铃鹿记得晨练约定",
+      "user:## Mini 卡\n伏特加",
+      "user:## 隐藏上下文增量\n## 当前状态\npresent: [suzuka]",
+      "user:第三轮",
+    ]);
+    await completeTask(env.DB, first.task.id, { content: "第三轮完成" });
+
+    const second = await createTurnTask(env.DB, {
+      workspaceId: "world-1",
+      sessionId: id,
+      text: "第四轮",
+      idempotencyKey: "seed-second",
+    });
+    await preparePrompt(env.DB, {
+      ...common,
+      taskId: second.task.id,
+      userContent: "第四轮",
+      // Changed character memory is NOT re-sent (deltas cover it); unchanged mini is deduped.
+      memoryParts: [{ key: "charmem:suzuka", content: "## 角色记忆\n铃鹿记得晨练约定+新事实" }],
+    });
+    const kinds = await env.DB.prepare(
+      `SELECT kind, COUNT(*) AS n FROM llm_events WHERE session_id = ? GROUP BY kind ORDER BY kind`,
+    )
+      .bind(id)
+      .all<{ kind: string; n: number }>();
+    expect(Object.fromEntries((kinds.results || []).map((row) => [row.kind, Number(row.n)]))).toEqual({
+      assistant: 2,
+      checkpoint: 1,
+      context: 2,
+      memory: 1,
+      user: 3,
+    });
   });
 
   it("keeps OOC visible without adding it to the RP prompt", async () => {

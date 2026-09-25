@@ -53,21 +53,16 @@ describe("character memory assembly", () => {
       world_text: "特雷森学园的日常。",
       primary: null,
     };
-    const result = assembleBudgeted(
-      new PromptLibrary({}),
-      pack,
-      memory,
-      scene,
-      [],
-      [],
-      [],
-      "继续晨练",
-    );
+    const result = assembleBudgeted(new PromptLibrary({}), pack, memory, scene, [], [], [], "继续晨练");
 
     // Scene is per-turn (turn_context) so deferred commit / R2 updates are not frozen in the epoch checkpoint.
     expect(result.turn_context).toContain("当前状态");
     expect(result.epoch_checkpoint).not.toContain("当前状态");
-    expect(result.epoch_checkpoint).toContain("每周一与训练员晨练");
+    // Character memory rides as a per-character memory part (appended once per epoch when
+    // that character is relevant), not frozen into the checkpoint at epoch start.
+    expect(result.epoch_checkpoint).not.toContain("每周一与训练员晨练");
+    expect(result.character_memory_parts.map((part) => part.key)).toEqual(["charmem:suzuka"]);
+    expect(result.character_memory_parts[0]?.content).toContain("每周一与训练员晨练");
     expect(result.epoch_checkpoint).not.toContain("Nowledge Mem");
     expect(result.turn_context).not.toContain("每周一与训练员晨练");
     expect(result.system).toContain("每周一与训练员晨练");
@@ -86,16 +81,7 @@ describe("character memory assembly", () => {
       world_text: "特雷森学园的日常。",
       primary: null,
     };
-    const result = assembleBudgeted(
-      new PromptLibrary({}),
-      pack,
-      memory,
-      scene,
-      [],
-      [],
-      [],
-      "继续晨练",
-    );
+    const result = assembleBudgeted(new PromptLibrary({}), pack, memory, scene, [], [], [], "继续晨练");
 
     expect(result.epoch_checkpoint).toContain("角色卡是性格与口吻的正典");
     expect(result.epoch_checkpoint).toContain("若冲突，以角色卡为准");
