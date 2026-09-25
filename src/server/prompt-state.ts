@@ -177,6 +177,16 @@ export async function preparePrompt(
     userContent: string;
     tools: unknown[] | null;
     model?: AiModelConfig;
+    /**
+     * Recent roleplay tail replayed right after a *new* epoch checkpoint. Without it every
+     * epoch rotation (compaction, stable-prefix change) restarted the model with zero verbatim
+     * history — only the checkpoint and the scene state.
+     */
+    seedHistory?: Array<{ role: string; content: string }>;
+    /** Per-epoch deduplicated context parts (minis, lore): appended once per epoch per content. */
+    contextParts?: Array<{ key: string; content: string }>;
+    /** Per-character memory blocks: appended once per epoch per character. */
+    memoryParts?: Array<{ key: string; content: string }>;
   },
 ): Promise<PreparedPrompt> {
   const model = input.model || (await resolveSessionModel(db, input.sessionId));
@@ -201,6 +211,44 @@ export async function preparePrompt(
       payload: { content: `## Epoch 初始上下文检查点\n${input.checkpoint}`.trim(), stable_hash: stableHash },
       hashSeed: `checkpoint:${stableHash}:${input.checkpoint}`,
       stable: true,
+    });
+    for (const [index, message] of (input.seedHistory || []).entries()) {
+      const role = message.role === "assistant" ? "assistant" : message.role === "user" ? "user" : null;
+      const content = String(message.content || "").trim();
+      if (!role || !content) continue;
+      await appendEvent(db, {
+        sessionId: input.sessionId,
+        epoch: runtime.prompt_epoch,
+        kind: role,
+        role,
+        payload: { content, seed: true },
+        hashSeed: `seed:${runtime.prompt_epoch}:${index}:${content}`,
+      });
+    }
+  }
+  for (const part of input.memoryParts || []) {
+    if (!part.content.trim()) continue;
+    // Keyed by character only: later changes arrive as 核心记忆变更 deltas, not re-sends.
+    await appendEvent(db, {
+      sessionId: input.sessionId,
+      epoch: runtime.prompt_epoch,
+      kind: "memory",
+      role: "user",
+      payload: { content: part.content.trim() },
+      hashSeed: `part:${part.key}`,
+      stable: false,
+    });
+  }
+  for (const part of input.contextParts || []) {
+    if (!part.content.trim()) continue;
+    await appendEvent(db, {
+      sessionId: input.sessionId,
+      epoch: runtime.prompt_epoch,
+      kind: "context",
+      role: "user",
+      payload: { content: part.content.trim() },
+      hashSeed: `part:${part.key}:${part.content.trim()}`,
+      stable: false,
     });
   }
   if (input.dynamicContext.trim()) {

@@ -43,7 +43,7 @@ describe("structured turn commit", () => {
           season: "初秋",
           weather: "薄云",
           location: "训练场",
-          present: ["无声铃鹿", "不存在的角色"],
+          present: ["无声铃鹿", "不存在的角色", "训练员"],
           scene: "铃鹿站在跑道边",
           ongoing: ["晨练"],
         },
@@ -67,7 +67,8 @@ describe("structured turn commit", () => {
     expect(commit.state).toMatchObject({
       time: "上午",
       location: "训练场",
-      present: ["suzuka"],
+      // Off-roster NPCs stay by name (not silently dropped); the player is never "present".
+      present: ["suzuka", "不存在的角色"],
       scene: "铃鹿站在跑道边",
     });
     expect(commit.events).toEqual([{ summary: "抵达训练场" }]);

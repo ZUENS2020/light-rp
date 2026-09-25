@@ -10,7 +10,7 @@ import {
 describe("turnCommitTimeoutSeconds", () => {
   it("caps the 180s story timeout to the commit budget", () => {
     expect(turnCommitTimeoutSeconds(180)).toBe(TURN_COMMIT_TIMEOUT_SECONDS);
-    expect(TURN_COMMIT_TIMEOUT_SECONDS).toBe(45);
+    expect(TURN_COMMIT_TIMEOUT_SECONDS).toBe(90);
     expect(TURN_COMMIT_TIMEOUT_SECONDS).toBeLessThan(180);
   });
 

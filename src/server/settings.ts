@@ -33,7 +33,9 @@ export type AppSettings = {
 export const STORY_OUTPUT_TOKEN_FLOOR = 16_384;
 
 /** commit_turn is a small JSON tool call; never inherit the 180s story timeout. */
-export const TURN_COMMIT_TIMEOUT_SECONDS = 45;
+export const TURN_COMMIT_TIMEOUT_SECONDS = 90;
+/** commit_turn completion cap (state snapshot + up to 8 memory ops). */
+export const TURN_COMMIT_MAX_TOKENS = 4_096;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   // Content budget for story. Do NOT inflate API max_tokens to the model ceiling — that

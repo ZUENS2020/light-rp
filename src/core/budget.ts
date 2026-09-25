@@ -21,7 +21,15 @@ export type MemorySplitConfig = {
 };
 
 export type ContextConfig = {
+  /** Working *input* window for assembled prompts (≤ WORKING_CONTEXT_CAP). */
   max_tokens: number;
+  /**
+   * Full request window the provider accepts (prompt + completion), e.g. min(model window, 128k).
+   * When it leaves room above `max_tokens`, the completion reserve lives outside the working
+   * window and must NOT be subtracted from section/history budgets. Defaults to max_tokens
+   * (legacy behaviour: reserve eats into the working window).
+   */
+  request_window?: number;
   generation_reserve: number;
   tool_reserve: number;
   budget: SectionBudget;
@@ -62,6 +70,12 @@ export type SectionBlock = {
   text: string;
   budget: number;
   protected?: boolean;
+  /**
+   * Soft-cap shrink floor (tokens). Sections with a floor are cut down to it before any
+   * section is dropped entirely, so memory / present-cast minis / summary never vanish just
+   * because a large completion reserve squeezed the window.
+   */
+  floor?: number;
   items?: string[];
   entries?: string[];
   entry_labels?: string[];
@@ -113,10 +127,10 @@ export const DEFAULT_SECTION_BUDGET: SectionBudget = {
   world: 3_000,
   user_setting: 2_000,
   primary_card: 5_000,
-  mini_cards: 1_600,
+  mini_cards: 2_400,
   lore: 4_000,
   state: 1_200,
-  memory: 3_000,
+  memory: 4_000,
   summary: 3_000,
 };
 
@@ -136,7 +150,7 @@ export const DEFAULT_CONTEXT: ContextConfig = {
 };
 
 export const DEFAULT_MINI: MiniSelectConfig = {
-  max_tokens: 1_600,
+  max_tokens: 2_400,
   recent_turns: 3,
   max_characters: 4,
 };
@@ -197,6 +211,19 @@ export function truncateToTokens(text: string, tokens: number): { text: string; 
 
 export function effectiveGenerationReserve(cfg: ContextConfig, llmMaxTokens = 0): number {
   return Math.max(cfg.generation_reserve, llmMaxTokens || 0);
+}
+
+/**
+ * Portion of the completion reserve that must come out of the working input window.
+ * GLM (128k request window, 32k working window): 24k reserve fits in the 96k above the
+ * working window → 0. Before this, a 24k reserve + 4k tool reserve left a ~3.9k section
+ * soft cap and memory / minis / lore / summary were dropped to zero on every turn.
+ */
+export function generationReserveInsideWindow(cfg: ContextConfig, llmMaxTokens = 0): number {
+  const gen = effectiveGenerationReserve(cfg, llmMaxTokens);
+  const window = Math.max(cfg.max_tokens, Math.floor(Number(cfg.request_window) || 0));
+  const outside = Math.max(0, window - cfg.max_tokens);
+  return Math.max(0, gen - outside);
 }
 
 export function parseMemorySplit(raw: Partial<MemorySplitConfig> | null | undefined): MemorySplitConfig {
@@ -276,8 +303,10 @@ export function parseContextConfig(raw: Partial<ContextConfig> | null | undefine
   const { nmem: _legacyNmem, ...budgetRest } = mergedBudget;
   const budget: SectionBudget = { ...DEFAULT_SECTION_BUDGET, ...budgetRest };
   const history = { ...DEFAULT_CONTEXT.history, ...(data.history || {}) };
+  const requestWindow = Number(data.request_window);
   return {
     max_tokens: Number(data.max_tokens ?? DEFAULT_CONTEXT.max_tokens),
+    ...(Number.isFinite(requestWindow) && requestWindow > 0 ? { request_window: Math.floor(requestWindow) } : {}),
     generation_reserve: Number(data.generation_reserve ?? DEFAULT_CONTEXT.generation_reserve),
     tool_reserve: Number(data.tool_reserve ?? DEFAULT_CONTEXT.tool_reserve),
     budget,
@@ -359,19 +388,40 @@ export function applySectionBudgets(
   if (softCap != null) {
     const reportMap = new Map(reports.map((r) => [r.name, r]));
     let total = Object.values(texts).reduce((sum, t) => sum + estimateTokens(t), 0);
+    const shrinkTo = (name: string, limit: number) => {
+      const block = blockMap.get(name);
+      const report = reportMap.get(name);
+      const before = texts[name] || "";
+      if (!before) return;
+      let text = "";
+      let items: string[] = [];
+      if (limit > 0 && block?.entries?.length) {
+        const fitted = fitEntries(block.entries, block.entry_labels || block.items || [], limit);
+        text = fitted.text;
+        items = fitted.items;
+      } else if (limit > 0) {
+        text = truncateToTokens(before, limit).text;
+        items = report?.items || [];
+      }
+      if (text === before) return;
+      total += estimateTokens(text) - estimateTokens(before);
+      texts[name] = text;
+      if (report) {
+        report.tokens = estimateTokens(text);
+        report.truncated = true;
+        report.items = text ? items : [];
+      }
+    };
+    // Trim order; floored sections shrink to their floor instead of vanishing.
     for (const name of TRIM_ORDER) {
       if (total <= softCap) break;
       const block = blockMap.get(name);
-      if (block?.protected) continue;
-      if (!texts[name]) continue;
-      const cost = estimateTokens(texts[name]);
-      texts[name] = "";
-      total -= cost;
-      const report = reportMap.get(name);
-      if (report) {
-        report.tokens = 0;
-        report.truncated = true;
-        report.items = [];
+      if (block?.protected || !texts[name]) continue;
+      if (block?.floor) {
+        if (estimateTokens(texts[name]) <= block.floor) continue;
+        shrinkTo(name, Math.max(block.floor, estimateTokens(texts[name]) - (total - softCap)));
+      } else {
+        shrinkTo(name, 0);
       }
     }
   }
@@ -470,7 +520,7 @@ export function historyTokenBudget(
   llmMaxTokens = 0,
   phiTokens = 0,
 ): number {
-  const gen = effectiveGenerationReserve(cfg, llmMaxTokens);
+  const gen = generationReserveInsideWindow(cfg, llmMaxTokens);
   const tool = Math.max(cfg.tool_reserve, phiTokens);
   return Math.max(0, cfg.max_tokens - gen - tool - sectionTokens - estimateTokens(userInput));
 }
@@ -482,7 +532,7 @@ export function sectionSoftCap(
   phiTokens = 0,
   minHistoryTokens = 0,
 ): number {
-  const gen = effectiveGenerationReserve(cfg, llmMaxTokens);
+  const gen = generationReserveInsideWindow(cfg, llmMaxTokens);
   const tool = Math.max(cfg.tool_reserve, phiTokens);
   return Math.max(0, cfg.max_tokens - gen - tool - estimateTokens(userInput) - Math.max(0, minHistoryTokens));
 }
