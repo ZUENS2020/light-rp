@@ -119,6 +119,17 @@ async function taskUserExists(db: D1Database, sessionId: string, epoch: number, 
   return Boolean(row);
 }
 
+async function epochHasRoleplayEvents(db: D1Database, sessionId: string, epoch: number): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT id FROM llm_events
+       WHERE session_id = ? AND prompt_epoch = ? AND kind IN ('user', 'assistant') LIMIT 1`,
+    )
+    .bind(sessionId, epoch)
+    .first<{ id: string }>();
+  return Boolean(row);
+}
+
 async function currentCheckpoint(
   db: D1Database,
   sessionId: string,
@@ -212,7 +223,13 @@ export async function preparePrompt(
       hashSeed: `checkpoint:${stableHash}:${input.checkpoint}`,
       stable: true,
     });
-    for (const [index, message] of (input.seedHistory || []).entries()) {
+    // The rewrite/regenerate path (replaceSessionTranscriptProjection) already reseeds the
+    // epoch with transcript turns before any checkpoint exists. Seeding again duplicated the
+    // tail (live epoch 358: seq 21–24 repeated seq 16–19), inflating every later prompt.
+    const seedHistory = (await epochHasRoleplayEvents(db, input.sessionId, runtime.prompt_epoch))
+      ? []
+      : input.seedHistory || [];
+    for (const [index, message] of seedHistory.entries()) {
       const role = message.role === "assistant" ? "assistant" : message.role === "user" ? "user" : null;
       const content = String(message.content || "").trim();
       if (!role || !content) continue;

@@ -70,6 +70,8 @@ export type TaskCompletion = {
   usage?: AiUsage;
   stablePrefixTokens?: number;
   volatileTokens?: number;
+  /** Story completion forensics (finish_reason / retry) — see core/story-finish.ts. */
+  storyFinish?: { finish_reason: string | null; first_finish_reason?: string | null; completion_tokens: number; retry: string | null };
 };
 
 const TASK_COLUMNS = `id, workspace_id, workspace_id AS world_id, session_id, kind, idempotency_key,
@@ -661,7 +663,8 @@ export async function completeTask(db: D1Database, id: string, completion: TaskC
         `UPDATE generation_tasks SET
            status = 'completed', result_message_id = ?, result_content = ?, request_hash = ?,
            response_cache_status = ?, prompt_tokens = ?, cached_input_tokens = ?,
-           stable_prefix_tokens = ?, volatile_tokens = ?, error_code = NULL, error_message = NULL,
+           stable_prefix_tokens = ?, volatile_tokens = ?, finish_reason = ?, completion_tokens = ?,
+           story_retry = ?, error_code = NULL, error_message = NULL,
            lease_owner = NULL, lease_expires_at = NULL, updated_at = ?, completed_at = ?
          WHERE id = ? AND status IN ('pending', 'running')`,
       )
@@ -674,6 +677,9 @@ export async function completeTask(db: D1Database, id: string, completion: TaskC
         usage.cached_input_tokens,
         completion.stablePrefixTokens || 0,
         completion.volatileTokens || 0,
+        completion.storyFinish?.finish_reason ?? null,
+        completion.storyFinish?.completion_tokens ?? usage.completion_tokens ?? 0,
+        completion.storyFinish?.retry ?? null,
         ts,
         ts,
         id,

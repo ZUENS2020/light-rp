@@ -94,6 +94,7 @@ type PersistedTurnDiagnostics = {
   commit_applied?: boolean;
   scene_before?: TurnOut["scene_before"];
   rotate_prompt_epoch_reason?: "context_compacted" | null;
+  story_finish?: TurnOut["story_finish"];
 };
 
 async function loadTurnDiagnostics(
@@ -1086,6 +1087,7 @@ export default {
               usage: diagnostics?.task_id === taskId ? diagnostics.ai_usage : undefined,
               stablePrefixTokens: diagnostics?.task_id === taskId ? diagnostics.stable_prefix_tokens || 0 : undefined,
               volatileTokens: diagnostics?.task_id === taskId ? diagnostics.volatile_tokens || 0 : undefined,
+              storyFinish: diagnostics?.task_id === taskId ? diagnostics.story_finish || undefined : undefined,
               hiddenEvents: diagnostics?.task_id === taskId ? diagnostics.hidden_prompt_events || [] : undefined,
               // Epoch rotate happens in background compact after apply — not on story complete.
             });
@@ -1200,6 +1202,7 @@ export default {
             usage: result.ai_usage,
             stablePrefixTokens: result.stable_prefix_tokens,
             volatileTokens: result.volatile_tokens,
+            storyFinish: (result as Partial<TurnOut>).story_finish,
             hiddenEvents: (result as Partial<TurnOut>).hidden_prompt_events,
             // Post-turn pressure compact / commit_turn run after the reply is visible.
           });

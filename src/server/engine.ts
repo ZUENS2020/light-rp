@@ -78,6 +78,7 @@ import {
   type AiUsage,
   type ResponseCacheStatus,
 } from "../core/ai";
+import { classifyStoryFinish, shouldRegenerate } from "../core/story-finish";
 import { gateMemoryWrite } from "../core/memory";
 import { memoryToolSpec, PromptLibrary, turnCommitToolSpec } from "../core/prompts";
 import type { R2Fs } from "../adapters/r2";
@@ -102,6 +103,14 @@ import {
   upsertCompactSummaryMessage,
 } from "../core/compact";
 
+export type StoryFinishDiag = {
+  finish_reason: string | null;
+  first_finish_reason: string | null;
+  completion_tokens: number;
+  /** `<kind>:<finish_reason>` when one full regenerate ran, else null. */
+  retry: string | null;
+};
+
 export type TurnOut = {
   text: string;
   scene: SceneState;
@@ -122,6 +131,8 @@ export type TurnOut = {
   should_commit?: boolean;
   /** Scene loaded at the start of this turn; used by deferred commit. */
   scene_before?: SceneState;
+  /** How the story completion ended (persisted on generation_tasks for truncation forensics). */
+  story_finish?: StoryFinishDiag;
   /** Legacy: only set if compact applied inline (no longer used on the story critical path). */
   rotate_prompt_epoch_reason?: "context_compacted";
 };
@@ -1009,24 +1020,54 @@ export async function runTurn(
     ...baseChatOpts,
     ...(partialSink ? { onPartial: partialSink.onPartial } : {}),
   } as const;
-  const isDirtyStream = (result: Awaited<ReturnType<typeof chat>>) =>
-    Boolean(partialSink) && !(result.usage?.prompt_tokens > 0) && result.finish_reason !== "length";
+  type StoryResult = Awaited<ReturnType<typeof chat>>;
+  const storyVisible = (result: StoryResult) => stripBreachAssistantPrefill(parseTrailer(result.text || "").visible);
+  const storyFinish = (result: StoryResult, streamed: boolean) =>
+    classifyStoryFinish(
+      {
+        visible: storyVisible(result),
+        finish_reason: result.finish_reason,
+        stream_done: result.stream_done,
+        prompt_tokens: result.usage?.prompt_tokens,
+      },
+      { streamed },
+    );
 
-  let gm: Awaited<ReturnType<typeof chat>>;
+  let gm: StoryResult;
+  let storyRetry: string | null = null;
+  let firstFinishReason: string | null;
   try {
     gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, storyChatOpts);
-    // Dirty close (no usage): one full regenerate WITHOUT onPartial so wantStream is false.
-    // Streaming again with a sink (even zero-I/O) still races Worker fetch-body draining;
-    // non-stream JSON returns usage reliably. Not mid-text 续写.
-    if (isDirtyStream(gm)) {
+    firstFinishReason = gm.finish_reason || null;
+    // Incomplete story (dirty close without usage, abnormal finish_reason such as GLM
+    // `sensitive` / `network_error`, or a body that stops mid-sentence): ONE full regenerate
+    // WITHOUT onPartial so wantStream is false. Never mid-text 续写.
+    const firstKind = storyFinish(gm, Boolean(partialSink));
+    if (shouldRegenerate(firstKind)) {
+      storyRetry = `${firstKind}:${gm.finish_reason || "none"}`;
       console.warn({
-        event: "llm.stream_incomplete_retry",
+        event: firstKind === "dirty" ? "llm.stream_incomplete_retry" : "llm.story_incomplete_retry",
+        kind: firstKind,
         finish_reason: gm.finish_reason || null,
         stream_done: Boolean(gm.stream_done),
         chars: gm.text.length,
+        completion_tokens: gm.usage?.completion_tokens || 0,
       });
-      gm = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, baseChatOpts);
-      // Replace in-memory buffer with the retry body so flush does not persist the cut.
+      const first = gm;
+      try {
+        const retry = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, baseChatOpts);
+        const retryKind = storyFinish(retry, false);
+        // Keep the retry unless it is also incomplete AND shorter than what we already have.
+        gm =
+          shouldRegenerate(retryKind) && storyVisible(retry).length < storyVisible(first).length ? first : retry;
+      } catch (error) {
+        // Dirty close keeps its old contract (bubble up → task retry). For a body we already
+        // have, a failed regenerate (e.g. provider 1301 on non-stream) must not lose the reply.
+        if (firstKind === "dirty") throw error;
+        console.warn({ event: "llm.story_incomplete_retry_failed", error: String(error).slice(0, 300) });
+        gm = first;
+      }
+      // Replace in-memory buffer with the chosen body so flush does not persist the cut.
       if (partialSink) partialSink.onPartial(gm.text || "");
     }
     // Breach on + policy refusal: one reinforced full regenerate (non-stream). Not 续写.
@@ -1060,9 +1101,16 @@ export async function runTurn(
   // prompt_tokens>0. A stop/[DONE] with usage=0 means the socket died before the usage chunk.
   const missingStreamUsage = Boolean(partialSink) && !(gm.usage?.prompt_tokens > 0);
   const incompleteStream = Boolean(partialSink) && missingStreamUsage && gm.finish_reason !== "length";
-  const truncated = hitLength || incompleteStream;
+  const finalKind = storyFinish(gm, false);
+  const abnormalFinish = !hitLength && !incompleteStream && finalKind === "abnormal";
+  const truncated = hitLength || incompleteStream || abnormalFinish;
   if (hitLength) warnings.push("回复在 max_tokens 处被截断");
   else if (incompleteStream) warnings.push("回复流提前结束（未收到 usage / 流未完整收尾）");
+  else if (abnormalFinish) warnings.push(`上游提前终止回复（finish_reason=${gm.finish_reason}），已整段重试仍未完整`);
+  else if (finalKind === "unterminated" && storyRetry) warnings.push("回复疑似在句中结束（已整段重试一次）");
+  if (abnormalFinish) {
+    console.warn({ event: "llm.story_abnormal_finish", finish_reason: gm.finish_reason || null, chars: gm.text.length });
+  }
   if (incompleteStream) {
     console.warn({
       event: "llm.stream_incomplete",
@@ -1192,6 +1240,12 @@ export async function runTurn(
     },
   );
   const aiUsage = addUsage(gm.usage, commitUsage);
+  const storyFinishDiag: StoryFinishDiag = {
+    finish_reason: gm.finish_reason || null,
+    first_finish_reason: firstFinishReason,
+    completion_tokens: gm.usage?.completion_tokens || 0,
+    retry: storyRetry,
+  };
   const pressureCompact = shouldCompactAfterTurn({
     promptTokens: aiUsage.prompt_tokens,
     estimatedTotal: assembled.report.total,
@@ -1229,6 +1283,7 @@ export async function runTurn(
         task_id: opts?.ai?.taskId || null,
         ai_usage: aiUsage,
         response_cache_status: gm.response_cache_status,
+        story_finish: storyFinishDiag,
         request_hash: gm.request_body ? await sha256(gm.request_body) : null,
         stable_prefix_tokens: stablePrefixTokens,
         volatile_tokens: volatileTokens,
@@ -1249,6 +1304,7 @@ export async function runTurn(
     context_report: assembled.report,
     ai_usage: aiUsage,
     response_cache_status: gm.response_cache_status,
+    story_finish: storyFinishDiag,
     request_hash: gm.request_body ? await sha256(gm.request_body) : undefined,
     stable_prefix_tokens: stablePrefixTokens,
     volatile_tokens: volatileTokens,

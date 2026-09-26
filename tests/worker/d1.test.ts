@@ -372,6 +372,68 @@ describe("D1 task and model integration", () => {
     });
   });
 
+  it("does not re-seed history into an epoch that already has reseeded transcript turns", async () => {
+    const id = await seedSession();
+    const runtime = await env.DB.prepare(`SELECT prompt_epoch FROM sessions WHERE id = ?`)
+      .bind(id)
+      .first<{ prompt_epoch: number }>();
+    const epoch = runtime!.prompt_epoch;
+    // Simulates replaceSessionTranscriptProjection: UA turns reseeded, no checkpoint yet.
+    for (const [index, [kind, content]] of [
+      ["user", "旧一"],
+      ["assistant", "旧答一"],
+    ].entries()) {
+      await env.DB.prepare(
+        `INSERT INTO llm_events (id, session_id, prompt_epoch, sequence, kind, role, payload_json, content_hash, stable, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))`,
+      )
+        .bind(crypto.randomUUID(), id, epoch, index + 1, kind, kind, JSON.stringify({ content }), `h${index}`)
+        .run();
+    }
+    await env.DB.prepare(`UPDATE sessions SET next_event_sequence = 3 WHERE id = ?`).bind(id).run();
+    const task = await createTurnTask(env.DB, {
+      workspaceId: "world-1",
+      sessionId: id,
+      text: "新一轮",
+      idempotencyKey: "reseeded-epoch",
+    });
+    const prepared = await preparePrompt(env.DB, {
+      sessionId: id,
+      taskId: task.task.id,
+      systemParts: ["稳定规则"],
+      checkpoint: "检查点",
+      dynamicContext: "",
+      userContent: "新一轮",
+      tools: null,
+      seedHistory: [
+        { role: "user", content: "旧一" },
+        { role: "assistant", content: "旧答一" },
+      ],
+    });
+    const contents = prepared.messages.map((m) => m.content);
+    expect(contents.filter((c) => c === "旧答一")).toHaveLength(1);
+    expect(contents.filter((c) => c === "旧一")).toHaveLength(1);
+  });
+
+  it("persists story finish forensics on the completed task", async () => {
+    const id = await seedSession();
+    const task = await createTurnTask(env.DB, {
+      workspaceId: "world-1",
+      sessionId: id,
+      text: "测试",
+      idempotencyKey: "finish-forensics",
+    });
+    await completeTask(env.DB, task.task.id, {
+      content: "完成。",
+      usage: { prompt_tokens: 100, completion_tokens: 42, reasoning_tokens: 0, cached_input_tokens: 0 },
+      storyFinish: { finish_reason: "stop", first_finish_reason: "sensitive", completion_tokens: 42, retry: "abnormal:sensitive" },
+    });
+    const row = await env.DB.prepare(`SELECT finish_reason, completion_tokens, story_retry FROM generation_tasks WHERE id = ?`)
+      .bind(task.task.id)
+      .first();
+    expect(row).toEqual({ finish_reason: "stop", completion_tokens: 42, story_retry: "abnormal:sensitive" });
+  });
+
   it("keeps OOC visible without adding it to the RP prompt", async () => {
     const id = await seedSession();
     const created = await createTurnTask(env.DB, {
