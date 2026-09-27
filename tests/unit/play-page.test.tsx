@@ -251,4 +251,84 @@ describe("Play Studio", () => {
     });
     expect(screen.queryByText("生成中…")).not.toBeInTheDocument();
   });
+
+  it("scrolls to the bottom exactly once on entry — not on send, not on finalize", async () => {
+    stubApi();
+    const scroll = vi.fn();
+    Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: scroll });
+    let taskStatus: "running" | "completed" = "running";
+    vi.spyOn(api, "turn").mockResolvedValue({ task_id: "task-scroll", status: "running" });
+    vi.spyOn(api, "task").mockImplementation(async () => ({
+      id: "task-scroll",
+      status: taskStatus,
+      content: "雨声更密了。",
+    }));
+    const user = userEvent.setup();
+    renderPlay();
+
+    const editor = await screen.findByLabelText("你的行动");
+    await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+    await user.type(editor, "推开门");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByText("雨声更密了。")).toBeInTheDocument();
+    taskStatus = "completed";
+    await waitFor(() => expect(screen.queryByText("生成中…")).not.toBeInTheDocument(), { timeout: 8_000 });
+    expect(scroll).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
+  it("finalizes from a runtime status snapshot and ignores a false WS failed frame", async () => {
+    stubApi();
+    const sockets: FakeSocket[] = [];
+    class FakeSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      readyState = 1;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor() {
+        sockets.push(this);
+        setTimeout(() => this.onopen?.(), 0);
+      }
+      send() {}
+      close() {
+        this.readyState = 3;
+        this.onclose?.();
+      }
+      emit(frame: unknown) {
+        this.onmessage?.({ data: JSON.stringify(frame) });
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeSocket);
+    let taskStatus: "running" | "completed" = "running";
+    vi.spyOn(api, "turn").mockResolvedValue({ task_id: "task-ws", status: "running" });
+    const taskSpy = vi.spyOn(api, "task").mockImplementation(async () => ({
+      id: "task-ws",
+      status: taskStatus,
+      content: taskStatus === "completed" ? "钟声停了。" : "",
+    }));
+    const user = userEvent.setup();
+    renderPlay();
+
+    const editor = await screen.findByLabelText("你的行动");
+    await user.type(editor, "推开门");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(taskSpy).toHaveBeenCalled());
+
+    // DO stale alarm says failed, D1 still running → no error banner.
+    sockets[0].emit({ type: "failed", taskId: "task-ws", error: "生成超时未更新" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // Reply lands while the completed frame is missed; a status snapshot (reconnect/ping) arrives.
+    taskStatus = "completed";
+    sockets[0].emit({ type: "status", taskId: "task-ws", status: "completed", partialContent: "钟声停了。" });
+    await waitFor(() => expect(screen.getByText("钟声停了。")).toBeInTheDocument(), { timeout: 3_000 });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(screen.getAllByText("钟声停了。")).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
 });

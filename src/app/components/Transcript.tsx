@@ -107,8 +107,11 @@ export function Transcript({
   loadingOlder,
   onLoadOlder,
   onRewrite,
+  scrollKey = "",
 }: {
   state: PlayState;
+  /** Chat identity (session id): the initial scroll-to-bottom runs once per key. */
+  scrollKey?: string;
   pending?: boolean;
   /** Growing assistant text while a generation task is running. */
   streamingText?: string;
@@ -124,9 +127,16 @@ export function Transcript({
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
 
+  const scrolledKeyRef = useRef<string | null>(null);
+  const hasContent = state.messages.length > 0 || Boolean(state.opening);
+
+  // Exactly ONE jump to the bottom: the first time this chat's first page of history renders.
+  // No auto-scroll while generating, on finalize, on refetch, on retry, or on "load older".
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [state.messages.length, state.opening]);
+    if (!hasContent || scrolledKeyRef.current === scrollKey) return;
+    scrolledKeyRef.current = scrollKey;
+    endRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+  }, [hasContent, scrollKey]);
 
   const lastAssistantIndex = (() => {
     for (let i = state.messages.length - 1; i >= 0; i -= 1) {
