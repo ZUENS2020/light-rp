@@ -32,6 +32,7 @@ import {
 } from "../lib/api";
 import { parseSystemCommand, SYSTEM_COMMANDS } from "../../core/commands";
 import { absorbTipSlide, mergePlayState, prependOlderMessages, promoteCompletedAssistant } from "../lib/play-history";
+import { mergeTaskSnapshot, runtimeFrameAction, taskPollInterval, type RuntimeFrame } from "../lib/play-runtime";
 
 function formatError(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message;
@@ -251,6 +252,14 @@ export function PlayPage() {
   const [olderWindow, setOlderWindow] = useState<PlayState["message_window"]>();
 
   const tipRef = useRef<{ offset: number; messages: PlayState["messages"] }>({ offset: 0, messages: [] });
+  const taskIdRef = useRef<string | null>(null);
+  const optimisticRef = useRef("");
+  useEffect(() => {
+    taskIdRef.current = taskId;
+  }, [taskId]);
+  useEffect(() => {
+    optimisticRef.current = optimisticText;
+  }, [optimisticText]);
   /** Rewrite/regenerate intentionally shorten the transcript — allow one shorter play fetch. */
   const acceptShorterRef = useRef(false);
 
@@ -298,14 +307,14 @@ export function PlayPage() {
   });
   const taskQuery = useQuery({
     queryKey: ["task", taskId],
-    queryFn: () => api.task(taskId || ""),
-    enabled: Boolean(taskId),
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      if (!(status === "pending" || status === "running" || !status)) return false;
-      // WS partials are primary; poll is fallback (slower when socket is healthy).
-      return wsLive ? 8_000 : 1_500;
+    queryFn: async () => {
+      const incoming = await api.task(taskId || "");
+      // Monotonic: a slow poll that left before completion must not reopen a finished task.
+      return mergeTaskSnapshot(queryClient.getQueryData<GenerationTask>(["task", taskId]), incoming);
     },
+    enabled: Boolean(taskId),
+    // D1 polling always runs while a task is in flight — the WS is a latency optimisation only.
+    refetchInterval: (query) => taskPollInterval(query.state.data?.status, wsLive),
   });
   const state = playQuery.data;
 
@@ -323,100 +332,117 @@ export function PlayPage() {
   }, [activeQuery.data]);
 
   useEffect(() => {
-    if (!worldId || !sessionId || typeof WebSocket === "undefined") return;
+    if (!worldId || !sessionId) return;
     let closed = false;
     let socket: WebSocket | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let pingTimer: ReturnType<typeof setInterval> | null = null;
+    let pongDeadline: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
 
+    /** Re-read D1 truth for the task we wait on (and the active-task probe). Cheap GETs. */
+    const resync = () => {
+      const current = taskIdRef.current;
+      if (current) void queryClient.invalidateQueries({ queryKey: ["task", current] });
+      void queryClient.invalidateQueries({ queryKey: ["active-task", sessionId] });
+    };
+
+    const setTask = (id: string, patch: Partial<GenerationTask>) =>
+      queryClient.setQueryData(["task", id], (prev: GenerationTask | undefined) =>
+        mergeTaskSnapshot(prev, {
+          ...(prev || { id }),
+          ...patch,
+          id,
+        } as GenerationTask),
+      );
+
     const applyEvent = (raw: string) => {
-      let msg: {
-        type?: string;
-        taskId?: string | null;
-        content?: string;
-        error?: string;
-        status?: string;
-        partialContent?: string;
-      };
+      let frame: RuntimeFrame;
       try {
-        msg = JSON.parse(raw) as typeof msg;
+        frame = JSON.parse(raw) as RuntimeFrame;
       } catch {
         return;
       }
-      if (msg.type === "partial" && msg.taskId && typeof msg.content === "string") {
-        setTaskId(msg.taskId);
-        queryClient.setQueryData(["task", msg.taskId], (prev: GenerationTask | undefined) => ({
-          ...(prev || { id: msg.taskId! }),
-          id: msg.taskId!,
-          status: "running" as const,
-          content: msg.content,
-          error: prev?.error ?? null,
-        }));
+      const action = runtimeFrameAction(frame, taskIdRef.current);
+      if (action.kind === "running") {
+        setTaskId(action.taskId);
+        setTask(action.taskId, {
+          status: "running",
+          ...(action.content !== undefined ? { content: action.content } : {}),
+        });
         return;
       }
-      if (msg.type === "completed" && msg.taskId) {
-        setTaskId(msg.taskId);
-        const content = typeof msg.content === "string" ? msg.content : undefined;
-        queryClient.setQueryData(["task", msg.taskId], (prev: GenerationTask | undefined) => ({
-          ...(prev || { id: msg.taskId! }),
-          id: msg.taskId!,
-          status: "completed" as const,
-          content: content ?? prev?.content,
+      if (action.kind === "completed") {
+        setTaskId(action.taskId);
+        setTask(action.taskId, {
+          status: "completed",
+          ...(action.content !== undefined ? { content: action.content } : {}),
           error: null,
-        }));
-        // Promote in-place so the streaming bubble never unmounts into a blank gap.
-        queryClient.setQueryData(["play", worldId, sessionId], (prev: PlayState | undefined) =>
-          promoteCompletedAssistant(prev, {
-            id: msg.taskId!,
-            status: "completed",
-            content: content ?? queryClient.getQueryData<GenerationTask>(["task", msg.taskId!])?.content,
-          }),
-        );
+        });
+        // No-body completion: fetch the persisted reply from D1.
+        if (action.content === undefined) void queryClient.invalidateQueries({ queryKey: ["task", action.taskId] });
         return;
       }
-      if (msg.type === "failed" && msg.taskId) {
-        setTaskId(msg.taskId);
-        queryClient.setQueryData(["task", msg.taskId], (prev: GenerationTask | undefined) => ({
-          ...(prev || { id: msg.taskId! }),
-          id: msg.taskId!,
-          status: "failed" as const,
-          content: prev?.content,
-          error: msg.error || "生成失败",
-        }));
-        return;
-      }
-      if (msg.type === "status" && msg.taskId && (msg.status === "pending" || msg.status === "running")) {
-        setTaskId(msg.taskId);
-        if (typeof msg.partialContent === "string" && msg.partialContent) {
-          queryClient.setQueryData(["task", msg.taskId], (prev: GenerationTask | undefined) => ({
-            ...(prev || { id: msg.taskId! }),
-            id: msg.taskId!,
-            status: "running" as const,
-            content: msg.partialContent,
-          }));
-        }
+      if (action.kind === "confirm") {
+        void queryClient.invalidateQueries({ queryKey: ["task", action.taskId] });
       }
     };
 
+    const clearTimers = () => {
+      if (pingTimer) clearInterval(pingTimer);
+      if (pongDeadline) clearTimeout(pongDeadline);
+      pingTimer = null;
+      pongDeadline = null;
+    };
+
     const connect = () => {
-      if (closed) return;
+      if (closed || typeof WebSocket === "undefined") return;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
       try {
         socket = new WebSocket(runtimeWebSocketUrl(worldId, sessionId));
       } catch {
         setWsLive(false);
         return;
       }
-      socket.onopen = () => {
+      const ws = socket;
+      ws.onopen = () => {
+        const reconnect = attempt > 0;
         attempt = 0;
         setWsLive(true);
+        // Anything broadcast while we were disconnected is gone — re-read D1.
+        if (reconnect) resync();
+        clearTimers();
+        // Keepalive: a story turn can be silent for minutes (no mid-stream partials since #54).
+        // A half-open socket never fires onclose, so require a status reply to each ping.
+        pingTimer = setInterval(() => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          try {
+            ws.send(JSON.stringify({ type: "ping" }));
+          } catch {
+            // close handler reconnects
+          }
+          if (pongDeadline) clearTimeout(pongDeadline);
+          pongDeadline = setTimeout(() => {
+            try {
+              ws.close(4000, "ping timeout");
+            } catch {
+              // ignore
+            }
+          }, 10_000);
+        }, 25_000);
       };
-      socket.onmessage = (event) => {
+      ws.onmessage = (event) => {
+        if (pongDeadline) clearTimeout(pongDeadline);
+        pongDeadline = null;
         if (typeof event.data === "string") applyEvent(event.data);
       };
-      socket.onerror = () => {
+      ws.onerror = () => {
         setWsLive(false);
       };
-      socket.onclose = () => {
+      ws.onclose = () => {
+        if (socket !== ws) return;
+        clearTimers();
         setWsLive(false);
         socket = null;
         if (closed) return;
@@ -426,10 +452,30 @@ export function PlayPage() {
       };
     };
 
+    const onVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      resync();
+      if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+        attempt = Math.max(attempt, 1);
+        connect();
+      }
+    };
+
     connect();
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible);
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", onVisible);
+      window.addEventListener("focus", onVisible);
+    }
     return () => {
       closed = true;
+      clearTimers();
       if (retryTimer) clearTimeout(retryTimer);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", onVisible);
+        window.removeEventListener("focus", onVisible);
+      }
       setWsLive(false);
       try {
         socket?.close();
@@ -443,17 +489,19 @@ export function PlayPage() {
     const task = taskQuery.data;
     if (!task || task.status === "pending" || task.status === "running") return;
     if (task.status === "completed") {
-      setOptimisticText("");
+      // Promote user+reply into the Play cache first, then drop the optimistic bubble, so the
+      // turn never blinks out while the (slow, ~4s) play refetch runs.
       queryClient.setQueryData(["play", worldId, sessionId], (prev: PlayState | undefined) =>
-        promoteCompletedAssistant(prev, task),
+        promoteCompletedAssistant(prev, task, optimisticRef.current),
       );
+      setOptimisticText("");
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ["play", worldId, sessionId] }),
         queryClient.invalidateQueries({ queryKey: ["session-cache", sessionId] }),
         queryClient.invalidateQueries({ queryKey: ["session-memory", sessionId] }),
         queryClient.invalidateQueries({ queryKey: ["models"] }),
         queryClient.invalidateQueries({ queryKey: ["active-task", sessionId] }),
-      ]).then(() => setTaskId(null));
+      ]).then(() => setTaskId((current) => (current === task.id ? null : current)));
     }
   }, [queryClient, sessionId, taskQuery.data, worldId]);
 
@@ -858,6 +906,7 @@ export function PlayPage() {
           ) : null}
           <div className="min-h-0 flex-1 overflow-y-auto">
             <Transcript
+              scrollKey={`${worldId}/${sessionId}`}
               state={displayed}
               pending={busy || Boolean(streamingText)}
               streamingText={streamingText}

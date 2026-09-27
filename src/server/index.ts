@@ -1262,6 +1262,13 @@ export default {
         const code =
           err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code || "") : undefined;
         const current = taskId ? await getTask(env.DB, taskId).catch(() => null) : null;
+        if (current?.status === "completed") {
+          // The reply is already persisted and broadcast; a later follow-up error (post-turn
+          // scheduling, lease assert) must not push a "failed" frame over a finished turn.
+          console.warn({ event: "generation.post_complete_error", taskId, error: message.slice(0, 300) });
+          msg.ack();
+          continue;
+        }
         const dead =
           (current?.attempt_count || msg.attempts) >= MAX_GENERATION_ATTEMPTS ||
           code === "LLM_OUTPUT_CHANNEL_VIOLATION";

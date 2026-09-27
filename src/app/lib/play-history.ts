@@ -24,6 +24,8 @@ export function mergePlayState(current: PlayState | undefined, incoming: PlaySta
 export function promoteCompletedAssistant(
   state: PlayState | undefined,
   task: Pick<GenerationTask, "id" | "content" | "status">,
+  /** Optimistic user text for this turn: kept in place so the reply never shows without it. */
+  userText?: string,
 ): PlayState | undefined {
   if (!state || task.status !== "completed") return state;
   const content = typeof task.content === "string" ? task.content : "";
@@ -32,16 +34,20 @@ export function promoteCompletedAssistant(
   if (last?.role === "assistant" && (last.task_id === task.id || last.content === content)) {
     return state;
   }
-  const nextMessages: PlayMessage[] = [
-    ...state.messages,
-    { role: "assistant", content, ts: new Date().toISOString(), task_id: task.id },
-  ];
+  const ts = new Date().toISOString();
+  const added: PlayMessage[] = [];
+  const user = (userText || "").trim();
+  if (user && !(last?.role === "user" && last.content.trim() === user)) {
+    added.push({ role: "user", content: userText as string, ts, task_id: task.id });
+  }
+  added.push({ role: "assistant", content, ts, task_id: task.id });
+  const nextMessages: PlayMessage[] = [...state.messages, ...added];
   const prevTotal = state.message_window?.total ?? state.messages.length;
   const offset = state.message_window?.offset ?? Math.max(0, prevTotal - state.messages.length);
   const message_window: MessageWindow = {
     offset,
     limit: state.message_window?.limit ?? nextMessages.length,
-    total: Math.max(prevTotal + 1, offset + nextMessages.length),
+    total: Math.max(prevTotal + added.length, offset + nextMessages.length),
     has_older: state.message_window?.has_older ?? offset > 0,
   };
   return { ...state, messages: nextMessages, message_window };
