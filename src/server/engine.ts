@@ -33,6 +33,7 @@ import {
   type MiniSelectConfig,
 } from "../core/budget";
 import {
+  capOngoing,
   aliasMap,
   appendEvents,
   applyMemory,
@@ -688,7 +689,7 @@ export function normalizeTurnCommit(
     location: textField(rawState.location, previous.location),
     present: hasPresent ? [...new Set(present)] : previous.present,
     scene: textField(rawState.scene, previous.scene || previous.notes),
-    ongoing: Array.isArray(rawState.ongoing) ? stringList(rawState.ongoing) : previous.ongoing,
+    ongoing: capOngoing(Array.isArray(rawState.ongoing) ? stringList(rawState.ongoing) : previous.ongoing),
     notes: textField(rawState.scene, previous.scene || previous.notes),
   };
   const events = stringList(args.events).map((summary) => ({ summary }));
@@ -1206,13 +1207,9 @@ export async function runTurn(
 
   const stateUpdated = stableStringify(scene) !== stableStringify(nextScene);
   const hiddenPromptEvents: NonNullable<TurnOut["hidden_prompt_events"]> = [];
-  if (stateUpdated) {
-    hiddenPromptEvents.push({
-      kind: "context",
-      content: `## 场景状态变化\n${sceneYaml(nextScene)}`,
-      hashSeed: `state:${stableStringify(nextScene)}`,
-    });
-  }
+  // Scene state is NOT appended here: the next turn's dynamic context already carries the
+  // current state right before the user message (preparePrompt keeps only that latest copy).
+  // A second full `## 场景状态变化` copy per turn doubled the state text in every epoch.
   if (appliedMemoryOps.length) {
     hiddenPromptEvents.push({
       kind: "memory",
@@ -1936,13 +1933,7 @@ export async function runDeferredTurnCommit(input: DeferredTurnCommitInput): Pro
   }
 
   const hiddenPromptEvents: NonNullable<TurnOut["hidden_prompt_events"]> = [];
-  if (!skipState) {
-    hiddenPromptEvents.push({
-      kind: "context",
-      content: `## 场景状态变化\n${sceneYaml(nextScene)}`,
-      hashSeed: `state:${stableStringify(nextScene)}`,
-    });
-  }
+  // State rides in the next turn's dynamic context only (see runTurn); no duplicate state event.
   if (appliedMemoryOps.length) {
     hiddenPromptEvents.push({
       kind: "memory",

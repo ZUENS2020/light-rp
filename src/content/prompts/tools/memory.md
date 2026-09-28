@@ -27,3 +27,4 @@ Targets:
 
 Keep entries short. Prefer one `operations` batch when consolidating: remove/replace stale entries and add the new fact together; the final character budget is checked atomically. If a write fails, use the returned live entries to revise the batch, but stop after three failed attempts and continue the reply. Writes are durable immediately; the prompt epoch keeps a frozen core snapshot and receives later memory changes as append-only hidden events.
 Duplicate or near-duplicate facts should not be added again.
+Write every entry as a plain fact (who did what, what was agreed). Never phrase memory as bookkeeping — no ledgers, tallies, tickets, numbered clauses, page numbers or 账/记账/入账/签收/罚单/清单-style wording; describe the underlying event or agreement instead.
