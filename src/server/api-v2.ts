@@ -1,3 +1,4 @@
+import { resolveRetryBaseScene } from "./retry-state";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -30,7 +31,7 @@ import {
 } from "./tasks";
 import { memoryStatus, mirrorCoreMemorySnapshot } from "./memory";
 import {
-  invalidateSessionSceneState,
+  sceneYaml,
   invalidateSessionSummary,
   loadLorebookText,
   loadMemory,
@@ -280,10 +281,24 @@ export function registerV2Routes(app: App): void {
         title: loaded.title,
         allowTruncate: true,
       });
-      await invalidateSessionSceneState(fs, sid, {
-        present: loaded.primary_character ? [loaded.primary_character] : [],
-      });
-      const summaryMessages = await invalidateSessionSummary(fs, sid, truncated);
+    }
+    // Retry keeps the scene as it was right before the retried reply (never cleared) and
+    // leaves memory alone; the retried reply's stale deferred commit is ignored (engine).
+    const retryBase = await resolveRetryBaseScene(c.env.DB, fs, sid, {
+      // The reply being retried (a regenerated reply carries its own task id, the user line keeps the first).
+      taskId:
+        [...loaded.messages.slice(lastUserIdx + 1)].reverse().find((m) => m.role === "assistant" && m.task_id)
+          ?.task_id ||
+        loaded.messages[lastUserIdx]?.task_id ||
+        null,
+      messages: loaded.messages,
+      retriedUserIndex: lastUserIdx,
+    });
+    if (retryBase.scene) await fs.put(`sessions/${sid}/state.yaml`, sceneYaml(retryBase.scene));
+    if (truncated.length < loaded.messages.length) {
+      // The compact summary only needs voiding when it was written after the retried reply.
+      const summaryCoversRetried = (loaded.compact_at_message_count ?? 0) > lastUserIdx + 1;
+      const summaryMessages = summaryCoversRetried ? await invalidateSessionSummary(fs, sid, truncated) : truncated;
       if (summaryMessages !== truncated) {
         truncated = summaryMessages;
         await saveSession(fs, sid, truncated, {
@@ -305,6 +320,9 @@ export function registerV2Routes(app: App): void {
       idempotencyKey,
     });
     await c.env.DB.prepare(`UPDATE generation_tasks SET kind = 'regenerate' WHERE id = ?`).bind(taskId).run();
+    console.log(
+      JSON.stringify({ event: "regenerate_scene_base", session: sid, task: taskId, source: retryBase.source }),
+    );
     const task = await getTask(c.env.DB, taskId);
     if (!task) throw new Error("regenerate task insert did not commit");
     await publishTask(c.env, task);
