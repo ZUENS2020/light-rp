@@ -331,4 +331,35 @@ describe("Play Studio", () => {
     expect(screen.getAllByText("钟声停了。")).toHaveLength(1);
     vi.unstubAllGlobals();
   });
+
+  it("finalizes as soon as the transcript holds the task's reply, even if the status poll lags", async () => {
+    stubApi();
+    vi.spyOn(api, "turn").mockResolvedValue({ task_id: "task-landed", status: "running" });
+    // D1 status poll still says running (lagging) — never flips on its own in this test.
+    vi.spyOn(api, "task").mockResolvedValue({ id: "task-landed", status: "running", content: "" });
+    const landed: PlayState = {
+      ...playState,
+      messages: [
+        ...playState.messages,
+        { role: "user", content: "推开门", ts: "2026-08-30T00:01:00Z", task_id: "task-landed" },
+        { role: "assistant", content: "檐下的铃停了。", ts: "2026-08-30T00:01:01Z", task_id: "task-landed" },
+      ],
+      message_window: { offset: 0, limit: 40, total: 3, has_older: false },
+    };
+    const user = userEvent.setup();
+    const { container } = renderPlay();
+    const editor = await screen.findByLabelText("你的行动");
+    await user.type(editor, "推开门");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(screen.getByText("正在生成…")).toBeInTheDocument());
+
+    // Reply arrives through a play refetch (e.g. reconnect/visibility resync).
+    vi.spyOn(api, "play").mockResolvedValue(landed);
+    await user.click(screen.getByRole("button", { name: "记忆" }));
+    await user.click(screen.getByRole("button", { name: "重新镜像核心记忆到 D1" }));
+    expect(await screen.findByText("檐下的铃停了。")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("正在生成…")).not.toBeInTheDocument());
+    expect(screen.queryByText("生成中…")).not.toBeInTheDocument();
+    expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(0);
+  });
 });

@@ -150,8 +150,25 @@ export type RunTurnOptions = {
     onLeaseTouch?: () => Promise<void>;
     /** SessionRuntime DO broadcast (full content); D1 partial writes stay for poll fallback. */
     onRuntimePartial?: (content: string) => Promise<void>;
+    /**
+     * Called once the final reply is persisted to the R2 transcript (before trace/event-log
+     * bookkeeping). The queue consumer completes the task + broadcasts here.
+     */
+    onReplyPersisted?: (payload: ReplyPersistedPayload) => Promise<void>;
   };
 };
+
+export type ReplyPersistedPayload = Pick<
+  TurnOut,
+  | "text"
+  | "ai_usage"
+  | "response_cache_status"
+  | "request_hash"
+  | "stable_prefix_tokens"
+  | "volatile_tokens"
+  | "hidden_prompt_events"
+  | "story_finish"
+>;
 
 export type OocOut = Pick<
   TurnOut,
@@ -1055,11 +1072,18 @@ export async function runTurn(
       });
       const first = gm;
       try {
-        const retry = await chat(env, messages, null, settings.llm.temperature, outputTokens, settings.llm.timeout, baseChatOpts);
+        const retry = await chat(
+          env,
+          messages,
+          null,
+          settings.llm.temperature,
+          outputTokens,
+          settings.llm.timeout,
+          baseChatOpts,
+        );
         const retryKind = storyFinish(retry, false);
         // Keep the retry unless it is also incomplete AND shorter than what we already have.
-        gm =
-          shouldRegenerate(retryKind) && storyVisible(retry).length < storyVisible(first).length ? first : retry;
+        gm = shouldRegenerate(retryKind) && storyVisible(retry).length < storyVisible(first).length ? first : retry;
       } catch (error) {
         // Dirty close keeps its old contract (bubble up → task retry). For a body we already
         // have, a failed regenerate (e.g. provider 1301 on non-stream) must not lose the reply.
@@ -1091,7 +1115,11 @@ export async function runTurn(
       if (partialSink) partialSink.onPartial(gm.text || "");
     }
   } finally {
-    if (partialSink) await partialSink.flush();
+    // No partial flush for story turns: since #54 there are no mid-stream partials, so this
+    // flush only pushed the not-yet-final text to Play ("reply visible, still generating")
+    // several seconds before completion — and before any #57 regenerate had settled. The
+    // reply now appears with the completion broadcast. Just renew the lease here.
+    if (partialSink && opts?.ai?.onLeaseTouch) await opts.ai.onLeaseTouch().catch(() => undefined);
   }
   const { visible, trailer } = parseTrailer(gm.text);
   // length = provider hit max_tokens (GLM CoT shares this pool); missing finish_reason after a
@@ -1109,7 +1137,11 @@ export async function runTurn(
   else if (abnormalFinish) warnings.push(`上游提前终止回复（finish_reason=${gm.finish_reason}），已整段重试仍未完整`);
   else if (finalKind === "unterminated" && storyRetry) warnings.push("回复疑似在句中结束（已整段重试一次）");
   if (abnormalFinish) {
-    console.warn({ event: "llm.story_abnormal_finish", finish_reason: gm.finish_reason || null, chars: gm.text.length });
+    console.warn({
+      event: "llm.story_abnormal_finish",
+      finish_reason: gm.finish_reason || null,
+      chars: gm.text.length,
+    });
   }
   if (incompleteStream) {
     console.warn({
@@ -1172,7 +1204,6 @@ export async function runTurn(
     warnings.push(`长期记忆写入失败：${batch.message}`);
   }
 
-  await appendEvents(fs, sessionId, [...events.map((item) => enrichRecord(item, nextScene)), ...memoryEventRecords]);
   const stateUpdated = stableStringify(scene) !== stableStringify(nextScene);
   const hiddenPromptEvents: NonNullable<TurnOut["hidden_prompt_events"]> = [];
   if (stateUpdated) {
@@ -1204,24 +1235,6 @@ export async function runTurn(
         assistant,
       ];
   const turnNumber = roleplayOnlyMessages(provisionalMessages).filter((m) => m.role === "user").length;
-  await appendTrace(fs, sessionId, {
-    turn: turnNumber,
-    primary: primaryId,
-    minis: assembled.mini_ids,
-    lore: assembled.lore_titles,
-    memories: remembered,
-    state_before: scene,
-    state_after: nextScene,
-    token_usage: {
-      estimated_total: assembled.report.total,
-      max: assembled.report.max_tokens,
-      generation_reserve: assembled.report.generation_reserve,
-      tool_reserve: assembled.report.tool_reserve,
-      phi: assembled.report.phi_tokens,
-    },
-    warnings,
-    ts: nowIso(),
-  });
   const threadId = loaded.thread_id;
   // Reload-merge: do not write the mid-turn snapshot over a concurrent compact or newer tip.
   const nextMessages = await appendTurnMessages(
@@ -1246,6 +1259,41 @@ export async function runTurn(
     completion_tokens: gm.usage?.completion_tokens || 0,
     retry: storyRetry,
   };
+  const requestHash = gm.request_body ? await sha256(gm.request_body) : undefined;
+  // The reply is durable in R2 now. Flip the task to completed and broadcast BEFORE the
+  // remaining bookkeeping (event log, trace, last_turn.json), so Play shows the reply and
+  // "completed" at the same moment. commit_turn / compaction stay background work.
+  if (opts?.ai?.onReplyPersisted) {
+    await opts.ai.onReplyPersisted({
+      text: replyText,
+      ai_usage: aiUsage,
+      response_cache_status: gm.response_cache_status,
+      request_hash: requestHash,
+      stable_prefix_tokens: stablePrefixTokens,
+      volatile_tokens: volatileTokens,
+      hidden_prompt_events: hiddenPromptEvents,
+      story_finish: storyFinishDiag,
+    });
+  }
+  await appendEvents(fs, sessionId, [...events.map((item) => enrichRecord(item, nextScene)), ...memoryEventRecords]);
+  await appendTrace(fs, sessionId, {
+    turn: turnNumber,
+    primary: primaryId,
+    minis: assembled.mini_ids,
+    lore: assembled.lore_titles,
+    memories: remembered,
+    state_before: scene,
+    state_after: nextScene,
+    token_usage: {
+      estimated_total: assembled.report.total,
+      max: assembled.report.max_tokens,
+      generation_reserve: assembled.report.generation_reserve,
+      tool_reserve: assembled.report.tool_reserve,
+      phi: assembled.report.phi_tokens,
+    },
+    warnings,
+    ts: nowIso(),
+  });
   const pressureCompact = shouldCompactAfterTurn({
     promptTokens: aiUsage.prompt_tokens,
     estimatedTotal: assembled.report.total,
@@ -1284,7 +1332,7 @@ export async function runTurn(
         ai_usage: aiUsage,
         response_cache_status: gm.response_cache_status,
         story_finish: storyFinishDiag,
-        request_hash: gm.request_body ? await sha256(gm.request_body) : null,
+        request_hash: requestHash ?? null,
         stable_prefix_tokens: stablePrefixTokens,
         volatile_tokens: volatileTokens,
         completed_at: nowIso(),
@@ -1305,7 +1353,7 @@ export async function runTurn(
     ai_usage: aiUsage,
     response_cache_status: gm.response_cache_status,
     story_finish: storyFinishDiag,
-    request_hash: gm.request_body ? await sha256(gm.request_body) : undefined,
+    request_hash: requestHash,
     stable_prefix_tokens: stablePrefixTokens,
     volatile_tokens: volatileTokens,
     hidden_prompt_events: hiddenPromptEvents,

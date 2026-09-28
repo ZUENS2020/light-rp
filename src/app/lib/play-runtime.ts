@@ -1,4 +1,4 @@
-import type { GenerationTask } from "./api";
+import type { GenerationTask, PlayMessage } from "./api";
 
 /** Raw SessionRuntime DO WebSocket frame (see src/server/session-runtime.ts). */
 export type RuntimeFrame = {
@@ -70,4 +70,23 @@ export function mergeTaskSnapshot(prev: GenerationTask | undefined, incoming: Ge
 export function taskPollInterval(status: GenerationTask["status"] | undefined, wsLive: boolean): number | false {
   if (status && status !== "pending" && status !== "running") return false;
   return wsLive ? 5_000 : 2_000;
+}
+
+/**
+ * The persisted assistant message for `taskId`, if the transcript already has it while the
+ * task still looks in flight. Only a message tagged with the task id counts, so an earlier
+ * reply with identical text cannot finalize a new turn.
+ */
+export function findLandedReply(
+  messages: PlayMessage[] | undefined,
+  taskId: string | null,
+  status: GenerationTask["status"] | undefined,
+): PlayMessage | null {
+  if (!taskId || !messages?.length) return null;
+  if (status && status !== "pending" && status !== "running") return null;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role === "assistant" && message.task_id === taskId && message.content.trim()) return message;
+  }
+  return null;
 }

@@ -32,7 +32,13 @@ import {
 } from "../lib/api";
 import { parseSystemCommand, SYSTEM_COMMANDS } from "../../core/commands";
 import { absorbTipSlide, mergePlayState, prependOlderMessages, promoteCompletedAssistant } from "../lib/play-history";
-import { mergeTaskSnapshot, runtimeFrameAction, taskPollInterval, type RuntimeFrame } from "../lib/play-runtime";
+import {
+  findLandedReply,
+  mergeTaskSnapshot,
+  runtimeFrameAction,
+  taskPollInterval,
+  type RuntimeFrame,
+} from "../lib/play-runtime";
 
 function formatError(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message;
@@ -654,6 +660,25 @@ export function PlayPage() {
           },
     };
   }, [olderMessages, olderWindow, optimisticText, state]);
+
+  // If the transcript already holds the final assistant message for the task we are waiting
+  // on, the turn IS done — finalize now instead of waiting for the next status poll/frame.
+  const landedReply = useMemo(
+    () => findLandedReply(state?.messages, taskId, activeStatus),
+    [activeStatus, state?.messages, taskId],
+  );
+  useEffect(() => {
+    if (!landedReply || !taskId) return;
+    queryClient.setQueryData(["task", taskId], (prev: GenerationTask | undefined) =>
+      mergeTaskSnapshot(prev, {
+        ...(prev || { id: taskId }),
+        id: taskId,
+        status: "completed",
+        content: landedReply.content,
+        error: null,
+      }),
+    );
+  }, [landedReply, queryClient, taskId]);
 
   const tipCaughtUp = useMemo(() => {
     if (!taskId || !taskContent || !displayed) return true;
