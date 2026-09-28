@@ -38,6 +38,7 @@ import {
   runOoc,
   runTurn,
   schedulePostTurnFollowup,
+  type ReplyPersistedPayload,
   type TurnOut,
 } from "./engine";
 import { turnErrorStatus } from "../adapters/ai-gateway";
@@ -1152,6 +1153,25 @@ export default {
             );
           }
           const model = JSON.parse(leased.model_snapshot_json) as AiModelConfig;
+          // Story turns complete as soon as the final reply is in the R2 transcript (engine
+          // calls this before trace/event-log bookkeeping); follow-ups never hold the status.
+          let completedEarly = false;
+          const onReplyPersisted = async (payload: ReplyPersistedPayload) => {
+            await heartbeat.assertHeld();
+            await completeTask(env.DB, taskId, {
+              content: payload.text,
+              includeInPrompt: true,
+              requestHash: payload.request_hash,
+              cacheStatus: payload.response_cache_status,
+              usage: payload.ai_usage,
+              stablePrefixTokens: payload.stable_prefix_tokens,
+              volatileTokens: payload.volatile_tokens,
+              storyFinish: payload.story_finish,
+              hiddenEvents: payload.hidden_prompt_events,
+            });
+            completedEarly = true;
+            if (runtime) await runtime.onComplete({ taskId, content: payload.text }).catch(() => undefined);
+          };
           const result = ooc
             ? await runOoc(env, fs, pack, sessionId, leased.user_text, settings, {
                 model,
@@ -1180,6 +1200,7 @@ export default {
                     leaseOwner: owner,
                     onLeaseTouch,
                     onRuntimePartial: notifyRuntimePartial,
+                    onReplyPersisted,
                     requestKind:
                       leased.kind === "rewrite" ? "rewrite" : leased.kind === "regenerate" ? "regenerate" : "story",
                   },
@@ -1193,21 +1214,23 @@ export default {
               snapshot: await loadMemory(fs),
             });
           }
-          await heartbeat.assertHeld();
-          await completeTask(env.DB, taskId, {
-            content: result.text,
-            includeInPrompt: !ooc,
-            requestHash: result.request_hash,
-            cacheStatus: result.response_cache_status,
-            usage: result.ai_usage,
-            stablePrefixTokens: result.stable_prefix_tokens,
-            volatileTokens: result.volatile_tokens,
-            storyFinish: (result as Partial<TurnOut>).story_finish,
-            hiddenEvents: (result as Partial<TurnOut>).hidden_prompt_events,
-            // Post-turn pressure compact / commit_turn run after the reply is visible.
-          });
-          if (runtime) {
-            await runtime.onComplete({ taskId, content: result.text }).catch(() => undefined);
+          if (!completedEarly) {
+            await heartbeat.assertHeld();
+            await completeTask(env.DB, taskId, {
+              content: result.text,
+              includeInPrompt: !ooc,
+              requestHash: result.request_hash,
+              cacheStatus: result.response_cache_status,
+              usage: result.ai_usage,
+              stablePrefixTokens: result.stable_prefix_tokens,
+              volatileTokens: result.volatile_tokens,
+              storyFinish: (result as Partial<TurnOut>).story_finish,
+              hiddenEvents: (result as Partial<TurnOut>).hidden_prompt_events,
+              // Post-turn pressure compact / commit_turn run after the reply is visible.
+            });
+            if (runtime) {
+              await runtime.onComplete({ taskId, content: result.text }).catch(() => undefined);
+            }
           }
           if (!ooc && ((result as Partial<TurnOut>).should_commit || (result as Partial<TurnOut>).should_compact)) {
             const overlayMap = await overlays(fs);

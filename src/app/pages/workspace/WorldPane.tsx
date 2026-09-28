@@ -31,7 +31,6 @@ export function WorldPane({
     setPlayerText(world.player_text || "");
   }, [world]);
 
-
   async function save(event: FormEvent) {
     event.preventDefault();
     setBusy(true);

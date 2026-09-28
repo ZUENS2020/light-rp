@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mergeTaskSnapshot, runtimeFrameAction, taskPollInterval } from "../../src/app/lib/play-runtime";
+import {
+  findLandedReply,
+  mergeTaskSnapshot,
+  runtimeFrameAction,
+  taskPollInterval,
+} from "../../src/app/lib/play-runtime";
 import { promoteCompletedAssistant } from "../../src/app/lib/play-history";
 import type { PlayState } from "../../src/app/lib/api";
 
@@ -78,5 +83,22 @@ describe("promote completed assistant with optimistic user text", () => {
     const withUser = { ...base, messages: [...base.messages, { role: "user", content: "我的行动", ts: "t1" }] };
     const next = promoteCompletedAssistant(withUser, { id: "t1", status: "completed", content: "回复" }, "我的行动")!;
     expect(next.messages.filter((m) => m.role === "user")).toHaveLength(1);
+  });
+});
+
+describe("landed reply detection", () => {
+  const messages = [
+    { role: "assistant", content: "旧回复", ts: "a", task_id: "old" },
+    { role: "user", content: "行动", ts: "b", task_id: "t1" },
+    { role: "assistant", content: "新回复", ts: "c", task_id: "t1" },
+  ];
+  it("treats the task as done once its assistant message is in the transcript", () => {
+    expect(findLandedReply(messages, "t1", "running")?.content).toBe("新回复");
+    expect(findLandedReply(messages, "t1", undefined)?.content).toBe("新回复");
+  });
+  it("ignores other tasks, untagged text and already-terminal tasks", () => {
+    expect(findLandedReply(messages, "t2", "running")).toBeNull();
+    expect(findLandedReply([{ role: "assistant", content: "新回复", ts: "c" }], "t1", "running")).toBeNull();
+    expect(findLandedReply(messages, "t1", "completed")).toBeNull();
   });
 });
