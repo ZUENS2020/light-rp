@@ -398,6 +398,20 @@ function emptyScene(): SceneState {
   return { location: "", time: "", season: "", weather: "", present: [], scene: "", ongoing: [], notes: "" };
 }
 
+/** Hard cap for scene `ongoing`: the list is resent every turn, so keep it short and current. */
+export const MAX_ONGOING_ITEMS = 8;
+
+/** Trim, dedupe and cap `ongoing`; the model lists the most relevant items first, so the tail is dropped. */
+export function capOngoing(items: string[], max = MAX_ONGOING_ITEMS): string[] {
+  const out: string[] = [];
+  for (const item of items) {
+    const text = String(item).trim();
+    if (text && !out.includes(text)) out.push(text);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 export function extractStateFields(patch: Record<string, unknown>): {
   location: string;
   time: string;
@@ -475,7 +489,7 @@ export function applyScenePatch(scene: SceneState, patch: Record<string, unknown
     weather: fields.weather || scene.weather,
     present: patchHasPresent(patch) ? fields.present : scene.present,
     scene: sceneText,
-    ongoing: "ongoing" in patch ? fields.ongoing : scene.ongoing,
+    ongoing: capOngoing("ongoing" in patch ? fields.ongoing : scene.ongoing),
     notes: sceneText,
   };
 }

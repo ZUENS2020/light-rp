@@ -351,7 +351,7 @@ describe("D1 task and model integration", () => {
       text: "第四轮",
       idempotencyKey: "seed-second",
     });
-    await preparePrompt(env.DB, {
+    const secondPrepared = await preparePrompt(env.DB, {
       ...common,
       taskId: second.task.id,
       userContent: "第四轮",
@@ -366,10 +366,15 @@ describe("D1 task and model integration", () => {
     expect(Object.fromEntries((kinds.results || []).map((row) => [row.kind, Number(row.n)]))).toEqual({
       assistant: 2,
       checkpoint: 1,
-      context: 2,
+      // mini (deduped) + one dynamic state copy per turn
+      context: 3,
       memory: 1,
       user: 3,
     });
+    // Only the newest state snapshot is replayed, right before the new user message.
+    const secondContents = secondPrepared.messages.map((m) => `${m.role}:${m.content}`);
+    expect(secondContents.filter((c) => c.includes("## 隐藏上下文增量"))).toHaveLength(1);
+    expect(secondContents.slice(-2)).toEqual(["user:## 隐藏上下文增量\n## 当前状态\npresent: [suzuka]", "user:第四轮"]);
   });
 
   it("does not re-seed history into an epoch that already has reseeded transcript turns", async () => {
@@ -426,9 +431,16 @@ describe("D1 task and model integration", () => {
     await completeTask(env.DB, task.task.id, {
       content: "完成。",
       usage: { prompt_tokens: 100, completion_tokens: 42, reasoning_tokens: 0, cached_input_tokens: 0 },
-      storyFinish: { finish_reason: "stop", first_finish_reason: "sensitive", completion_tokens: 42, retry: "abnormal:sensitive" },
+      storyFinish: {
+        finish_reason: "stop",
+        first_finish_reason: "sensitive",
+        completion_tokens: 42,
+        retry: "abnormal:sensitive",
+      },
     });
-    const row = await env.DB.prepare(`SELECT finish_reason, completion_tokens, story_retry FROM generation_tasks WHERE id = ?`)
+    const row = await env.DB.prepare(
+      `SELECT finish_reason, completion_tokens, story_retry FROM generation_tasks WHERE id = ?`,
+    )
       .bind(task.task.id)
       .first();
     expect(row).toEqual({ finish_reason: "stop", completion_tokens: 42, story_retry: "abnormal:sensitive" });

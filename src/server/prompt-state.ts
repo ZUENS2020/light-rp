@@ -151,6 +151,33 @@ async function currentCheckpoint(
   }
 }
 
+const DYNAMIC_CONTEXT_HEADER = "## 隐藏上下文增量";
+/** Legacy post-commit full-state event (no longer written; still present in older epochs). */
+const LEGACY_STATE_HEADER = "## 场景状态变化";
+
+function isStateSnapshotRow(row: EventRow): boolean {
+  if (row.kind !== "context") return false;
+  try {
+    const content = String((JSON.parse(row.payload_json) as { content?: unknown }).content || "");
+    return content.startsWith(DYNAMIC_CONTEXT_HEADER) || content.startsWith(LEGACY_STATE_HEADER);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The scene state is a full snapshot re-sent every turn. Replaying every past copy made the
+ * state (and its wording) dominate the prompt and confused the model about what is current,
+ * so only the newest snapshot is kept; rows stay in D1 for forensics.
+ */
+export function latestStateOnly<T extends EventRow>(rows: T[]): T[] {
+  let last = -1;
+  rows.forEach((row, index) => {
+    if (isStateSnapshotRow(row)) last = index;
+  });
+  return rows.filter((row, index) => index === last || !isStateSnapshotRow(row));
+}
+
 function rowToMessage(row: EventRow): LlmMessage | null {
   let payload: Record<string, unknown>;
   try {
@@ -274,7 +301,9 @@ export async function preparePrompt(
       epoch: runtime.prompt_epoch,
       kind: "context",
       role: "user",
-      payload: { content: `## 隐藏上下文增量\n${input.dynamicContext}`.trim() },
+      payload: { content: `${DYNAMIC_CONTEXT_HEADER}\n${input.dynamicContext}`.trim(), task_id: input.taskId },
+      // One copy per task (idempotent on retry). Older copies are hidden by latestStateOnly().
+      hashSeed: `dynamic:${input.taskId}`,
       stable: false,
     });
   }
@@ -295,7 +324,9 @@ export async function preparePrompt(
     )
     .bind(input.sessionId, runtime.prompt_epoch)
     .all<EventRow>();
-  const eventMessages = (rows.results || []).map(rowToMessage).filter((item): item is LlmMessage => Boolean(item));
+  const eventMessages = latestStateOnly(rows.results || [])
+    .map(rowToMessage)
+    .filter((item): item is LlmMessage => Boolean(item));
   const checkpointTokens = estimateTokens(
     String(
       (checkpoint || (await currentCheckpoint(db, input.sessionId, runtime.prompt_epoch)))?.content || input.checkpoint,

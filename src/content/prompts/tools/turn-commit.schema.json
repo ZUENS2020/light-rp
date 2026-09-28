@@ -10,7 +10,7 @@
         "location": { "type": "string" },
         "present": { "type": "array", "items": { "type": "string" } },
         "scene": { "type": "string" },
-        "ongoing": { "type": "array", "items": { "type": "string" } }
+        "ongoing": { "type": "array", "items": { "type": "string" }, "maxItems": 8 }
       },
       "required": ["time", "season", "weather", "location", "present", "scene", "ongoing"],
       "additionalProperties": false
