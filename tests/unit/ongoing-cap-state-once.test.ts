@@ -55,3 +55,17 @@ describe("latestStateOnly", () => {
     ]);
   });
 });
+
+describe("replyRetracted", () => {
+  it("flags a task whose reply is gone from the transcript", async () => {
+    const { replyRetracted } = await import("../../src/server/engine");
+    const messages = [
+      { role: "user", task_id: "t1" },
+      { role: "assistant", task_id: "t1" },
+      { role: "user", task_id: "t2" },
+    ];
+    expect(replyRetracted(messages, "t1")).toBe(false);
+    expect(replyRetracted(messages, "t2")).toBe(true);
+    expect(replyRetracted(messages, null)).toBe(false);
+  });
+});

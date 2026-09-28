@@ -1,3 +1,4 @@
+import { recordSceneBefore } from "./retry-state";
 import {
   assembleBudgeted,
   breachPhi,
@@ -911,6 +912,12 @@ export async function runTurn(
     });
   }
   const scene = await ensureSessionState(fs, sessionId, pack);
+  if (opts?.ai?.db && opts.ai.taskId) {
+    // Pre-reply snapshot: a retry of this reply restores exactly this state.
+    await recordSceneBefore(opts.ai.db, opts.ai.taskId, scene).catch((error: unknown) => {
+      warnings.push(`scene_before snapshot failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
   const memory = await loadMemory(fs);
   const library = new PromptLibrary(overlays);
   const mentionIds = parseMentions(userText, aliasMap(pack.cast));
@@ -1745,6 +1752,15 @@ export function deferredSceneWriteDecision(input: {
   return { apply: true };
 }
 
+/** True when a task's assistant reply is no longer in the transcript (it was retried away). */
+export function replyRetracted(
+  messages: Array<{ role: string; task_id?: string }>,
+  taskId: string | null | undefined,
+): boolean {
+  if (!taskId) return false;
+  return !messages.some((message) => message.role === "assistant" && message.task_id === taskId);
+}
+
 export function sessionMovedPastTurn(
   messages: Array<{ role: string; task_id?: string; content?: string }>,
   input: { taskId?: string | null; assistantText: string },
@@ -1844,6 +1860,13 @@ export async function runDeferredTurnCommit(input: DeferredTurnCommitInput): Pro
     lastTurnTaskId: latestTaskId,
     alreadyApplied: lastTurnAfter.commit_applied === true && (!taskId || latestTaskId === taskId),
   });
+  // The reply was retried/removed after it finished: its commit must not touch state or memory.
+  const retracted = replyRetracted(loaded.messages, taskId);
+  if (retracted) {
+    warnings.push("deferred commit ignored: reply no longer in transcript (retried)");
+    await mergeLastTurnDiagnostics(input.fs, input.sessionId, { commit_pending: false }, []);
+    return { warnings, applied: false, skippedState: true };
+  }
   const skipState = !decision.apply || movedOn;
   if (decision.warning) warnings.push(decision.warning);
   if (movedOn && decision.apply) {
