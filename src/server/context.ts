@@ -14,6 +14,7 @@ import { ApiError } from './errors';
 import { embed, resolveVectorCandidates } from './vectors';
 import { listEntities, type StoryEntity } from './entities';
 import { renderNarrativePreamble } from '../shared/narrative-preamble';
+import { hermesCharacterProfile } from '../shared/hermes-rp';
 export interface TurnInput {
   mode: 'roleplay' | 'author';
   text: string;
@@ -84,9 +85,10 @@ export async function buildContext(
   const resources = await store.getResourceBindings(branchId);
   const characters: { id: string; revision: number; data: CharacterData }[] = [],
     books: (WorldbookData & { id: string })[] = [];
+  const profiles = new Map<string, Record<string, string | string[]>>();
   for (const binding of resources) {
-    const row = await store.one<{ data_json: string }>(
-      'SELECT r.data_json FROM asset_revisions r JOIN assets a ON a.id=r.asset_id WHERE r.asset_id=? AND r.revision=? AND a.owner_id=?',
+    const row = await store.one<{ data_json: string; raw_json: string }>(
+      'SELECT r.data_json,r.raw_json FROM asset_revisions r JOIN assets a ON a.id=r.asset_id WHERE r.asset_id=? AND r.revision=? AND a.owner_id=?',
       binding.assetId,
       binding.revision,
       store.ownerId,
@@ -95,6 +97,7 @@ export async function buildContext(
     if (binding.kind === 'character') {
       const data = JSON.parse(row.data_json) as CharacterData;
       characters.push({ id: binding.assetId, revision: binding.revision, data });
+      profiles.set(binding.assetId, hermesCharacterProfile(JSON.parse(row.raw_json)));
       if (data.worldbook) books.push({ ...data.worldbook, id: `card:${binding.assetId}` });
     } else books.push({ ...(JSON.parse(row.data_json) as WorldbookData), id: binding.assetId });
   }
@@ -147,7 +150,13 @@ export async function buildContext(
   const cardBlocks: string[] = [];
   for (const c of characters.filter((c) => viewer === 'director' || c.id === viewer)) {
     const d = c.data;
-    const text = `角色 ${d.name} [${c.id}]：${JSON.stringify({ name: d.name, personality: render(d.personality, d.name), description: render(d.description, d.name), scenario: render(d.scenario, d.name), localInstructions: render(d.systemPrompt, d.name) })}`;
+    const profile = Object.fromEntries(
+      Object.entries(profiles.get(c.id) ?? {}).map(([key, value]) => [
+        key,
+        Array.isArray(value) ? value.map((v) => render(v, d.name)) : render(value, d.name),
+      ]),
+    );
+    const text = `角色 ${d.name} [${c.id}]：${JSON.stringify({ name: d.name, personality: render(d.personality, d.name), description: render(d.description, d.name), scenario: render(d.scenario, d.name), ...profile, localInstructions: render(d.systemPrompt, d.name) })}`;
     cardBlocks.push(text);
     hardRules.push({ origin: 'character', id: c.id, revision: c.revision, text });
   }
@@ -370,9 +379,14 @@ export async function buildContext(
   };
   for (const c of characters.filter(
     (c) => focus.has(c.id) && (viewer === 'director' || c.id === viewer),
-  ))
+  )) {
+    if (c.data.firstMessage)
+      addOptional(
+        `${c.data.name} 首条消息文风锚定（只参考文风，不重演或认定为新事件）：${render(c.data.firstMessage, c.data.name)}`,
+      );
     if (c.data.exampleMessages)
       addOptional(`${c.data.name} 语气示例：${render(c.data.exampleMessages, c.data.name)}`);
+  }
   addEntries('examples-bottom');
   if (branch.headSeq === 0) {
     const openings = characters

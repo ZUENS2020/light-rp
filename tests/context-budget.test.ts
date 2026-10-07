@@ -25,6 +25,8 @@ async function fixture() {
       mes_example: '完整示例'.repeat(350),
       first_mes: '候选开场'.repeat(350),
       extensions: {},
+      behavior: `角色${id}习惯敲桌两下`,
+      speech: '称呼{{user}}为同伴',
     };
     const encoded = JSON.stringify(raw),
       data = JSON.stringify(normalizeCharacter(raw));
@@ -51,6 +53,32 @@ async function fixture() {
   return { store, story, ids };
 }
 describe('shared optional narrative context budget', () => {
+  it('retains first-message style after the opening and scopes Hermes profile fields by viewer', async () => {
+    const { store, story } = await fixture();
+    const session = await store.createSession({ branchId: story.branchId });
+    await store.appendTurn({
+      branchId: story.branchId,
+      sessionId: session.id,
+      requestId: 'continuation',
+      messages: [{ role: 'user', text: '我们已经来到港口。' }],
+    });
+    const snapshot = await buildContext(
+      {} as Env,
+      store,
+      story.branchId,
+      { mode: 'roleplay', text: '继续。', actorId: 'a', focusCharacterIds: ['a'] },
+      defaults('local-demo'),
+      'hermes-continuation',
+      'a',
+    );
+    const prompt = snapshot.messages.map((m) => m.content).join('\n');
+    expect(prompt).toContain('首条消息文风锚定');
+    expect(prompt).toContain('只参考文风，不重演或认定为新事件');
+    expect(prompt).toContain('角色a习惯敲桌两下');
+    expect(prompt).toContain('称呼角色a为同伴');
+    expect(prompt).not.toContain('角色b习惯敲桌两下');
+    expect(prompt).not.toContain('角色开场候选');
+  });
   it('prepends the Hermes layer without promoting its identity claims to world rules', async () => {
     const { store, story } = await fixture();
     const config = { ...defaults('local-demo'), systemPrompt: '世界中不可复活。' };

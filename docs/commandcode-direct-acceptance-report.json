@@ -1,0 +1,96 @@
+{
+  "startedAt": "2026-10-07T15:28:22.035Z",
+  "versionId": "227593b0-f21c-4273-89d1-0e44759bbb50",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "decisionModel": "",
+  "synthetic": true,
+  "checks": [
+    {
+      "name": "request-idempotency",
+      "passed": true
+    },
+    {
+      "name": "real-CommandCode-extraction-before-commit",
+      "passed": true
+    },
+    {
+      "name": "actual-SSE-draft-stream",
+      "passed": true,
+      "deltaCount": 3
+    },
+    {
+      "name": "real-generation-atomic-commit",
+      "passed": true,
+      "headSeq": 2,
+      "eventCount": 2
+    },
+    {
+      "name": "no-Gateway-judge-configured",
+      "passed": true
+    },
+    {
+      "name": "Hermes-guidance-in-real-context",
+      "passed": true
+    },
+    {
+      "name": "real-extraction-observation-index",
+      "passed": true,
+      "memoryKinds": [
+        "observation",
+        "observation",
+        "canon"
+      ]
+    },
+    {
+      "name": "memory-recall",
+      "passed": true,
+      "resultCount": 3
+    },
+    {
+      "name": "durable-cancel-no-late-commit",
+      "passed": true,
+      "taskId": "822a9df2-6357-41cb-8d4d-a505ccf6ba10"
+    }
+  ],
+  "costUSD": null,
+  "branchId": "f25851b5-edb8-43a4-8835-ffc009c5e33c",
+  "taskId": "bb4a976f-acce-4683-91b6-23a3fbdf6be5",
+  "task": {
+    "status": "completed",
+    "error": null
+  },
+  "jobs": [
+    {
+      "kind": "memory",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "kind": "generation",
+      "status": "completed",
+      "error": null
+    }
+  ],
+  "status": "completed",
+  "finishedAt": "2026-10-07T15:29:49.869Z",
+  "configuration": {
+    "mode": "openai",
+    "provider": "commandcode",
+    "baseUrl": "https://api.commandcode.ai/provider/v1",
+    "maxOutput": 8192,
+    "auxiliaryModel": "",
+    "contextWindow": 32768
+  },
+  "limitations": [
+    "首轮隐含获知表达被确定性校验拒绝；第二轮4096输出预算截断，失败报告分别保留。",
+    "仅一次完整合成剧情链，不是完整抽取质量或长会话评测。"
+  ],
+  "finalPreviewVersionId": "d0a43a84-1e52-4d55-b901-c8615289968d",
+  "finalVersionChanges": "仅更新直连模式标识与提供方提示，完整链验收的 Worker 逻辑一致",
+  "finalConnectionProbe": {
+    "status": 200,
+    "message": "连接成功。",
+    "totalTokens": 97
+  },
+  "temporaryAccessRevoked": true
+}

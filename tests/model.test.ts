@@ -16,6 +16,44 @@ function stream(text: string, split = 3) {
   );
 }
 describe('model responses and durable draft boundaries', () => {
+  it('calls Command Code directly for narrative and extraction without forwarding credentials across redirects', async () => {
+    const fetcher = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () =>
+        Response.json({ choices: [{ message: { content: '连接成功。' }, finish_reason: 'stop' }] }),
+      );
+    const gateway = vi.fn();
+    const config = {
+      ...defaults('openai'),
+      provider: 'commandcode',
+      baseUrl: 'https://api.commandcode.ai/provider/v1/',
+      model: 'deepseek/deepseek-v4.1-flash',
+    };
+    const env = { MODEL_API_KEY: 'test-only', AI: { gateway } } as unknown as Env;
+    expect(await complete(env, config, [{ role: 'user', content: '连接测试' }])).toBe('连接成功。');
+    const [url, request] = fetcher.mock.calls[0]!;
+    expect(url).toBe('https://api.commandcode.ai/provider/v1/chat/completions');
+    expect(request).toMatchObject({
+      method: 'POST',
+      headers: { Authorization: 'Bearer test-only' },
+      redirect: 'manual',
+    });
+    await complete(env, config, [{ role: 'user', content: '抽取JSON' }], {
+      auxiliary: true,
+      json: true,
+      jsonSchema: { type: 'object' },
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]!.body))).toMatchObject({
+      model: config.model,
+      response_format: { type: 'json_schema', json_schema: { schema: { type: 'object' } } },
+    });
+    expect(gateway).not.toHaveBeenCalled();
+    fetcher.mockResolvedValue(
+      new Response(null, { status: 307, headers: { Location: 'https://other.example' } }),
+    );
+    await expect(complete(env, config, [])).rejects.toMatchObject({ code: 'MODEL_HTTP' });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
   it('uses explicit extraction prompt protocol while keeping native schema for simple Qwen and other models', async () => {
     const jsonSchema = {
       type: 'object',

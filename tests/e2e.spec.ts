@@ -460,6 +460,8 @@ test('Hermes 前置层可编辑、保存、明确清空，并用于实际上下�
     await page.getByRole('button', { name: '模型设置', exact: true }).click();
     await page.getByRole('button', { name: '载入 Hermes 头部', exact: true }).click();
     await expect(page.getByLabel('叙事前置层', { exact: true })).toHaveValue(/ANLAN/);
+    await page.getByRole('button', { name: '载入 Hermes 叙事指引', exact: true }).click();
+    await expect(page.getByLabel('叙事指引', { exact: true })).toHaveValue(/连续性：/);
     const custom = '沉浸叙事前置段：当前角色 {{cast}}，保持各自认知。';
     await page.getByLabel('叙事前置层', { exact: true }).fill(custom);
     await page.getByRole('button', { name: '保存配置', exact: true }).click();
@@ -479,6 +481,8 @@ test('Hermes 前置层可编辑、保存、明确清空，并用于实际上下�
     expect(context.messages[0].content).toContain('沉浸叙事前置段：当前角色');
     expect(context.messages[0].content).toContain(card.name);
     expect(context.messages[0].content).not.toContain('{{cast}}');
+    expect(context.messages[0].content).toContain('连续性：');
+    expect(context.messages[0].content).toContain('不重演开场');
     await page.getByRole('button', { name: '清空前置层', exact: true }).click();
     await page.getByRole('button', { name: '保存配置', exact: true }).click();
     await expect

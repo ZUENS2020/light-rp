@@ -279,7 +279,9 @@ export async function complete(
           },
           body: JSON.stringify(payload),
           signal: options.signal,
-          redirect: 'error',
+          // workerd supports follow/manual only. Never forward the credential
+          // to a redirect destination; readCompletion rejects non-2xx responses.
+          redirect: 'manual',
         }),
       options.signal,
     );

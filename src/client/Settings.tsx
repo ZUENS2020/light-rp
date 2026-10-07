@@ -4,6 +4,7 @@ import { api, errorText } from './api';
 import type { Settings as Config } from './types';
 import { Field } from './ui';
 import { HERMES_RP_PREAMBLE } from '../shared/narrative-preamble';
+import { HERMES_NARRATIVE_GUIDANCE } from '../shared/hermes-rp';
 
 export default function Settings({
   settings,
@@ -107,7 +108,7 @@ export default function Settings({
               onChange={(event) => change({ mode: event.target.value as Config['mode'] })}
             >
               <option value="gateway">Cloudflare AI Gateway</option>
-              <option value="openai">OpenAI 兼容接口</option>
+              <option value="openai">OpenAI 兼容接口 · 直连</option>
               <option value="local-demo">本地演示 · 不调用真实模型</option>
             </select>
           </Field>
@@ -127,7 +128,11 @@ export default function Settings({
             </Field>
             <Field
               label="提供方标识"
-              hint="AI Gateway provider slug：workers-ai、openrouter 或 openai。"
+              hint={
+                form.mode === 'gateway'
+                  ? 'AI Gateway provider slug：workers-ai、openrouter 或 openai。'
+                  : '直连提供方名称，例如 commandcode；请求发送到上方接口地址。'
+              }
             >
               <input
                 value={form.provider || 'openai'}
@@ -239,6 +244,13 @@ export default function Settings({
               placeholder="叙事风格、视角与篇幅…"
             />
           </Field>
+          <button
+            type="button"
+            onClick={() => change({ systemPrompt: HERMES_NARRATIVE_GUIDANCE })}
+            disabled={busy || probing}
+          >
+            载入 Hermes 叙事指引
+          </button>
         </div>
         <div className="settings-save">
           {probe && (
