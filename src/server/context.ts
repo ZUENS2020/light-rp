@@ -15,6 +15,7 @@ import { embed, resolveVectorCandidates } from './vectors';
 import { listEntities, type StoryEntity } from './entities';
 import { renderNarrativePreamble } from '../shared/narrative-preamble';
 import { hermesCharacterProfile } from '../shared/hermes-rp';
+import { playerAgencyRule, playerProfileSchema } from '../shared/player';
 export interface TurnInput {
   mode: 'roleplay' | 'author';
   text: string;
@@ -49,6 +50,13 @@ export interface ContextSnapshot {
 export function validationRules(context: ContextSnapshot): HardRule[] {
   if (context.hardRules) return context.hardRules;
   return [
+    {
+      origin: 'global' as const,
+      id: 'global:player-agency',
+      text: playerAgencyRule(
+        playerProfileSchema.parse(context.branch.scene.playerProfile ?? {}).agency,
+      ),
+    },
     { origin: 'global' as const, id: 'global:story', text: context.settings.systemPrompt },
     ...context.characters.map((c) => ({
       origin: 'character' as const,
@@ -127,9 +135,15 @@ export async function buildContext(
     `当前场景：${JSON.stringify(viewer === 'director' ? (branch.scene ?? {}) : {})}`,
     `本回合模式：${input.mode}；玩家角色：${input.actorId ?? story.playerCharacterId ?? '未指定'}`,
   ];
+  const parsedPlayer = playerProfileSchema.safeParse(branch.scene.playerProfile ?? {});
+  const player = parsedPlayer.success ? parsedPlayer.data : playerProfileSchema.parse({});
+  core.push(playerAgencyRule(player.agency));
+  if (viewer === 'director')
+    core.push(`玩家身份（作者设定；角色不能自动获知，失忆不自动解除）：${JSON.stringify(player)}`);
   const hardRules: HardRule[] = [
     { origin: 'global', id: 'global:story', text: core[0]! },
     { origin: 'global', id: 'global:application', text: core[1]! },
+    { origin: 'global', id: 'global:player-agency', text: playerAgencyRule(player.agency) },
   ];
   const focused = input.focusCharacterIds?.length
     ? input.focusCharacterIds
@@ -141,7 +155,7 @@ export async function buildContext(
   );
   const playerName =
     characters.find((c) => c.id === (input.actorId ?? story.playerCharacterId))?.data.name ??
-    '玩家';
+    (viewer === 'director' && player.name ? player.name : '玩家');
   const render = (text: string, name: string) =>
     text
       .replace(/\{\{char\}\}/gi, name)
@@ -234,7 +248,7 @@ export async function buildContext(
       'examples-top',
       'examples-bottom',
     ],
-    userName: characters.find((c) => c.id === input.actorId)?.data.name ?? '玩家',
+    userName: playerName,
   });
   for (const c of characters.filter(
     (c) => focus.has(c.id) && (viewer === 'director' || c.id === viewer),
@@ -388,7 +402,12 @@ export async function buildContext(
       addOptional(`${c.data.name} 语气示例：${render(c.data.exampleMessages, c.data.name)}`);
   }
   addEntries('examples-bottom');
-  if (branch.headSeq === 0) {
+  if (
+    branch.headSeq === 0 ||
+    (viewer === 'director' &&
+      events.length > 0 &&
+      events.every((e) => e.role === 'correction' && e.text.startsWith('【玩家身份与描写设定】')))
+  ) {
     const openings = characters
       .filter((c) => focus.has(c.id) && (viewer === 'director' || c.id === viewer))
       .map((c) => ({
@@ -431,6 +450,9 @@ export async function buildContext(
     ...events.slice(-16).map((e) => e.sourceId),
     ...recall.items.flatMap((i) => i.memory.sourceIds),
     ...usedSources,
+    ...(typeof branch.scene.playerProfileSourceId === 'string'
+      ? [branch.scene.playerProfileSourceId]
+      : []),
   ]);
   const sourceFence: SourceFence[] = [];
   for (const id of ids) {

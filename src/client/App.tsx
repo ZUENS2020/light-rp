@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { playerProfileSchema, type PlayerProfile } from '../shared/player';
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -155,6 +156,10 @@ export default function App() {
   );
   const isRunning = sending || (!!task && !TERMINAL.has(task.status || 'queued'));
   const demo = bootstrap?.settings.mode === 'local-demo';
+  const playerIdentity =
+    typeof snapshot?.branch.scene === 'object'
+      ? snapshot.branch.scene?.playerProfile?.identity
+      : '';
 
   const notify = useCallback((message: string, isError = false) => {
     setNotice({ message, error: isError });
@@ -1062,13 +1067,20 @@ export default function App() {
                         value={actorId}
                         onChange={(event) => setActorId(event.target.value)}
                       >
-                        <option value="">玩家 · 自由视角</option>
+                        <option value="">玩家 · {playerIdentity || '自由视角'}</option>
                         {cast.map((asset) => (
                           <option key={asset.id} value={asset.id}>
                             {characterName(asset)}
                           </option>
                         ))}
                       </select>
+                      <button
+                        type="button"
+                        disabled={isRunning || !snapshot}
+                        onClick={() => setModal('player')}
+                      >
+                        设定身份
+                      </button>
                     </div>
                     <textarea
                       aria-label="输入剧情"
@@ -1278,6 +1290,26 @@ export default function App() {
             setSessionId(value.id || value.session?.id);
             setModal(null);
             notify('会话已创建，故事记忆继续保留');
+          }}
+        />
+      )}
+      {modal === 'player' && snapshot && (
+        <PlayerModal
+          profile={playerProfileSchema.parse(
+            typeof snapshot.branch.scene === 'object'
+              ? (snapshot.branch.scene?.playerProfile ?? {})
+              : {},
+          )}
+          onClose={() => setModal(null)}
+          submit={async (profile) => {
+            await post(`/branches/${branchId}/player-profile`, {
+              commandId: crypto.randomUUID(),
+              expectedHead: snapshot.branch.headSeq,
+              profile,
+            });
+            await refreshBranch();
+            setModal(null);
+            notify('玩家身份已保存，后续叙事会沿用；场内角色不会自动获知');
           }}
         />
       )}
@@ -1904,6 +1936,7 @@ function StoryModal({
   const [characters, setCharacters] = useState<string[]>([]);
   const [books, setBooks] = useState<string[]>([]);
   const [player, setPlayer] = useState('');
+  const [playerProfile, setPlayerProfile] = useState<PlayerProfile>(playerProfileSchema.parse({}));
   const [newWorld, setNewWorld] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1923,6 +1956,12 @@ function StoryModal({
               characterIds: characters,
               worldbookIds: books,
               ...(player ? { playerCharacterId: player } : {}),
+              ...(playerProfile.name ||
+              playerProfile.identity ||
+              playerProfile.description ||
+              playerProfile.agency !== 'natural'
+                ? { playerProfile }
+                : {}),
             });
           } catch (error) {
             setError(errorText(error));
@@ -2046,6 +2085,7 @@ function StoryModal({
           <p className="quiet">
             故事固定使用所选资料的当前版本，后续编辑不会悄悄改变已发生的剧情。
           </p>
+          <PlayerFields profile={playerProfile} onChange={setPlayerProfile} />
         </div>
         <div className="modal-footer">
           <button type="button" onClick={onClose}>
@@ -2058,6 +2098,103 @@ function StoryModal({
           >
             {busy ? '创建中…' : '创建故事'}
             <ArrowRight size={15} />
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function PlayerFields({
+  profile,
+  onChange,
+}: {
+  profile: PlayerProfile;
+  onChange: (value: PlayerProfile) => void;
+}) {
+  const change = (key: keyof PlayerProfile, value: string) =>
+    onChange({ ...profile, [key]: value });
+  return (
+    <>
+      <Field label="玩家姓名">
+        <input
+          value={profile.name}
+          maxLength={100}
+          placeholder="可留空，使用“玩家”"
+          onChange={(e) => change('name', e.target.value)}
+        />
+      </Field>
+      <Field label="身份 / 职业">
+        <input
+          value={profile.identity}
+          maxLength={500}
+          placeholder="例如：特雷森学园的训练员"
+          onChange={(e) => change('identity', e.target.value)}
+        />
+      </Field>
+      <Field label="玩家背景">
+        <textarea
+          value={profile.description}
+          maxLength={4000}
+          rows={4}
+          placeholder="经历、外貌与关系；只填写你希望确立的设定"
+          onChange={(e) => change('description', e.target.value)}
+        />
+      </Field>
+      <Field label="玩家描写方式">
+        <select value={profile.agency} onChange={(e) => change('agency', e.target.value)}>
+          <option value="natural">自然承接 · 允许轻微反应</option>
+          <option value="strict">严格控制 · 不补写玩家反应</option>
+        </select>
+      </Field>
+      <p className="quiet">
+        自然承接允许“你没动”等轻微反应，重要动作、台词与选择仍由你决定。身份按故事分支保存，跨会话沿用；不会自动告诉其他角色，也不会解除剧情中的失忆。
+      </p>
+    </>
+  );
+}
+function PlayerModal({
+  profile: initial,
+  submit,
+  onClose,
+}: {
+  profile: PlayerProfile;
+  submit: (profile: PlayerProfile) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [profile, setProfile] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  return (
+    <Modal title="设定玩家身份" onClose={onClose}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setError('');
+          try {
+            await submit(profile);
+          } catch (e) {
+            setError(errorText(e));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <div className="modal-content">
+          {error && (
+            <div className="inline-error" role="alert">
+              {error}
+            </div>
+          )}
+          <PlayerFields profile={profile} onChange={setProfile} />
+        </div>
+        <div className="modal-footer">
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+          <button className="primary" type="submit" disabled={busy}>
+            {busy ? '保存中…' : '保存身份'}
           </button>
         </div>
       </form>

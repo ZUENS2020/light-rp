@@ -26,6 +26,7 @@ vi.mock('cloudflare:workers', () => ({
 vi.mock('cloudflare:workflows', () => ({ NonRetryableError: class extends Error {} }));
 import { app } from '../src/server/index';
 let d: ReturnType<typeof createTestD1>, s: Store, branchId: string, sessionId: string;
+const pending: Promise<unknown>[] = [];
 beforeEach(async () => {
   d = createTestD1();
   s = new Store(d.db, 'local-owner');
@@ -34,13 +35,17 @@ beforeEach(async () => {
   branchId = story.branchId;
   sessionId = (await s.createSession({ branchId })).id;
 });
-afterEach(() => {
+afterEach(async () => {
+  await Promise.allSettled(pending.splice(0));
   vi.restoreAllMocks();
   d.close();
 });
 const env = () => ({ DB: d.db, AUTH_MODE: 'local', MODEL_MODE: 'local-demo' }) as Env;
 const context = () =>
-  ({ waitUntil: vi.fn(), passThroughOnException: vi.fn() }) as unknown as ExecutionContext;
+  ({
+    waitUntil: vi.fn((p: Promise<unknown>) => pending.push(p)),
+    passThroughOnException: vi.fn(),
+  }) as unknown as ExecutionContext;
 const request = (path: string, method = 'GET') =>
   app.request(`http://localhost/api/v3${path}`, { method }, env(), context());
 async function task(id: string, status: string) {
@@ -203,11 +208,12 @@ describe('real API branch paging and generation retry fences', () => {
 });
 
 describe('public v3 write contracts', () => {
-  it('exports all eight JSON schemas without exposing an owner override', () => {
+  it('exports all write JSON schemas without exposing an owner override', () => {
     const schemas = publicApiSchemas();
     expect(Object.keys(schemas).sort()).toEqual([
       'correction',
       'fork',
+      'playerProfile',
       'procedureStatus',
       'rebuild',
       'resources',
@@ -227,5 +233,49 @@ describe('public v3 write contracts', () => {
   it('keeps the model window/output relation validated by the shared settings contract', () => {
     expect(settingsSchema.safeParse({ contextWindow: 4096, maxOutput: 4096 }).success).toBe(false);
     expect(settingsSchema.parse({ contextWindow: 8192, maxOutput: 4096 }).maxOutput).toBe(4096);
+  });
+});
+
+describe('branch player identity API', () => {
+  const body = { commandId: 'profile-api-write', expectedHead: 0, profile: { identity: '训练员' } };
+  const save = (id: string, data: unknown = body) =>
+    app.request(
+      `http://localhost/api/v3/branches/${id}/player-profile`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      },
+      env(),
+      context(),
+    );
+  it('validates bounds and enforces owner scope before writing any identity', async () => {
+    const other = new Store(d.db, 'other-owner');
+    const world = await other.createWorld();
+    const story = await other.createStory({ worldId: world.id });
+    await other.createSession({ branchId: story.branchId });
+    expect((await save(story.branchId)).status).toBe(404);
+    expect((await save(branchId, { ...body, profile: { identity: 'a'.repeat(501) } })).status).toBe(
+      400,
+    );
+    expect(await s.getEvents(branchId)).toHaveLength(0);
+    const response = await save(branchId, { ...body, ownerId: 'other-owner' });
+    expect(response.status).toBe(200);
+    expect((await s.getBranch(branchId)).scene.playerProfile).toMatchObject({
+      identity: '训练员',
+      agency: 'natural',
+    });
+    expect((await other.getBranch(story.branchId)).scene.playerProfile).toBeUndefined();
+  });
+  it('returns 409 for stale versions with no partial identity event', async () => {
+    await s.appendTurn({
+      branchId,
+      sessionId,
+      requestId: 'prior-event',
+      messages: [{ role: 'assistant', text: '天色渐暗。' }],
+    });
+    expect((await save(branchId)).status).toBe(409);
+    expect(await s.getEvents(branchId)).toHaveLength(1);
+    expect((await s.getBranch(branchId)).scene.playerProfile).toBeUndefined();
   });
 });

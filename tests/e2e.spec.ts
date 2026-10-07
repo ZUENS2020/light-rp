@@ -718,3 +718,48 @@ test('作者设定响应丢失后重试复用幂等键和预期版本，不重�
     page.locator('.memory-record').filter({ hasText: '蓝钥匙存放在仓库。' }),
   ).toBeVisible();
 });
+
+test('玩家身份在新故事设定，编辑后跨会话沿用并保留分叉时的身份', async ({ page, request }) => {
+  const world = await json(request, 'post', '/worlds', { name: unique() });
+  await page.goto('/');
+  await page.locator('.new-story').click();
+  const creation = page.getByRole('dialog', { name: '新建故事' });
+  await creation.getByLabel('故事标题', { exact: true }).fill(unique());
+  await creation.getByLabel('所属世界', { exact: true }).selectOption(world.id);
+  await creation.getByLabel('身份 / 职业', { exact: true }).fill('特雷森学园训练员');
+  await creation.getByLabel('玩家背景', { exact: true }).fill('刚在医务室醒来，仍然失忆。');
+  await creation.getByRole('button', { name: '创建故事', exact: true }).click();
+  await expect(creation).not.toBeVisible();
+  await page.getByRole('button', { name: '设定身份', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设定玩家身份' });
+  await expect(dialog.getByLabel('身份 / 职业', { exact: true })).toHaveValue('特雷森学园训练员');
+  await dialog.getByLabel('玩家姓名', { exact: true }).fill('林');
+  await dialog.getByLabel('玩家描写方式', { exact: true }).selectOption('strict');
+  const saved = page.waitForResponse(
+    (r) => r.url().endsWith('/player-profile') && r.request().method() === 'POST',
+  );
+  await dialog.getByRole('button', { name: '保存身份', exact: true }).click();
+  const response = await saved;
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const result = await response.json();
+  await expect(dialog).not.toBeVisible();
+  const branchId = result.branch.id;
+  const child = await json(request, 'post', `/branches/${branchId}/forks`, {
+    eventSeq: 1,
+    name: '原始训练员',
+  });
+  const childId = child.id || child.branch?.id;
+  expect(
+    (await json(request, 'get', `/branches/${childId}`)).branch.scene.playerProfile.identity,
+  ).toBe('特雷森学园训练员');
+  await json(request, 'post', `/branches/${branchId}/sessions`, { title: '第二幕' });
+  await page.reload();
+  await send(page, request, '我看着窗外，等她开口。');
+  await page.getByRole('button', { name: '设定身份', exact: true }).click();
+  await expect(
+    page.getByRole('dialog', { name: '设定玩家身份' }).getByLabel('玩家姓名', { exact: true }),
+  ).toHaveValue('林');
+  const context = await json(request, 'get', `/branches/${branchId}/context`);
+  expect(context.messages[0].content).toContain('特雷森学园训练员');
+  expect(context.messages[0].content).toContain('严格模式');
+});

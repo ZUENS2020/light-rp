@@ -677,7 +677,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           ownerEpoch: context.ownerEpoch,
           sourceFence: context.sourceFence,
           taskFence: { taskId: task.id, attempt: task.attempt, cancelEpoch: task.cancel_epoch },
-          scene: data.extraction.scene,
+          scene: { ...context.branch.scene, ...data.extraction.scene },
           messages: [
             {
               role: data.input.mode === 'author' ? 'correction' : 'user',

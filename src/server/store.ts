@@ -22,6 +22,7 @@ import type {
   WriteFence,
 } from '../shared/domain';
 import { MemoryEngine } from './memory';
+import { playerProfileAsOf } from './player';
 
 export class StoreError extends Error {
   constructor(
@@ -311,7 +312,16 @@ export class Store {
   async getBranch(id: string) {
     const r = await this.one('SELECT * FROM branches WHERE id=? AND owner_id=?', id, this.ownerId);
     if (!r) throw new StoreError('NOT_FOUND', 'Branch not found', 404);
-    return branchRow(r);
+    const branch = branchRow(r);
+    const player = await playerProfileAsOf(this, id, branch.headSeq);
+    delete branch.scene.playerProfile;
+    delete branch.scene.playerProfileSourceId;
+    if (player)
+      Object.assign(branch.scene, {
+        playerProfile: player.profile,
+        playerProfileSourceId: player.sourceId,
+      });
+    return branch;
   }
   async listBranches(storyId: string) {
     await this.getStory(storyId);
@@ -728,7 +738,16 @@ export class Store {
       branchId,
       seq,
     );
-    return json<Record<string, Json>>(r?.scene_json, {});
+    const scene = json<Record<string, Json>>(r?.scene_json, {});
+    const player = await playerProfileAsOf(this, branchId, seq);
+    delete scene.playerProfile;
+    delete scene.playerProfileSourceId;
+    if (player)
+      Object.assign(scene, {
+        playerProfile: player.profile,
+        playerProfileSourceId: player.sourceId,
+      });
+    return scene;
   }
   async getResourceBindings(branchId: string, asOfSeq?: number): Promise<ResourceBinding[]> {
     const b = await this.getBranch(branchId);

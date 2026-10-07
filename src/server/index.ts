@@ -15,6 +15,7 @@ import { decisionModelSchema, runDecisionQuestions } from './decisions';
 import { decisionEvaluationRouter } from './decision-evaluation';
 import {
   storySchema,
+  playerProfileWriteSchema,
   forkSchema,
   resourcesSchema,
   correctionSchema,
@@ -25,6 +26,7 @@ import {
 } from '../shared/api';
 import { seedDemo } from './demo';
 import { syncPersonaCapabilities } from './persona';
+import { setPlayerProfile } from './player';
 import { dispatchOutbox, type TaskRow, taskDto } from './workflows';
 export { BranchRuntime } from './runtime';
 export { GenerationWorkflow, MemoryWorkflow } from './workflows';
@@ -198,8 +200,21 @@ app.post('/api/v3/stories', async (c) => {
   const s = store(c);
   const story = await s.createStory({ ...body, name: body.title ?? body.name });
   await s.createSession({ branchId: story.branchId, name: '第一幕' });
+  if (body.playerProfile)
+    await setPlayerProfile(s, story.branchId, {
+      commandId: uuid(),
+      expectedHead: 0,
+      profile: body.playerProfile,
+    });
   await syncPersonaCapabilities(s, story.branchId);
+  c.executionCtx.waitUntil(dispatchOutbox(c.env));
   return c.json({ ...story, title: story.name }, 201);
+});
+app.post('/api/v3/branches/:id/player-profile', async (c) => {
+  const body = playerProfileWriteSchema.parse(await c.req.json());
+  const result = await setPlayerProfile(store(c), c.req.param('id'), body);
+  c.executionCtx.waitUntil(dispatchOutbox(c.env));
+  return c.json(result);
 });
 app.get('/api/v3/stories/:id/branches', async (c) =>
   c.json(await store(c).listBranches(c.req.param('id'))),

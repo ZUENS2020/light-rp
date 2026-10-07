@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { playerProfileSchema } from './player';
 /** Public v3 write contracts. Identity and transactional fences remain server enforced. */
 export const storySchema = z.object({
   worldId: z.string(),
@@ -7,6 +8,12 @@ export const storySchema = z.object({
   characterIds: z.array(z.string()).max(50).default([]),
   worldbookIds: z.array(z.string()).max(50).default([]),
   playerCharacterId: z.string().optional(),
+  playerProfile: playerProfileSchema.optional(),
+});
+export const playerProfileWriteSchema = z.object({
+  commandId: z.string().min(8).max(150),
+  expectedHead: z.number().int().min(0),
+  profile: playerProfileSchema,
 });
 export const forkSchema = z.object({
   eventSeq: z.number().int().min(0),
@@ -64,6 +71,7 @@ export type ModelSettings = z.infer<typeof settingsSchema>;
 
 export const apiWriteSchemas = {
   story: storySchema,
+  playerProfile: playerProfileWriteSchema,
   fork: forkSchema,
   resources: resourcesSchema,
   correction: correctionSchema,
