@@ -85,12 +85,13 @@
     "首轮隐含获知表达被确定性校验拒绝；第二轮4096输出预算截断，失败报告分别保留。",
     "仅一次完整合成剧情链，不是完整抽取质量或长会话评测。"
   ],
-  "finalPreviewVersionId": "d0a43a84-1e52-4d55-b901-c8615289968d",
-  "finalVersionChanges": "仅更新直连模式标识与提供方提示，完整链验收的 Worker 逻辑一致",
+  "finalPreviewVersionId": "a156344d-056c-4877-b345-a3faa833c1e0",
+  "finalVersionChanges": "更新直连界面、资料读取保护及历史任务缺失字段默认值；验收使用显式保存指引，模型传输与抽取逻辑一致",
   "finalConnectionProbe": {
     "status": 200,
     "message": "连接成功。",
-    "totalTokens": 97
+    "totalTokens": 97,
+    "versionId": "d0a43a84-1e52-4d55-b901-c8615289968d"
   },
   "temporaryAccessRevoked": true
 }

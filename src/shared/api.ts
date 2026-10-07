@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { HERMES_NARRATIVE_GUIDANCE } from './hermes-rp';
 /** Public v3 write contracts. Identity and transactional fences remain server enforced. */
 export const storySchema = z.object({
   worldId: z.string(),
@@ -54,7 +53,10 @@ export const settingsSchema = z
     baseUrl: z.string().default('https://api.openai.com/v1'),
     contextWindow: z.number().int().min(4096).max(2000000).default(32768),
     maxOutput: z.number().int().min(128).max(65536).default(4096),
-    systemPrompt: z.string().max(40000).default(HERMES_NARRATIVE_GUIDANCE),
+    systemPrompt: z
+      .string()
+      .max(40000)
+      .default('你是统一叙事者。维护人物动机、各自知情边界和世界规则，不替玩家决定行为。'),
     mode: z.enum(['gateway', 'openai', 'local-demo']).default('gateway'),
   })
   .refine((s) => s.maxOutput + 1024 < s.contextWindow, '输出预留超过上下文容量');

@@ -606,11 +606,41 @@ test('世界书高级选项编辑实际生效且保留未知扩展', async ({ pa
       },
     },
   });
+  let releaseLoad: () => void = () => undefined;
+  const loadGate = new Promise<void>((resolve) => {
+    releaseLoad = resolve;
+  });
+  let readCount = 0;
+  await page.route(`**/api/v3/assets/${asset.id}`, async (route) => {
+    if (route.request().method() === 'GET') {
+      readCount++;
+      if (readCount === 1) {
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { message: '测试资料暂时不可读' } }),
+        });
+        return;
+      }
+      if (readCount === 2) await loadGate;
+    }
+    await route.continue();
+  });
   await page.goto('/');
   await page.getByRole('button', { name: /资料库/ }).click();
   await page.getByRole('button', { name: /^世界书/ }).click();
   await page.getByRole('button', { name, exact: true }).click();
   const dialog = page.getByRole('dialog', { name: `编辑 · ${name}` });
+  await expect(dialog.getByRole('alert')).toContainText('测试资料暂时不可读');
+  await expect(dialog.getByLabel('世界书预算（token）', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '保存版本', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole('button', { name, exact: true }).click();
+  await expect(dialog.getByText('读取原始字段与扩展…', { exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('世界书预算（token）', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '保存版本', exact: true })).toBeDisabled();
+  releaseLoad();
   await expect(dialog.getByLabel('注入顺序', { exact: true })).toHaveValue('23');
   await expect(dialog.getByLabel('历史深度', { exact: true })).toHaveValue('7');
   await dialog.getByLabel('世界书预算（token）', { exact: true }).fill('120');

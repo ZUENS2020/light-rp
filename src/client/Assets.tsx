@@ -321,6 +321,7 @@ function AssetEditor({
   const [previewResult, setPreviewResult] = useState<Data | null>(null);
   const [revision, setRevision] = useState(asset?.revision || 0);
   const [loading, setLoading] = useState(!!asset);
+  const [loadFailed, setLoadFailed] = useState(false);
   const body = characterData(data);
   const entries = bookEntries(data);
   const normalizedBook = normalizeWorldbook(data);
@@ -337,7 +338,10 @@ function AssetEditor({
         }
       })
       .catch((error) => {
-        if (live) setError(errorText(error));
+        if (live) {
+          setLoadFailed(true);
+          setError(errorText(error));
+        }
       })
       .finally(() => {
         if (live) setLoading(false);
@@ -395,6 +399,7 @@ function AssetEditor({
     setTab(next);
   }
   async function save() {
+    if (loading || loadFailed) return;
     setError('');
     setBusy(true);
     try {
@@ -464,8 +469,11 @@ function AssetEditor({
             {error}
           </div>
         )}
-        {loading && <p className="quiet">读取原始字段与扩展…</p>}
-        {tab === 'raw' ? (
+        {loading ? (
+          <p className="quiet">读取原始字段与扩展…</p>
+        ) : loadFailed ? (
+          <p className="quiet">请关闭编辑器后重新读取资料。</p>
+        ) : tab === 'raw' ? (
           <Field
             label="原始字段与扩展"
             hint="保存时保留此对象的全部字段。未知扩展不会被编辑表单丢弃。"
@@ -905,7 +913,11 @@ function AssetEditor({
           </div>
         )}
         <button onClick={onClose}>取消</button>
-        <button className="primary" onClick={() => void save()} disabled={busy || loading}>
+        <button
+          className="primary"
+          onClick={() => void save()}
+          disabled={busy || loading || loadFailed}
+        >
           <Save size={15} />
           {busy ? '保存中…' : '保存版本'}
         </button>
