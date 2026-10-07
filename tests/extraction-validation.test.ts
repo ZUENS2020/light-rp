@@ -100,13 +100,7 @@ describe('bound-rule extraction and source semantics', () => {
     ).toBe(false);
     expect(messages[0]!.content).toContain('角色自称成功不足');
     expect(messages[0]!.content).not.toContain('validFrom":"明确的剧情');
-    expect(run.mock.calls[0]![1].response_format).toMatchObject({
-      type: 'json_schema',
-      json_schema: {
-        type: 'object',
-        properties: { facts: { items: { properties: { validFrom: { type: 'number' } } } } },
-      },
-    });
+    expect(run.mock.calls[0]![1]).not.toHaveProperty('response_format');
   });
   it('rejects an explicit fixed-rule conflict on the first response instead of repairing it away', async () => {
     const { run, env } = binding(
@@ -117,6 +111,60 @@ describe('bound-rule extraction and source semantics', () => {
       code: 'CANON_CONFLICT',
     });
     expect(run).toHaveBeenCalledTimes(1);
+  });
+  it('does not spend three analyzer calls on a rejected binding protocol', async () => {
+    const run = vi.fn(async () => {
+      throw new Error('private provider schema error');
+    });
+    await expect(
+      analyze(
+        { AI: { run }, AI_GATEWAY_ID: 'mock-only' } as unknown as Env,
+        context(),
+        input,
+        narration,
+      ),
+    ).rejects.toMatchObject({ code: 'MODEL_HTTP' });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+  it('records a synthetic visible truncation preview without retrying or returning it as extraction', async () => {
+    const events: unknown[] = [],
+      run = vi.fn(async () => ({
+        choices: [
+          {
+            message: { content: '{"facts":[', reasoning_content: 'PRIVATE REASONING' },
+            finish_reason: 'length',
+          },
+        ],
+        usage: { completion_tokens: 4096 },
+      }));
+    await expect(
+      analyze(
+        { AI: { run }, AI_GATEWAY_ID: 'mock-only' } as unknown as Env,
+        context(),
+        input,
+        narration,
+        { onAttempt: (event) => events.push(event) },
+      ),
+    ).rejects.toMatchObject({ code: 'OUTPUT_TRUNCATED' });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual({
+      attempt: 1,
+      phase: 'truncated',
+      rawOutput: '{"facts":[',
+      errorCode: 'OUTPUT_TRUNCATED',
+    });
+    expect(JSON.stringify(events)).not.toContain('PRIVATE REASONING');
+  });
+  it('keeps provider schema enforcement for a different auxiliary model', async () => {
+    const c = context(),
+      { run, env } = binding(result());
+    c.settings.auxiliaryModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    await analyze(env, c, input, narration);
+    expect(run.mock.calls[0]![0]).toBe(c.settings.auxiliaryModel);
+    expect(run.mock.calls[0]![1].response_format).toMatchObject({
+      type: 'json_schema',
+      json_schema: { type: 'object' },
+    });
   });
   it('rejects quoted claims as canon but accepts independent objective narration and directional belief', () => {
     const said = '甲说：“钥匙在仓库。”';

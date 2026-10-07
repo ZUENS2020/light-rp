@@ -1,0 +1,4598 @@
+{
+  "format": "lightrp-real-model-quality",
+  "version": 1,
+  "startedAt": "2026-10-07T07:52:10.115Z",
+  "runId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066",
+  "status": "completed",
+  "plan": {
+    "synthetic": true,
+    "extractionCases": 0,
+    "positiveVectorQuestions": 20,
+    "negativeVectorQuestions": 3,
+    "worstModelCalls": 0,
+    "maxModelCalls": 60,
+    "maxEmbeddingCalls": 77,
+    "realModelRun": true,
+    "costUSD": null,
+    "note": "默认零网络计划。--run 才调用真实 analyze 和 bge-m3/Vectorize；gold 固定、未判定不计作正确，episode 不计原子事实。"
+  },
+  "manifest": {
+    "format": "lightrp-quality-gold",
+    "version": 1,
+    "extractionCases": [
+      {
+        "id": "q01-truth",
+        "category": "世界真相",
+        "mode": "roleplay",
+        "user": "继续查看仓库。",
+        "assistant": "钥匙静静放在仓库的木箱上。没有角色看到这一幕。",
+        "expected": [
+          {
+            "id": "key-location",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "仓库"
+              ]
+            ],
+            "forbiddenKnownBy": [
+              "actor-a",
+              "actor-b",
+              "actor-c"
+            ]
+          }
+        ],
+        "forbidden": []
+      },
+      {
+        "id": "q02-lie",
+        "category": "谎言与误信",
+        "mode": "roleplay",
+        "user": "让乙回应甲。",
+        "assistant": "钥匙实际仍在工坊。甲对乙撒谎说：“钥匙在仓库。”乙听清了这句话，并相信钥匙在仓库。丙没有听到。",
+        "expected": [
+          {
+            "id": "truth",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "工坊"
+              ]
+            ]
+          },
+          {
+            "id": "belief",
+            "category": "fact",
+            "kinds": [
+              "belief"
+            ],
+            "subjects": [
+              "actor-b",
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "仓库"
+              ]
+            ],
+            "observerId": "actor-b",
+            "requiredKnownBy": [
+              "actor-b"
+            ],
+            "forbiddenKnownBy": [
+              "actor-a",
+              "actor-c"
+            ]
+          }
+        ],
+        "forbidden": [
+          {
+            "id": "lie-as-truth",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "仓库"
+              ]
+            ],
+            "reason": "甲的谎言不能覆盖世界真相"
+          }
+        ]
+      },
+      {
+        "id": "q03-inner",
+        "category": "内心与秘密",
+        "mode": "roleplay",
+        "user": "甲若无其事地继续走。",
+        "assistant": "甲心里决定子夜去东桥见线人。这只是甲的内心决定，乙和丙都不知道。",
+        "expected": [],
+        "forbidden": [
+          {
+            "id": "secret-to-others",
+            "category": "fact",
+            "requiredKnownBy": [
+              "actor-b"
+            ],
+            "reason": "乙没有获知甲的内心活动"
+          },
+          {
+            "id": "secret-to-third",
+            "category": "fact",
+            "requiredKnownBy": [
+              "actor-c"
+            ],
+            "reason": "丙没有获知甲的内心活动"
+          }
+        ]
+      },
+      {
+        "id": "q04-told",
+        "category": "明确告知",
+        "mode": "roleplay",
+        "user": "乙询问钥匙。",
+        "assistant": "钥匙在仓库。甲走到乙身边，明确告诉乙钥匙就在仓库；乙听清并记住了这件事。丙在远处没有听到。",
+        "expected": [
+          {
+            "id": "told-location",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "仓库"
+              ]
+            ],
+            "requiredKnownBy": [
+              "actor-b"
+            ],
+            "forbiddenKnownBy": [
+              "actor-c"
+            ]
+          }
+        ],
+        "forbidden": []
+      },
+      {
+        "id": "q05-guess",
+        "category": "猜测",
+        "mode": "roleplay",
+        "user": "甲查看天空。",
+        "assistant": "甲猜测明天会下雨，但没有证据；未来天气还不知道。乙没有听到甲的猜测。",
+        "expected": [],
+        "forbidden": [
+          {
+            "id": "guess-as-canon",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "valueGroups": [
+              [
+                "下雨"
+              ]
+            ],
+            "reason": "未知天气的猜测不能成为已证实世界事实"
+          }
+        ]
+      },
+      {
+        "id": "q06-plan",
+        "category": "未执行计划",
+        "mode": "roleplay",
+        "user": "甲打算开锁。",
+        "assistant": "甲计划明天用铜钥匙开锁，现在还没有开始，也没有结果。",
+        "expected": [],
+        "forbidden": [
+          {
+            "id": "no-unproven-success",
+            "category": "experience",
+            "outcomes": [
+              "success"
+            ],
+            "reason": "原文没有已执行且已确认的成功结果"
+          },
+          {
+            "id": "no-implicit-capability",
+            "category": "capability",
+            "reason": "没有明确学习事件，不能由尝试、读书或成功推断能力"
+          }
+        ]
+      },
+      {
+        "id": "q07-success",
+        "category": "实际成功不授予能力",
+        "mode": "roleplay",
+        "user": "甲尝试开锁。",
+        "assistant": "甲把铜钥匙插入门锁，转动一圈，门锁确实打开了。这次开锁成功，但没有学习新能力。",
+        "expected": [
+          {
+            "id": "actual-success",
+            "category": "experience",
+            "names": [
+              "开锁",
+              "解锁"
+            ],
+            "outcomes": [
+              "success"
+            ],
+            "subjects": [
+              "actor-a"
+            ]
+          }
+        ],
+        "forbidden": [
+          {
+            "id": "no-implicit-capability",
+            "category": "capability",
+            "reason": "没有明确学习事件，不能由尝试、读书或成功推断能力"
+          }
+        ]
+      },
+      {
+        "id": "q08-boast",
+        "category": "自称成功与未知结果",
+        "mode": "roleplay",
+        "user": "甲说：“我开锁成功了。”",
+        "assistant": "甲只是自称成功。门锁被帘子挡住，没有人确认它是否打开，实际结果未知。",
+        "expected": [],
+        "forbidden": [
+          {
+            "id": "no-unproven-success",
+            "category": "experience",
+            "outcomes": [
+              "success"
+            ],
+            "reason": "原文没有已执行且已确认的成功结果"
+          },
+          {
+            "id": "no-implicit-capability",
+            "category": "capability",
+            "reason": "没有明确学习事件，不能由尝试、读书或成功推断能力"
+          }
+        ]
+      },
+      {
+        "id": "q09-no-tool",
+        "category": "前提不符",
+        "mode": "roleplay",
+        "user": "甲尝试打开门。",
+        "assistant": "甲伸手准备开锁，却发现铜钥匙不在身上。开锁失败，因为缺少钥匙；这不证明开锁方法失效。",
+        "expected": [
+          {
+            "id": "failure",
+            "category": "experience",
+            "names": [
+              "开锁",
+              "解锁"
+            ],
+            "outcomes": [
+              "failure"
+            ],
+            "subjects": [
+              "actor-a"
+            ]
+          }
+        ],
+        "forbidden": [
+          {
+            "id": "no-implicit-capability",
+            "category": "capability",
+            "reason": "没有明确学习事件，不能由尝试、读书或成功推断能力"
+          }
+        ]
+      },
+      {
+        "id": "q10-learning",
+        "category": "明确学习能力",
+        "mode": "roleplay",
+        "user": "师傅继续教学。",
+        "assistant": "师傅实际教甲练习打结。甲反复练习后学会了打结，师傅明确认定甲获得初级打结能力。",
+        "expected": [
+          {
+            "id": "learned-knot",
+            "category": "capability",
+            "subjects": [
+              "actor-a"
+            ],
+            "names": [
+              "打结"
+            ],
+            "level": "初级"
+          }
+        ],
+        "forbidden": []
+      },
+      {
+        "id": "q11-reading",
+        "category": "读书不等于掌握",
+        "mode": "roleplay",
+        "user": "甲阅读一本书。",
+        "assistant": "甲读到了开锁步骤，但没有练习，也没有人确认他掌握开锁能力。",
+        "expected": [],
+        "forbidden": [
+          {
+            "id": "no-unproven-success",
+            "category": "experience",
+            "outcomes": [
+              "success"
+            ],
+            "reason": "原文没有已执行且已确认的成功结果"
+          },
+          {
+            "id": "no-implicit-capability",
+            "category": "capability",
+            "reason": "没有明确学习事件，不能由尝试、读书或成功推断能力"
+          }
+        ]
+      },
+      {
+        "id": "q12-correction",
+        "category": "作者纠正",
+        "mode": "author",
+        "user": "作者更正：钥匙是蓝色，之前记录的红色是错误的。",
+        "assistant": "作者纠正已经生效：钥匙实际是蓝色，红色记录被明确撤销。",
+        "previous": "旧记忆错误地把钥匙记为红色。",
+        "expected": [
+          {
+            "id": "correct-blue",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "蓝色"
+              ]
+            ]
+          }
+        ],
+        "forbidden": [
+          {
+            "id": "revive-red",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "红色"
+              ]
+            ],
+            "reason": "明确撤销的红色不能继续作为当前事实"
+          }
+        ]
+      },
+      {
+        "id": "q13-time",
+        "category": "历史与当前",
+        "mode": "roleplay",
+        "user": "核对位置变化。",
+        "assistant": "在剧情时刻10，钥匙在工坊；该状态在时刻15结束。自剧情时刻15起，钥匙移到了仓库，现在仍在仓库。",
+        "expected": [
+          {
+            "id": "old-location",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "工坊"
+              ]
+            ],
+            "validFrom": 10,
+            "validTo": 15
+          },
+          {
+            "id": "current-location",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "仓库"
+              ]
+            ],
+            "validFrom": 15
+          }
+        ],
+        "forbidden": []
+      },
+      {
+        "id": "q14-homonyms",
+        "category": "同名实体",
+        "mode": "roleplay",
+        "names": [
+          "小明",
+          "小明",
+          "丙"
+        ],
+        "user": "继续记录两人的行踪。",
+        "assistant": "编号actor-a的小明留在工坊；编号actor-b的小明独自去了仓库。二人是不同的人。",
+        "expected": [
+          {
+            "id": "first-name",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "actor-a"
+            ],
+            "valueGroups": [
+              [
+                "工坊"
+              ]
+            ]
+          },
+          {
+            "id": "second-name",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "actor-b"
+            ],
+            "valueGroups": [
+              [
+                "仓库"
+              ]
+            ]
+          }
+        ],
+        "forbidden": [
+          {
+            "id": "swapped-first",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "actor-a"
+            ],
+            "valueGroups": [
+              [
+                "仓库"
+              ]
+            ],
+            "reason": "同名的 actor-a 没有去仓库"
+          },
+          {
+            "id": "swapped-second",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "actor-b"
+            ],
+            "valueGroups": [
+              [
+                "工坊"
+              ]
+            ],
+            "reason": "同名的 actor-b 没有留在工坊"
+          }
+        ]
+      },
+      {
+        "id": "q15-relations",
+        "category": "多值关系",
+        "mode": "roleplay",
+        "user": "说明彼此关系。",
+        "assistant": "甲与乙是朋友，甲与丙也是朋友。后一段友情没有结束前一段友情。",
+        "expected": [
+          {
+            "id": "friend-b",
+            "category": "fact",
+            "kinds": [
+              "relation"
+            ],
+            "subjects": [
+              "actor-a"
+            ],
+            "valueGroups": [
+              [
+                "actor-b",
+                "乙"
+              ]
+            ]
+          },
+          {
+            "id": "friend-c",
+            "category": "fact",
+            "kinds": [
+              "relation"
+            ],
+            "subjects": [
+              "actor-a"
+            ],
+            "valueGroups": [
+              [
+                "actor-c",
+                "丙"
+              ]
+            ]
+          }
+        ],
+        "forbidden": []
+      },
+      {
+        "id": "q16-calendar",
+        "category": "未知日期",
+        "mode": "roleplay",
+        "user": "过了一会儿，继续。",
+        "assistant": "钥匙现在到了港站。没有人记录年月日，剧情只知道“过了一会儿”。",
+        "expected": [
+          {
+            "id": "port",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "港站"
+              ]
+            ]
+          }
+        ],
+        "forbidden": [],
+        "forbidCalendarDate": true
+      },
+      {
+        "id": "q17-selective",
+        "category": "知情片段",
+        "mode": "roleplay",
+        "user": "乙停在门外。",
+        "assistant": "钥匙在仓库，乙通过窗户亲眼看到钥匙在仓库。甲心里另有子夜去东桥的秘密计划，乙不知道这个内心计划，丙也不知道。",
+        "expected": [
+          {
+            "id": "seen-location",
+            "category": "fact",
+            "kinds": [
+              "canon"
+            ],
+            "subjects": [
+              "钥匙"
+            ],
+            "valueGroups": [
+              [
+                "仓库"
+              ]
+            ],
+            "requiredKnownBy": [
+              "actor-b"
+            ]
+          }
+        ],
+        "forbidden": [
+          {
+            "id": "inner-leak",
+            "category": "fact",
+            "valueGroups": [
+              [
+                "子夜"
+              ],
+              [
+                "东桥"
+              ]
+            ],
+            "requiredKnownBy": [
+              "actor-b"
+            ],
+            "reason": "看到钥匙不等于获知甲的内心计划"
+          }
+        ]
+      },
+      {
+        "id": "q18-stochastic",
+        "category": "随机结果",
+        "mode": "roleplay",
+        "user": "甲用有随机性的魔法尝试开锁。",
+        "assistant": "甲按原步骤施放随机开锁魔法，步骤正确，但这一次随机失败，门锁没有打开。这一次失败不是确定的方法反例。",
+        "expected": [
+          {
+            "id": "random-failure",
+            "category": "experience",
+            "names": [
+              "开锁",
+              "解锁"
+            ],
+            "outcomes": [
+              "failure"
+            ],
+            "subjects": [
+              "actor-a"
+            ]
+          }
+        ],
+        "forbidden": [
+          {
+            "id": "no-unproven-success",
+            "category": "experience",
+            "outcomes": [
+              "success"
+            ],
+            "reason": "原文没有已执行且已确认的成功结果"
+          },
+          {
+            "id": "no-implicit-capability",
+            "category": "capability",
+            "reason": "没有明确学习事件，不能由尝试、读书或成功推断能力"
+          }
+        ]
+      },
+      {
+        "id": "q19-partial",
+        "category": "部分完成",
+        "mode": "roleplay",
+        "user": "甲继续开锁。",
+        "assistant": "甲转动铜钥匙，锁舌只退了一半，门仍没有打开。开锁只完成了一部分。",
+        "expected": [
+          {
+            "id": "partial",
+            "category": "experience",
+            "names": [
+              "开锁",
+              "解锁"
+            ],
+            "outcomes": [
+              "partial"
+            ],
+            "subjects": [
+              "actor-a"
+            ]
+          }
+        ],
+        "forbidden": [
+          {
+            "id": "no-unproven-success",
+            "category": "experience",
+            "outcomes": [
+              "success"
+            ],
+            "reason": "原文没有已执行且已确认的成功结果"
+          },
+          {
+            "id": "no-implicit-capability",
+            "category": "capability",
+            "reason": "没有明确学习事件，不能由尝试、读书或成功推断能力"
+          }
+        ]
+      },
+      {
+        "id": "q20-confirmed",
+        "category": "明确确认成功",
+        "mode": "author",
+        "user": "作者确认甲这一回合的开锁确实成功。",
+        "assistant": "甲本回合已插入铜钥匙并转动，门锁已经打开；作者明确确认这次开锁成功。没有新增学习事件。",
+        "expected": [
+          {
+            "id": "confirmed",
+            "category": "experience",
+            "names": [
+              "开锁",
+              "解锁"
+            ],
+            "outcomes": [
+              "success"
+            ],
+            "subjects": [
+              "actor-a"
+            ]
+          }
+        ],
+        "forbidden": [
+          {
+            "id": "no-implicit-capability",
+            "category": "capability",
+            "reason": "没有明确学习事件，不能由尝试、读书或成功推断能力"
+          }
+        ]
+      }
+    ],
+    "vectorFacts": [
+      {
+        "id": "permit",
+        "subject": "星港通行证",
+        "predicate": "validity",
+        "value": "七天",
+        "text": "星港通行证的有效期是七天。",
+        "query": "星港的入城证能使用多久？"
+      },
+      {
+        "id": "lighthouse",
+        "subject": "北岸灯塔",
+        "predicate": "signal",
+        "value": "三次短闪",
+        "text": "北岸灯塔遇浓雾时发出三次短闪。",
+        "query": "大雾中北边的灯塔怎样示警？"
+      },
+      {
+        "id": "archive",
+        "subject": "档案馆",
+        "predicate": "opening",
+        "value": "午后两点",
+        "text": "档案馆每天午后两点才开门。",
+        "query": "什么时候可以进入档案馆？"
+      },
+      {
+        "id": "ferry",
+        "subject": "东河渡船",
+        "predicate": "fare",
+        "value": "两枚银币",
+        "text": "东河渡船单程收费两枚银币。",
+        "query": "渡过东河需要付多少船钱？"
+      },
+      {
+        "id": "medicine",
+        "subject": "解毒药",
+        "predicate": "storage",
+        "value": "冷藏",
+        "text": "解毒药必须冷藏才能保持药效。",
+        "query": "怎样保存抗毒药不会失效？"
+      },
+      {
+        "id": "gate",
+        "subject": "南门",
+        "predicate": "closing",
+        "value": "日落",
+        "text": "南门在日落时关闭。",
+        "query": "太阳落山后南侧城门还开放吗？"
+      },
+      {
+        "id": "compass",
+        "subject": "罗盘",
+        "predicate": "holder",
+        "value": "乙",
+        "text": "罗盘现在由乙保管。",
+        "query": "导航用的指南盘在谁手里？"
+      },
+      {
+        "id": "key",
+        "subject": "蓝钥匙",
+        "predicate": "location",
+        "value": "仓库木箱",
+        "text": "蓝钥匙放在仓库的木箱里。",
+        "query": "开门的蓝色钥匙藏在哪里？"
+      },
+      {
+        "id": "teacher",
+        "subject": "打结师傅",
+        "predicate": "name",
+        "value": "沈墨",
+        "text": "教打结的师傅名叫沈墨。",
+        "query": "那位教授系绳结的老师叫什么？"
+      },
+      {
+        "id": "inn",
+        "subject": "松影旅店",
+        "predicate": "breakfast",
+        "value": "热粥",
+        "text": "松影旅店早餐供应热粥。",
+        "query": "住松影旅店早上能吃到什么？"
+      },
+      {
+        "id": "map",
+        "subject": "航海图",
+        "predicate": "revision",
+        "value": "第三版",
+        "text": "航海图目前采用第三版。",
+        "query": "这份海上路线图用的是哪一版？"
+      },
+      {
+        "id": "rope",
+        "subject": "救援绳",
+        "predicate": "length",
+        "value": "二十米",
+        "text": "救援绳的长度是二十米。",
+        "query": "救人用的绳索有多长？"
+      },
+      {
+        "id": "garden",
+        "subject": "温室",
+        "predicate": "water",
+        "value": "周一",
+        "text": "温室植物每周一浇水。",
+        "query": "哪天给玻璃花房里的植物补水？"
+      },
+      {
+        "id": "bell",
+        "subject": "警钟",
+        "predicate": "meaning",
+        "value": "火灾",
+        "text": "警钟连续鸣响意味着火灾。",
+        "query": "警报大钟一直响代表什么危险？"
+      },
+      {
+        "id": "repair",
+        "subject": "船匠",
+        "predicate": "fee",
+        "value": "五枚金币",
+        "text": "船匠修补船底收取五枚金币。",
+        "query": "请工匠补好船底要多少钱？"
+      },
+      {
+        "id": "moon",
+        "subject": "月亮节",
+        "predicate": "date",
+        "value": "第八夜",
+        "text": "月亮节在每月第八夜举行。",
+        "query": "月庆活动安排在一个月里的哪晚？"
+      },
+      {
+        "id": "bridge",
+        "subject": "旧桥",
+        "predicate": "limit",
+        "value": "三人",
+        "text": "旧桥最多允许三人同时通过。",
+        "query": "破旧桥梁能同时站多少个人？"
+      },
+      {
+        "id": "seal",
+        "subject": "信封",
+        "predicate": "seal",
+        "value": "白蜡",
+        "text": "正式信封使用白蜡封口。",
+        "query": "官署寄出的信要用什么封住？"
+      },
+      {
+        "id": "bird",
+        "subject": "信鸽",
+        "predicate": "food",
+        "value": "谷粒",
+        "text": "信鸽只喂谷粒，不喂咸食。",
+        "query": "负责送信的鸽子吃什么？"
+      },
+      {
+        "id": "tunnel",
+        "subject": "密道",
+        "predicate": "entrance",
+        "value": "钟楼地下",
+        "text": "密道入口位于钟楼地下。",
+        "query": "秘密通路从哪个建筑的下面进入？"
+      }
+    ],
+    "goldDigest": "1b2dbe6b0aeaabace43af59187181958e57fcca2d1bb5931db1710b7c2da7a1c",
+    "synthetic": true,
+    "methodology": "固定人工规则匹配结构化值、归属、结果和明确知情范围；不把未匹配的预测判为正确，episode不计入原子事实precision。"
+  },
+  "extractionResults": [],
+  "vectorReadiness": [
+    {
+      "attempt": 1,
+      "probes": [
+        {
+          "id": "ready-permit",
+          "query": "星港通行证的有效期是七天。",
+          "viewer": "director",
+          "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+          "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "rawVectorMatches": [
+            {
+              "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+              "score": 0.9016696
+            },
+            {
+              "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+              "score": 0.51961815
+            },
+            {
+              "vectorId": "1cc5b4f68abffb7db1b047dbe561815e353242c1fcdbc8afd1d28243e0c4c215",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+              "score": 0.4818496
+            },
+            {
+              "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+              "score": 0.47383246
+            },
+            {
+              "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+              "score": 0.46884146
+            },
+            {
+              "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+              "score": 0.46754855
+            },
+            {
+              "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+              "score": 0.46739814
+            },
+            {
+              "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+              "score": 0.46685058
+            },
+            {
+              "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+              "score": 0.46253848
+            },
+            {
+              "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+              "score": 0.45916447
+            }
+          ],
+          "accepted": [
+            {
+              "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+              "score": 0.9016696
+            },
+            {
+              "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+              "score": 0.51961815
+            },
+            {
+              "vectorId": "1cc5b4f68abffb7db1b047dbe561815e353242c1fcdbc8afd1d28243e0c4c215",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+              "score": 0.4818496
+            },
+            {
+              "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+              "score": 0.47383246
+            },
+            {
+              "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+              "score": 0.46884146
+            },
+            {
+              "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+              "score": 0.46754855
+            },
+            {
+              "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+              "score": 0.46739814
+            },
+            {
+              "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+              "score": 0.46685058
+            },
+            {
+              "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+              "score": 0.46253848
+            },
+            {
+              "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+              "score": 0.45916447
+            }
+          ],
+          "rejected": [],
+          "rank": 1,
+          "hitAt10": true,
+          "hybridHitAt10": true,
+          "forbiddenResults": [],
+          "negativePass": null,
+          "staleDeletedVectorObserved": null,
+          "embeddingCalls": 1,
+          "embeddingModel": "@cf/baai/bge-m3",
+          "dimension": 1024,
+          "elapsedMs": 1772
+        },
+        {
+          "id": "ready-tunnel",
+          "query": "密道入口位于钟楼地下。",
+          "viewer": "director",
+          "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+          "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "rawVectorMatches": [
+            {
+              "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+              "score": 0.9269145
+            },
+            {
+              "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+              "score": 0.4999957
+            },
+            {
+              "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+              "score": 0.48182145
+            },
+            {
+              "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+              "score": 0.4802727
+            },
+            {
+              "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+              "score": 0.47746038
+            },
+            {
+              "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+              "score": 0.43672228
+            },
+            {
+              "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+              "score": 0.43609196
+            },
+            {
+              "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+              "score": 0.40856162
+            },
+            {
+              "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+              "score": 0.38668862
+            },
+            {
+              "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+              "score": 0.383883
+            }
+          ],
+          "accepted": [
+            {
+              "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+              "score": 0.9269145
+            },
+            {
+              "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+              "score": 0.4999957
+            },
+            {
+              "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+              "score": 0.48182145
+            },
+            {
+              "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+              "score": 0.4802727
+            },
+            {
+              "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+              "score": 0.47746038
+            },
+            {
+              "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+              "score": 0.43672228
+            },
+            {
+              "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+              "score": 0.43609196
+            },
+            {
+              "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+              "score": 0.40856162
+            },
+            {
+              "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+              "score": 0.38668862
+            },
+            {
+              "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+              "score": 0.383883
+            }
+          ],
+          "rejected": [],
+          "rank": 1,
+          "hitAt10": true,
+          "hybridHitAt10": true,
+          "forbiddenResults": [],
+          "negativePass": null,
+          "staleDeletedVectorObserved": null,
+          "embeddingCalls": 1,
+          "embeddingModel": "@cf/baai/bge-m3",
+          "dimension": 1024,
+          "elapsedMs": 898
+        },
+        {
+          "id": "erased-before",
+          "query": "旧暗门的独立备用口令是什么？",
+          "viewer": "director",
+          "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+          "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "rawVectorMatches": [
+            {
+              "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+              "score": 0.787794
+            },
+            {
+              "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+              "score": 0.64656174
+            },
+            {
+              "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+              "score": 0.39499
+            },
+            {
+              "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+              "score": 0.3883167
+            },
+            {
+              "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+              "score": 0.3804018
+            },
+            {
+              "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+              "score": 0.3777127
+            },
+            {
+              "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+              "score": 0.33357978
+            },
+            {
+              "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+              "score": 0.32537773
+            },
+            {
+              "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+              "score": 0.32168347
+            },
+            {
+              "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+              "score": 0.310505
+            }
+          ],
+          "accepted": [
+            {
+              "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+              "score": 0.787794
+            },
+            {
+              "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+              "score": 0.64656174
+            },
+            {
+              "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+              "score": 0.39499
+            },
+            {
+              "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+              "score": 0.3883167
+            },
+            {
+              "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+              "score": 0.3804018
+            },
+            {
+              "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+              "score": 0.3777127
+            },
+            {
+              "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+              "score": 0.33357978
+            },
+            {
+              "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+              "score": 0.32537773
+            },
+            {
+              "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+              "score": 0.32168347
+            },
+            {
+              "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+              "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+              "score": 0.310505
+            }
+          ],
+          "rejected": [],
+          "rank": 1,
+          "hitAt10": true,
+          "hybridHitAt10": true,
+          "forbiddenResults": [],
+          "negativePass": null,
+          "staleDeletedVectorObserved": null,
+          "embeddingCalls": 1,
+          "embeddingModel": "@cf/baai/bge-m3",
+          "dimension": 1024,
+          "elapsedMs": 1040
+        }
+      ]
+    }
+  ],
+  "vectorResults": [
+    {
+      "id": "permit",
+      "query": "星港的入城证能使用多久？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+      "rawVectorMatches": [
+        {
+          "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "score": 0.7168325
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.38898247
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.38718915
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.38316992
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.37813094
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.37613225
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.37592807
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.37461317
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.3742529
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.36639616
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "score": 0.7168325
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.38898247
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.38718915
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.38316992
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.37813094
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.37613225
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.37592807
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.37461317
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.3742529
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.36639616
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 980
+    },
+    {
+      "id": "lighthouse",
+      "query": "大雾中北边的灯塔怎样示警？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+      "rawVectorMatches": [
+        {
+          "vectorId": "7af494f2b75bb1c4e742193bb6e7dbba1ae44ef3e621488e478d4de0e1a72b14",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+          "score": 0.68830925
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.5166153
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.42580584
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.36300927
+        },
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.35434896
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.3521597
+        },
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.3493282
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.3484698
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.34687427
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.34578854
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "7af494f2b75bb1c4e742193bb6e7dbba1ae44ef3e621488e478d4de0e1a72b14",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+          "score": 0.68830925
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.5166153
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.42580584
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.36300927
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.3521597
+        },
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.3493282
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.3484698
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.34687427
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.34578854
+        }
+      ],
+      "rejected": [
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.35434896
+        }
+      ],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 901
+    },
+    {
+      "id": "archive",
+      "query": "什么时候可以进入档案馆？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+      "rawVectorMatches": [
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.7222703
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.4425584
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.4081757
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.38689113
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.3867147
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.36642954
+        },
+        {
+          "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "score": 0.36617935
+        },
+        {
+          "vectorId": "a3c08d6d1eeddc843b867b741e1b25f2a90d9bc481bb3c706b5e0e33af8faaaf",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+          "score": 0.35445762
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.35278925
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.34478155
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.7222703
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.4425584
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.4081757
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.38689113
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.3867147
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.36642954
+        },
+        {
+          "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "score": 0.36617935
+        },
+        {
+          "vectorId": "a3c08d6d1eeddc843b867b741e1b25f2a90d9bc481bb3c706b5e0e33af8faaaf",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+          "score": 0.35445762
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.35278925
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.34478155
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 929
+    },
+    {
+      "id": "ferry",
+      "query": "渡过东河需要付多少船钱？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+      "rawVectorMatches": [
+        {
+          "vectorId": "d8652459a2c04b279edfed64a7c419a8a90bf06beaff7231522815bbf9abf4e8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+          "score": 0.7720577
+        },
+        {
+          "vectorId": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+          "score": 0.53769803
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.46895245
+        },
+        {
+          "vectorId": "1cc5b4f68abffb7db1b047dbe561815e353242c1fcdbc8afd1d28243e0c4c215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+          "score": 0.3672563
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.3657566
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.34244868
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.34242317
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.34106275
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.34053993
+        },
+        {
+          "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "score": 0.34015256
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "d8652459a2c04b279edfed64a7c419a8a90bf06beaff7231522815bbf9abf4e8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+          "score": 0.7720577
+        },
+        {
+          "vectorId": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+          "score": 0.53769803
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.46895245
+        },
+        {
+          "vectorId": "1cc5b4f68abffb7db1b047dbe561815e353242c1fcdbc8afd1d28243e0c4c215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+          "score": 0.3672563
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.3657566
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.34244868
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.34242317
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.34106275
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.34053993
+        },
+        {
+          "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "score": 0.34015256
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 856
+    },
+    {
+      "id": "medicine",
+      "query": "怎样保存抗毒药不会失效？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:medicine",
+      "rawVectorMatches": [
+        {
+          "vectorId": "c00488f8a2cfcbde0f7f0016e2d79f03acbcb265cdff2bb0f2759c0c95da4996",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:medicine",
+          "score": 0.69280684
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.42395917
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.40079272
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.37701407
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.3549647
+        },
+        {
+          "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "score": 0.33357885
+        },
+        {
+          "vectorId": "3cfd4a38f1234dc5407b074c76d5a83cfdbafeca31fb2f4ba5e217e9f3d63e0b",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+          "score": 0.3135933
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.29764274
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.2920844
+        },
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.27974427
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "c00488f8a2cfcbde0f7f0016e2d79f03acbcb265cdff2bb0f2759c0c95da4996",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:medicine",
+          "score": 0.69280684
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.42395917
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.40079272
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.37701407
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.3549647
+        },
+        {
+          "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "score": 0.33357885
+        },
+        {
+          "vectorId": "3cfd4a38f1234dc5407b074c76d5a83cfdbafeca31fb2f4ba5e217e9f3d63e0b",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+          "score": 0.3135933
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.29764274
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.2920844
+        },
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.27974427
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 810
+    },
+    {
+      "id": "gate",
+      "query": "太阳落山后南侧城门还开放吗？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+      "rawVectorMatches": [
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.6491585
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.51485866
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.42858687
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.41521868
+        },
+        {
+          "vectorId": "7af494f2b75bb1c4e742193bb6e7dbba1ae44ef3e621488e478d4de0e1a72b14",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+          "score": 0.3829335
+        },
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.37326875
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.36983252
+        },
+        {
+          "vectorId": "3d05d34f542fd5200a3f9cd7acf34fe5227ddd4f308ca03c4a6fe491b1008542",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:inn",
+          "score": 0.3658716
+        },
+        {
+          "vectorId": "a3c08d6d1eeddc843b867b741e1b25f2a90d9bc481bb3c706b5e0e33af8faaaf",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+          "score": 0.3532297
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.3497727
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.6491585
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.51485866
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.42858687
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.41521868
+        },
+        {
+          "vectorId": "7af494f2b75bb1c4e742193bb6e7dbba1ae44ef3e621488e478d4de0e1a72b14",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+          "score": 0.3829335
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.36983252
+        },
+        {
+          "vectorId": "3d05d34f542fd5200a3f9cd7acf34fe5227ddd4f308ca03c4a6fe491b1008542",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:inn",
+          "score": 0.3658716
+        },
+        {
+          "vectorId": "a3c08d6d1eeddc843b867b741e1b25f2a90d9bc481bb3c706b5e0e33af8faaaf",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+          "score": 0.3532297
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.3497727
+        }
+      ],
+      "rejected": [
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.37326875
+        }
+      ],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 913
+    },
+    {
+      "id": "compass",
+      "query": "导航用的指南盘在谁手里？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+      "rawVectorMatches": [
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.56636447
+        },
+        {
+          "vectorId": "1cc5b4f68abffb7db1b047dbe561815e353242c1fcdbc8afd1d28243e0c4c215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+          "score": 0.42367697
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.39355177
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.379421
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.37509567
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.37072477
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.37055773
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.36850008
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.36814758
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.36612287
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.56636447
+        },
+        {
+          "vectorId": "1cc5b4f68abffb7db1b047dbe561815e353242c1fcdbc8afd1d28243e0c4c215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+          "score": 0.42367697
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.39355177
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.379421
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.37509567
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.37072477
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.37055773
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.36850008
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.36814758
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.36612287
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 867
+    },
+    {
+      "id": "key",
+      "query": "开门的蓝色钥匙藏在哪里？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+      "rawVectorMatches": [
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.67602414
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.4602498
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.4376067
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.40782493
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.38630918
+        },
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.38236058
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.361874
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.3569159
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.35162926
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.35101312
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.67602414
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.4602498
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.4376067
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.40782493
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.38630918
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.361874
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.3569159
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.35162926
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.35101312
+        }
+      ],
+      "rejected": [
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.38236058
+        }
+      ],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 886
+    },
+    {
+      "id": "teacher",
+      "query": "那位教授系绳结的老师叫什么？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+      "rawVectorMatches": [
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.53388757
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.3555504
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.33830547
+        },
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.31627867
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.29228514
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.27002263
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.25302172
+        },
+        {
+          "vectorId": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+          "score": 0.2489814
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.24588229
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.24543951
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.53388757
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.3555504
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.33830547
+        },
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.31627867
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.29228514
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.27002263
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.25302172
+        },
+        {
+          "vectorId": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+          "score": 0.2489814
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.24588229
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.24543951
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 907
+    },
+    {
+      "id": "inn",
+      "query": "住松影旅店早上能吃到什么？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:inn",
+      "rawVectorMatches": [
+        {
+          "vectorId": "3d05d34f542fd5200a3f9cd7acf34fe5227ddd4f308ca03c4a6fe491b1008542",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:inn",
+          "score": 0.77809066
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.40243042
+        },
+        {
+          "vectorId": "d9449d1950f9e60c49756120e061f0f6cfb9852cfe0dd343d35e43a738f15f1c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bird",
+          "score": 0.3646576
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.3450495
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.3401252
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.33792743
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.3367123
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.33648753
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.33434075
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.3308146
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "3d05d34f542fd5200a3f9cd7acf34fe5227ddd4f308ca03c4a6fe491b1008542",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:inn",
+          "score": 0.77809066
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.40243042
+        },
+        {
+          "vectorId": "d9449d1950f9e60c49756120e061f0f6cfb9852cfe0dd343d35e43a738f15f1c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bird",
+          "score": 0.3646576
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.3450495
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.3401252
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.33792743
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.3367123
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.33648753
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.33434075
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.3308146
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 1249
+    },
+    {
+      "id": "map",
+      "query": "这份海上路线图用的是哪一版？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+      "rawVectorMatches": [
+        {
+          "vectorId": "1cc5b4f68abffb7db1b047dbe561815e353242c1fcdbc8afd1d28243e0c4c215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+          "score": 0.62128645
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.37797457
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.3688131
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.3670613
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.35668316
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.35072732
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.34952983
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.34873816
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.343252
+        },
+        {
+          "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "score": 0.3315109
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "1cc5b4f68abffb7db1b047dbe561815e353242c1fcdbc8afd1d28243e0c4c215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+          "score": 0.62128645
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.37797457
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.3688131
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.3670613
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.35668316
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.35072732
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.34952983
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.34873816
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.343252
+        },
+        {
+          "vectorId": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+          "score": 0.3315109
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 1096
+    },
+    {
+      "id": "rope",
+      "query": "救人用的绳索有多长？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+      "rawVectorMatches": [
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.70637655
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.44073868
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.39060524
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.38864732
+        },
+        {
+          "vectorId": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+          "score": 0.3540884
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.34766185
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.34039435
+        },
+        {
+          "vectorId": "7af494f2b75bb1c4e742193bb6e7dbba1ae44ef3e621488e478d4de0e1a72b14",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+          "score": 0.32411814
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.3225985
+        },
+        {
+          "vectorId": "d8652459a2c04b279edfed64a7c419a8a90bf06beaff7231522815bbf9abf4e8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+          "score": 0.32254317
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.70637655
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.44073868
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.39060524
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.38864732
+        },
+        {
+          "vectorId": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+          "score": 0.3540884
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.34766185
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.34039435
+        },
+        {
+          "vectorId": "7af494f2b75bb1c4e742193bb6e7dbba1ae44ef3e621488e478d4de0e1a72b14",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+          "score": 0.32411814
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.3225985
+        },
+        {
+          "vectorId": "d8652459a2c04b279edfed64a7c419a8a90bf06beaff7231522815bbf9abf4e8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+          "score": 0.32254317
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 1465
+    },
+    {
+      "id": "garden",
+      "query": "哪天给玻璃花房里的植物补水？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+      "rawVectorMatches": [
+        {
+          "vectorId": "3cfd4a38f1234dc5407b074c76d5a83cfdbafeca31fb2f4ba5e217e9f3d63e0b",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+          "score": 0.6081528
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.3852308
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.3826658
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.38217133
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.38117
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.37979293
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.37679228
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.37401536
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.3726591
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.36887762
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "3cfd4a38f1234dc5407b074c76d5a83cfdbafeca31fb2f4ba5e217e9f3d63e0b",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+          "score": 0.6081528
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.3852308
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.3826658
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.38217133
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.38117
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.37979293
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.37679228
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.37401536
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.3726591
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.36887762
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 1081
+    },
+    {
+      "id": "bell",
+      "query": "警报大钟一直响代表什么危险？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+      "rawVectorMatches": [
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.7488637
+        },
+        {
+          "vectorId": "7af494f2b75bb1c4e742193bb6e7dbba1ae44ef3e621488e478d4de0e1a72b14",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+          "score": 0.4650085
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.39912876
+        },
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.38407788
+        },
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.36322644
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.35545754
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.3548688
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.35181215
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.3471073
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.3395674
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.7488637
+        },
+        {
+          "vectorId": "7af494f2b75bb1c4e742193bb6e7dbba1ae44ef3e621488e478d4de0e1a72b14",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+          "score": 0.4650085
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.39912876
+        },
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.38407788
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.35545754
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.3548688
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.35181215
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.3471073
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.3395674
+        }
+      ],
+      "rejected": [
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.36322644
+        }
+      ],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 1349
+    },
+    {
+      "id": "repair",
+      "query": "请工匠补好船底要多少钱？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+      "rawVectorMatches": [
+        {
+          "vectorId": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+          "score": 0.7565344
+        },
+        {
+          "vectorId": "d8652459a2c04b279edfed64a7c419a8a90bf06beaff7231522815bbf9abf4e8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+          "score": 0.47548792
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.42266715
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.41996244
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.41211972
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.40916643
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.40586677
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.40406734
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.40152118
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.40145835
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+          "score": 0.7565344
+        },
+        {
+          "vectorId": "d8652459a2c04b279edfed64a7c419a8a90bf06beaff7231522815bbf9abf4e8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+          "score": 0.47548792
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.42266715
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.41996244
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.41211972
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.40916643
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.40586677
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.40406734
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.40152118
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.40145835
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 1130
+    },
+    {
+      "id": "moon",
+      "query": "月庆活动安排在一个月里的哪晚？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+      "rawVectorMatches": [
+        {
+          "vectorId": "a3c08d6d1eeddc843b867b741e1b25f2a90d9bc481bb3c706b5e0e33af8faaaf",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+          "score": 0.6301868
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.38516566
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.37552005
+        },
+        {
+          "vectorId": "3cfd4a38f1234dc5407b074c76d5a83cfdbafeca31fb2f4ba5e217e9f3d63e0b",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+          "score": 0.33529457
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.32899255
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.32442108
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.32371935
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.32353508
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.3217647
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.32150868
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "a3c08d6d1eeddc843b867b741e1b25f2a90d9bc481bb3c706b5e0e33af8faaaf",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+          "score": 0.6301868
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.38516566
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.37552005
+        },
+        {
+          "vectorId": "3cfd4a38f1234dc5407b074c76d5a83cfdbafeca31fb2f4ba5e217e9f3d63e0b",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+          "score": 0.33529457
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.32899255
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.32442108
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.32371935
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.32353508
+        },
+        {
+          "vectorId": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+          "score": 0.3217647
+        },
+        {
+          "vectorId": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+          "score": 0.32150868
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 1175
+    },
+    {
+      "id": "bridge",
+      "query": "破旧桥梁能同时站多少个人？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+      "rawVectorMatches": [
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.6809628
+        },
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.41224578
+        },
+        {
+          "vectorId": "d8652459a2c04b279edfed64a7c419a8a90bf06beaff7231522815bbf9abf4e8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+          "score": 0.39246157
+        },
+        {
+          "vectorId": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+          "score": 0.3747428
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.3690911
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.3550442
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.3533736
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.3519566
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.35091242
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.34815276
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.6809628
+        },
+        {
+          "vectorId": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+          "score": 0.41224578
+        },
+        {
+          "vectorId": "d8652459a2c04b279edfed64a7c419a8a90bf06beaff7231522815bbf9abf4e8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+          "score": 0.39246157
+        },
+        {
+          "vectorId": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+          "score": 0.3747428
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.3690911
+        },
+        {
+          "vectorId": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+          "score": 0.3550442
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.3533736
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.3519566
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.35091242
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.34815276
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 1017
+    },
+    {
+      "id": "seal",
+      "query": "官署寄出的信要用什么封住？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+      "rawVectorMatches": [
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.640838
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.44822383
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.42884436
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.40198696
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.3487134
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.34206903
+        },
+        {
+          "vectorId": "c00488f8a2cfcbde0f7f0016e2d79f03acbcb265cdff2bb0f2759c0c95da4996",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:medicine",
+          "score": 0.3393565
+        },
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.3342941
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.32870018
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.32868436
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.640838
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.44822383
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.42884436
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.40198696
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.3487134
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.34206903
+        },
+        {
+          "vectorId": "c00488f8a2cfcbde0f7f0016e2d79f03acbcb265cdff2bb0f2759c0c95da4996",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:medicine",
+          "score": 0.3393565
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.32870018
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.32868436
+        }
+      ],
+      "rejected": [
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.3342941
+        }
+      ],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 939
+    },
+    {
+      "id": "bird",
+      "query": "负责送信的鸽子吃什么？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bird",
+      "rawVectorMatches": [
+        {
+          "vectorId": "d9449d1950f9e60c49756120e061f0f6cfb9852cfe0dd343d35e43a738f15f1c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bird",
+          "score": 0.60853666
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.40950307
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.40717512
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.3585897
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.34365973
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.34254193
+        },
+        {
+          "vectorId": "3cfd4a38f1234dc5407b074c76d5a83cfdbafeca31fb2f4ba5e217e9f3d63e0b",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+          "score": 0.33873728
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.33561563
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.33292806
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.33071095
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "d9449d1950f9e60c49756120e061f0f6cfb9852cfe0dd343d35e43a738f15f1c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bird",
+          "score": 0.60853666
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.40950307
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.40717512
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.3585897
+        },
+        {
+          "vectorId": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+          "score": 0.34365973
+        },
+        {
+          "vectorId": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+          "score": 0.34254193
+        },
+        {
+          "vectorId": "3cfd4a38f1234dc5407b074c76d5a83cfdbafeca31fb2f4ba5e217e9f3d63e0b",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+          "score": 0.33873728
+        },
+        {
+          "vectorId": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+          "score": 0.33561563
+        },
+        {
+          "vectorId": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+          "score": 0.33292806
+        },
+        {
+          "vectorId": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+          "score": 0.33071095
+        }
+      ],
+      "rejected": [],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 957
+    },
+    {
+      "id": "tunnel",
+      "query": "秘密通路从哪个建筑的下面进入？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+      "rawVectorMatches": [
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.6408012
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.47482887
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.3702078
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.3621903
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.35936594
+        },
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.3582913
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.32105064
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.2981152
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.27616605
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.272133
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.6408012
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.47482887
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.3702078
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.3621903
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.35936594
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.32105064
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.2981152
+        },
+        {
+          "vectorId": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.27616605
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.272133
+        }
+      ],
+      "rejected": [
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.3582913
+        }
+      ],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 1182
+    },
+    {
+      "id": "secret-owner",
+      "query": "私人暗门的秘密口令是什么？",
+      "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+      "rawVectorMatches": [
+        {
+          "vectorId": "2248a323b5662e6fd26a9895ba8627a5c6fb042b5d681ec56a2baa9b80fd75a1",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.6927847
+        },
+        {
+          "vectorId": "49cb97b0697ef06ea2f2b0ae5fa330521dea6df680c31ab6bd865e0fbe6de996",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.6163079
+        },
+        {
+          "vectorId": "7ba853e245ee9c02eced828485ade671f5a58c8ca3a42be4a4737a3ef837793f",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.45762938
+        },
+        {
+          "vectorId": "a78b9ea9b953b2cda61c5b9ddd97dafd4e81c7575fab0434d4eed602d9fd79c0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.39142033
+        },
+        {
+          "vectorId": "53d5dbed790d269a40dcf0e455bc636d7cd3238e09ed1deefca9e732560b211d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.38876686
+        },
+        {
+          "vectorId": "19f7046759e458a1c16875214c7c6a28234433709ab9f4b9c413d603f8329804",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.38336346
+        },
+        {
+          "vectorId": "26a8ef0be2b90cc0b0ce0742dd397190d3ff816be04c95714779a4e3f487d1d9",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.34479973
+        },
+        {
+          "vectorId": "8e3e8138107b900430a1b62011f0c2fa1f855baa834c832ea421eea2cf5ddb7a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.32501277
+        },
+        {
+          "vectorId": "e0299963c2f0fb7bfe030daa74dd65a57caea068e5d3b582ecaeb8d52cfceac8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.29557157
+        },
+        {
+          "vectorId": "82973c7c8c8c03aad4933d2cdabfb0933873fb21243352444c924c96256a3857",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.28664753
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "2248a323b5662e6fd26a9895ba8627a5c6fb042b5d681ec56a2baa9b80fd75a1",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.6927847
+        },
+        {
+          "vectorId": "7ba853e245ee9c02eced828485ade671f5a58c8ca3a42be4a4737a3ef837793f",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.45762938
+        },
+        {
+          "vectorId": "a78b9ea9b953b2cda61c5b9ddd97dafd4e81c7575fab0434d4eed602d9fd79c0",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.39142033
+        },
+        {
+          "vectorId": "53d5dbed790d269a40dcf0e455bc636d7cd3238e09ed1deefca9e732560b211d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.38876686
+        },
+        {
+          "vectorId": "19f7046759e458a1c16875214c7c6a28234433709ab9f4b9c413d603f8329804",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.38336346
+        },
+        {
+          "vectorId": "26a8ef0be2b90cc0b0ce0742dd397190d3ff816be04c95714779a4e3f487d1d9",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.34479973
+        },
+        {
+          "vectorId": "8e3e8138107b900430a1b62011f0c2fa1f855baa834c832ea421eea2cf5ddb7a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.32501277
+        },
+        {
+          "vectorId": "e0299963c2f0fb7bfe030daa74dd65a57caea068e5d3b582ecaeb8d52cfceac8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.29557157
+        },
+        {
+          "vectorId": "82973c7c8c8c03aad4933d2cdabfb0933873fb21243352444c924c96256a3857",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.28664753
+        }
+      ],
+      "rejected": [
+        {
+          "vectorId": "49cb97b0697ef06ea2f2b0ae5fa330521dea6df680c31ab6bd865e0fbe6de996",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.6163079
+        }
+      ],
+      "rank": 1,
+      "hitAt10": true,
+      "hybridHitAt10": true,
+      "forbiddenResults": [],
+      "negativePass": null,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 1407
+    },
+    {
+      "id": "secret-other",
+      "query": "私人暗门的秘密口令是什么？",
+      "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": null,
+      "rawVectorMatches": [
+        {
+          "vectorId": "4cac9e9dc8057bda73461ca1b89f74a23399c34064d14355a352009558f10489",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.6163079
+        },
+        {
+          "vectorId": "9657b7459534c144ee2545f7bf08cb5ebf946fa33c76e4c34d22178eb6f648a8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.45762938
+        },
+        {
+          "vectorId": "0cb331aa9c0aa2dc08a145353ebdd3e59c6c62e002418f97dff03f4a22132c3f",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.39142033
+        },
+        {
+          "vectorId": "2c8302ab250d4f976dcb67c79aa0179b52715bc5a418a9c12817d84a673f2e00",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.38876686
+        },
+        {
+          "vectorId": "39282471c8c7cce53089d6b292d44f315e200a2e21c4083da150222a0b42bdd9",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.38336346
+        },
+        {
+          "vectorId": "d056af45aa55e951d146b11bd012f4486f560efde2122625253c5d96713ad382",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.34479973
+        },
+        {
+          "vectorId": "2c803f917ec8c904e5d7cdad31dbe29e4138becf4e286ae8d70f81d280ae744b",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.32501277
+        },
+        {
+          "vectorId": "4e89ed8124adda412ca9a1c4da471d5ea389bc35440389068c8d5f96cb391c1a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.29557157
+        },
+        {
+          "vectorId": "0341c7a7621d5bb1c449fc99d64186ef202c935dacdabe6d286c48c19ac7badf",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.28664753
+        },
+        {
+          "vectorId": "b4eafc7323e8f2b8eb4ef49295b0589e56941074d736bf4048a1fb3747745f59",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+          "score": 0.25467375
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "9657b7459534c144ee2545f7bf08cb5ebf946fa33c76e4c34d22178eb6f648a8",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.45762938
+        },
+        {
+          "vectorId": "0cb331aa9c0aa2dc08a145353ebdd3e59c6c62e002418f97dff03f4a22132c3f",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.39142033
+        },
+        {
+          "vectorId": "2c8302ab250d4f976dcb67c79aa0179b52715bc5a418a9c12817d84a673f2e00",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.38876686
+        },
+        {
+          "vectorId": "39282471c8c7cce53089d6b292d44f315e200a2e21c4083da150222a0b42bdd9",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.38336346
+        },
+        {
+          "vectorId": "d056af45aa55e951d146b11bd012f4486f560efde2122625253c5d96713ad382",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.34479973
+        },
+        {
+          "vectorId": "2c803f917ec8c904e5d7cdad31dbe29e4138becf4e286ae8d70f81d280ae744b",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.32501277
+        },
+        {
+          "vectorId": "4e89ed8124adda412ca9a1c4da471d5ea389bc35440389068c8d5f96cb391c1a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.29557157
+        },
+        {
+          "vectorId": "0341c7a7621d5bb1c449fc99d64186ef202c935dacdabe6d286c48c19ac7badf",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+          "score": 0.28664753
+        },
+        {
+          "vectorId": "b4eafc7323e8f2b8eb4ef49295b0589e56941074d736bf4048a1fb3747745f59",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+          "score": 0.25467375
+        }
+      ],
+      "rejected": [
+        {
+          "vectorId": "4cac9e9dc8057bda73461ca1b89f74a23399c34064d14355a352009558f10489",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.6163079
+        }
+      ],
+      "rank": null,
+      "hitAt10": null,
+      "hybridHitAt10": null,
+      "forbiddenResults": [],
+      "negativePass": true,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 850
+    },
+    {
+      "id": "erased",
+      "query": "旧暗门的独立备用口令是什么？",
+      "viewer": "director",
+      "branchId": "4cbb85f3-a5a5-40bd-bda0-75a8677d4476",
+      "expectedMemoryId": null,
+      "rawVectorMatches": [
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.787794
+        },
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.64656174
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.39499
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.3883167
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.3804018
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.3777127
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.33357978
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.32537773
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.32168347
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.310505
+        }
+      ],
+      "accepted": [
+        {
+          "vectorId": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+          "score": 0.64656174
+        },
+        {
+          "vectorId": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+          "score": 0.39499
+        },
+        {
+          "vectorId": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+          "score": 0.3883167
+        },
+        {
+          "vectorId": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+          "score": 0.3804018
+        },
+        {
+          "vectorId": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+          "score": 0.3777127
+        },
+        {
+          "vectorId": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+          "score": 0.33357978
+        },
+        {
+          "vectorId": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+          "score": 0.32537773
+        },
+        {
+          "vectorId": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+          "score": 0.32168347
+        },
+        {
+          "vectorId": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+          "score": 0.310505
+        }
+      ],
+      "rejected": [
+        {
+          "vectorId": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+          "memoryId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+          "score": 0.787794
+        }
+      ],
+      "rank": null,
+      "hitAt10": null,
+      "hybridHitAt10": null,
+      "forbiddenResults": [],
+      "negativePass": true,
+      "staleDeletedVectorObserved": true,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 800
+    },
+    {
+      "id": "cross-branch",
+      "query": "私人暗门的秘密口令是什么？",
+      "viewer": "director",
+      "branchId": "575b4be5-a916-4c73-a49d-80fcadd1f31c",
+      "expectedMemoryId": null,
+      "rawVectorMatches": [],
+      "accepted": [],
+      "rejected": [],
+      "rank": null,
+      "hitAt10": null,
+      "hybridHitAt10": null,
+      "forbiddenResults": [],
+      "negativePass": true,
+      "staleDeletedVectorObserved": null,
+      "embeddingCalls": 1,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "elapsedMs": 606
+    }
+  ],
+  "modelCalls": 0,
+  "embeddingCalls": 27,
+  "usage": [],
+  "measured": {
+    "extraction": null,
+    "vector": {
+      "positiveQuestions": 20,
+      "recallAt10": 1,
+      "hybridRecallAt10": 1,
+      "negativeCases": 3,
+      "negativeMeasured": 3,
+      "negativePassed": 3,
+      "forbiddenResults": 0,
+      "staleDeletedVectorObserved": true,
+      "vectorRecall90Gate": true,
+      "actualVectorize": true,
+      "embeddingModel": "@cf/baai/bge-m3",
+      "dimension": 1024,
+      "corpusScope": "20固定原子事实+8干扰情节+2权限/删除案例；这不是大型外部benchmark"
+    }
+  },
+  "actualCostUSD": null,
+  "methodology": {
+    "extraction": "固定人工规则匹配实际 analyze 输出。保留每次原始模型回应、结构化结果和未判定预测；完整语义precision需人工审查，提供透明上下界。",
+    "vector": "实际 bge-m3 1024维 + immutable Vectorize index；仅返回top10 ID，manifest完整scope映射及D1合法来源/角色授权回查。",
+    "privacy": "仅合成角色/原文；认证头和模型密钥不写入报告。"
+  },
+  "model": {
+    "mode": "gateway",
+    "provider": "workers-ai",
+    "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+    "auxiliaryModel": null
+  },
+  "reusedVectorFixture": true,
+  "vectorIndex": {
+    "embeddingModel": "@cf/baai/bge-m3",
+    "dimension": 1024,
+    "embeddingCalls": 0,
+    "elapsedMs": 1181,
+    "vectors": [
+      {
+        "vector_id": "49cb97b0697ef06ea2f2b0ae5fa330521dea6df680c31ab6bd865e0fbe6de996",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "2248a323b5662e6fd26a9895ba8627a5c6fb042b5d681ec56a2baa9b80fd75a1",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "2ba9d939813ad741a2c4cf3a4d3d3407f8529ce0b6bac7d48f2ae5d1fd6071f2",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "cd8112383e904899f9cc58cc0ee656475bdb2efe929a04cc882aab157e5a96ee",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "efe7a0aa76e30fb769527b3ddddaed130011d47ebba798721ac3713581b3c168",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "0f741f57e93295a6465a3cd7cd46077af47cf5182d238be6ba97c05fc90944e8",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "09933ab19e7de6a59da87eec0db2a977fb3a66037f09bead716e7914e9b154f9",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "16d4adffa76c242a9b16f819950cd343cca2b1942a35c82079c02a3bcf43078f",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "716f2d29d9eee4a7214804d79c93cefd6153e9a786bdc9b83fe4b9649a38104e",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "4074fc4c570bd8c589dc3337078ded08d31cd45cccd48d9f074a90d380cfa4ee",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "7ba853e245ee9c02eced828485ade671f5a58c8ca3a42be4a4737a3ef837793f",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "89c5380e1600e37ca907a0b5d8df9226ccc2b6fac8d2f786c05cc9ca27a03892",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bird",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "53d5dbed790d269a40dcf0e455bc636d7cd3238e09ed1deefca9e732560b211d",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "47e2a52ae34cc1d0365def3ccf2c39029556d256b093d9cb10de217b0b5ec49d",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "4b880f692a9fe023289669ab3d0da67e501eff0ca560e6d7ab1bd1259ed855b6",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "c8443b578cc9e0a4ba7379950231ac25d3e6d91a05a9296f54e137eac1cc5185",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "82973c7c8c8c03aad4933d2cdabfb0933873fb21243352444c924c96256a3857",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "7f1b3c79b056ba5d9851eb8e19e4667c1788e661eafbbac61decb9e943e4db5b",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "99237a0950c3bd94972e76a7506d1a07cc2d1ad92059fc5270de7d1d23cc38ba",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "e844a6fbf36de092ace563eef7aa2f3a25e12d8789dfa4da5803384e2b5db9b2",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "a14a5c56240ec2317e259cf984fb19f69bc49db9ad5f3d9f9ca2e10a6c8a07f7",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:inn",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "26a8ef0be2b90cc0b0ce0742dd397190d3ff816be04c95714779a4e3f487d1d9",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "19f7046759e458a1c16875214c7c6a28234433709ab9f4b9c413d603f8329804",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "e0299963c2f0fb7bfe030daa74dd65a57caea068e5d3b582ecaeb8d52cfceac8",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "a78b9ea9b953b2cda61c5b9ddd97dafd4e81c7575fab0434d4eed602d9fd79c0",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "c4bb6309e4757dbc26fe77ee227094c066d5c1fa1dffbb155686d03d5c08d174",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:medicine",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "8050f6322e45ab785d43cf703728f3ded3dab857ff6143cb4aafec54519d7a0c",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "8e3e8138107b900430a1b62011f0c2fa1f855baa834c832ea421eea2cf5ddb7a",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "27127ad94e4a580e322a50af9d9c788a29646b32adb3cf92955eb8f43e3231cd",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "77e9926e00fc3853c33b9a2b5d049fc63749fb9928eab5bf7c0d2669853dd76b",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+        "viewer": "dfde0a38-bc8b-4c9e-a140-96c7cd04c0e7"
+      },
+      {
+        "vector_id": "68a43ec7ddaa103106b30998a02fb4da5e97d571559a010b641c410ff56fb60d",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "4b83725d7d3f7d87cf3e085e3691b76fbe2d3823abb8b55290d0aea0920b4c06",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:secret",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "3c2f01afeb7645538e79be6326296393fecc1ebf354908e2dc3755837d859399",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "d1cde748ad8dfe048d85b29177e5c06bb86ee3d9b02da4164f399de31252b714",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "e31286dc562165e64dd247e403ecfbce77fa00138995da031b04d90f62e57540",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "8895f11f004b38baea8c4b63b4687ed0744ba2ccc85db702630ef368caa05b94",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "56d3bd76c5cfb3be2276d883d62673c6c36a7d0f018e67ff87818ed2a0fe1215",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "030af817cca015f386b1070b8109bbea9c144c8b8dd4b88ee954d8e57872e85e",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "a0f27967140681083c4f2a8b20a3d3738d10f23ddb890bc3e48bca547db29160",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "f52cfbc1d495a7715f0d2d5330b9353373e04242178821d7b330a7baac670e38",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "26ff3f8dfc85611670ca97e2b6193be0e6c897d9230bcb908c9dc3c0a1842c8a",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "d9449d1950f9e60c49756120e061f0f6cfb9852cfe0dd343d35e43a738f15f1c",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bird",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "61e09a648c3ebed363fce3049d49d07f9e12e551f101d4c0911b712497a35d4c",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "aaa05b1d172f6d698099e9c76b4364c6574126d5e1f71dd5e82aecd9d79d62ea",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "a3c08d6d1eeddc843b867b741e1b25f2a90d9bc481bb3c706b5e0e33af8faaaf",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "bb562a9bc65781e9ed2181b126ab3f7ab492c728fa87c77208f75a5222677abb",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "3c75d79768179995903e15f8f2fc0e762cb2c2e1fadd291de061daa3c60fe7b5",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "3cfd4a38f1234dc5407b074c76d5a83cfdbafeca31fb2f4ba5e217e9f3d63e0b",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "18f64ff444dfd8975347f48d62d89b08d7abca491025d811762e91d34b82a3e0",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "1cc5b4f68abffb7db1b047dbe561815e353242c1fcdbc8afd1d28243e0c4c215",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "3d05d34f542fd5200a3f9cd7acf34fe5227ddd4f308ca03c4a6fe491b1008542",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:inn",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "2004cbe4ecff08cdf3cc567403581cb5ca15f91802424e07ee47dc2a1467bd15",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "2552ac07aca934070a76f77818d3c1cded355d2744499768e3b140627946d667",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "c075ad23ff57f127072627bacb9e3071539b0bca07dd13889766f02f734aa148",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "de49f0ac86c1e2bfb0ae854729db1ac1bc7a2546798d709bd0c16c6675fca296",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "c00488f8a2cfcbde0f7f0016e2d79f03acbcb265cdff2bb0f2759c0c95da4996",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:medicine",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "d8652459a2c04b279edfed64a7c419a8a90bf06beaff7231522815bbf9abf4e8",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "ac60fde8647ad7e03a592a153f3a872feb888796d7ac67340cd072feb6a7c5ce",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "7af494f2b75bb1c4e742193bb6e7dbba1ae44ef3e621488e478d4de0e1a72b14",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "24f6955768acc4c183a4a40c35964a9f6e33011a4b29d8ea4319019cb5cbf4dc",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+        "viewer": "director"
+      },
+      {
+        "vector_id": "4cac9e9dc8057bda73461ca1b89f74a23399c34064d14355a352009558f10489",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:erase",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "0cea2fc91ea57eb02efc4165d10818f50eca9d61c12e44ade1afe753f803b6b4",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:7",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "d3e9c41a00b62b02eec598e0fdb493473633d3677aea9fa2cc09547b44ca3b25",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:6",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "85c059bbc48b79385bf753cd3169b8c7850faf77506a7585ec0f03d2887bd30a",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:5",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "271be1c0c92751742436f50c4b7c7187696941783282ecd941576ab9dacc5e96",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:4",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "1a43e909367275a00b95760fcd9d391045ed6eff18c19f2aee0a69a694761682",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:3",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "1a8da987cd5284cf0c284afad4ec652cbbfeb9f597f899a23f862665ec832d0a",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:2",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "dc51948ef87c680e7dd30351077a9dabdeb4a1013587d604a68c0513a647bf7c",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:1",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "4411f8cc1e786fff84edb437da176aefdb66d32cbd02577a7e1ca9d2fd2c18b8",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:distractor:0",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "9657b7459534c144ee2545f7bf08cb5ebf946fa33c76e4c34d22178eb6f648a8",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:tunnel",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "2728eb1c88c75245f0c00563f8751495a6f9ba8ba1061d218ec4a35fc7d2b87c",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bird",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "2c8302ab250d4f976dcb67c79aa0179b52715bc5a418a9c12817d84a673f2e00",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:seal",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "2f561773cc48f37574e7fe5aa80d4c7d6fcc682b968ab26f81ad0b7403fca934",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bridge",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "b4eafc7323e8f2b8eb4ef49295b0589e56941074d736bf4048a1fb3747745f59",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:moon",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "e86cd3834b3a275c917d48f3f838c54b1efe15f09dc49aa22b4da374f9c595d9",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:repair",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "0341c7a7621d5bb1c449fc99d64186ef202c935dacdabe6d286c48c19ac7badf",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:bell",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "a252d1dba5fdd9902f5a83d16b9dc94e8574c64cb467f0274e8bb7d8dfbfe8a8",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:garden",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "2e0c74d317b740b17df3135af88b573ba690fbd3edcf23ac7abc55ee3c066313",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:rope",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "22094c3bf4643511f07c41942814fbf4e13868f5178c5aa5f0b19621fb0529de",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:map",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "9b72b4652d7b12b139a3a70080d061c9f445066dad548b266d05e6317209ff6d",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:inn",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "d056af45aa55e951d146b11bd012f4486f560efde2122625253c5d96713ad382",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:teacher",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "39282471c8c7cce53089d6b292d44f315e200a2e21c4083da150222a0b42bdd9",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:key",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "4e89ed8124adda412ca9a1c4da471d5ea389bc35440389068c8d5f96cb391c1a",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:compass",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "0cb331aa9c0aa2dc08a145353ebdd3e59c6c62e002418f97dff03f4a22132c3f",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:gate",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "491a92c6ded723d69bbb8082e8bb0fd068047abcfde20dd5d091e7693b791017",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:medicine",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "fb22bd24204802620ac49dad80bbf7c35a968d22b1d529d8dfabf81e8176e8ab",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:ferry",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "2c803f917ec8c904e5d7cdad31dbe29e4138becf4e286ae8d70f81d280ae744b",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:archive",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "f70df62d4c478eba33859154d346b765f95f0d9a955c58badbbdb9763682c217",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:lighthouse",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      },
+      {
+        "vector_id": "843bdf24d811d9e814edfa1914cf84e00b65f319d9232a9d58a69e36b2a1e5d5",
+        "memory_id": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066:quality:permit",
+        "viewer": "ef6b7c3a-2ec9-4319-8895-3f087c61f6ca"
+      }
+    ]
+  },
+  "finishedAt": "2026-10-07T07:52:48.710Z"
+}

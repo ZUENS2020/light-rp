@@ -104,6 +104,8 @@ export async function main(args = process.argv.slice(2)) {
     measured: null,
     actualCostUSD: null,
     methodology: {
+      modelCalls:
+        'analyze发起complete的尝试次数，包括提供方拒绝或传输失败；不代表成功推理或可计费调用，另保留正文响应数与usage条目。',
       extraction:
         '固定人工规则匹配实际 analyze 输出。保留每次原始模型回应、结构化结果和未判定预测；完整语义precision需人工审查，提供透明上下界。',
       vector:
@@ -158,6 +160,15 @@ export async function main(args = process.argv.slice(2)) {
         process.stdout.write(
           `extraction ${fixture.id}: ${result.error ? 'validation-failed' : `TP ${result.score.counts.tp}, FP ${result.score.counts.fp}, unjudged ${result.score.counts.unjudged}`} (${report.modelCalls}/${maxModelCalls} model calls)\n`,
         );
+        if (
+          result.error &&
+          !result.rawModelAttempts.some(
+            (attempt: { phase: string }) => attempt.phase === 'response',
+          )
+        )
+          throw new Error(
+            '抽取未返回可验证正文，停止后续案例；已保存真实尝试、usage与安全错误代码',
+          );
       }
     if (vectors) {
       const state = await invoke('/vector/setup', { runId });
@@ -213,7 +224,9 @@ export async function main(args = process.argv.slice(2)) {
         );
       }
     }
-    report.status = 'completed';
+    report.status = report.extractionResults.some((result: any) => result.error)
+      ? 'completed-with-errors'
+      : 'completed';
   } catch (error) {
     report.status = 'failed';
     report.error = error instanceof Error ? error.message : '评测失败';
@@ -221,8 +234,57 @@ export async function main(args = process.argv.slice(2)) {
     process.exitCode = 1;
   } finally {
     report.finishedAt = new Date().toISOString();
+    report.returnedModelResponses = report.extractionResults.reduce(
+      (count: number, result: any) =>
+        count +
+        result.rawModelAttempts.filter((attempt: { phase: string }) => attempt.phase === 'response')
+          .length,
+      0,
+    );
+    report.reportedUsageEntries = report.usage.length;
+    const measuredExtractions = report.extractionResults.filter((result: any) =>
+        result.rawModelAttempts.some((attempt: { phase: string }) => attempt.phase === 'response'),
+      ),
+      transportFailures = report.extractionResults.filter(
+        (result: any) =>
+          result.error &&
+          result.usage.length === 0 &&
+          !result.rawModelAttempts.some(
+            (attempt: { phase: string }) => attempt.phase === 'response',
+          ),
+      );
+    if (
+      extract &&
+      report.extractionResults.length > 0 &&
+      transportFailures.length === report.extractionResults.length
+    )
+      report.status = 'transport-failed';
+    report.transportAudit = {
+      modelInvocationAttempts: report.modelCalls,
+      returnedModelResponses: report.returnedModelResponses,
+      reportedUsageEntries: report.reportedUsageEntries,
+      attemptedCases: report.extractionResults.length,
+      measuredCases: measuredExtractions.length,
+      noResponseCases: transportFailures.map((result: any) => result.id),
+      unusableResponseCases: report.extractionResults
+        .filter(
+          (result: any) =>
+            result.usage.length > 0 &&
+            !result.rawModelAttempts.some(
+              (attempt: { phase: string }) => attempt.phase === 'response',
+            ),
+        )
+        .map((result: any) => result.id),
+      note: '没有正文也没有usage的失败只计传输故障；有usage但缺少可验证正文的失败另列，均不计算语义precision/recall。逐项原始结果仍完整保留。',
+    };
+    const extractionMetrics =
+      extract && measuredExtractions.length > 0
+        ? aggregateExtractionQuality(measuredExtractions)
+        : null;
+    if (extractionMetrics && measuredExtractions.length !== cases)
+      extractionMetrics.factPrecision95Gate = null;
     report.measured = {
-      extraction: extract ? aggregateExtractionQuality(report.extractionResults) : null,
+      extraction: extractionMetrics,
       vector: vectors ? aggregateVectorQuality(report.vectorResults) : null,
     };
     await writeFile(output, JSON.stringify(report, null, 2), { mode: 0o600 });
@@ -232,6 +294,8 @@ export async function main(args = process.argv.slice(2)) {
         {
           status: report.status,
           modelCalls: report.modelCalls,
+          returnedModelResponses: report.returnedModelResponses,
+          reportedUsageEntries: report.reportedUsageEntries,
           embeddingCalls: report.embeddingCalls,
           measured: report.measured,
           output,

@@ -409,47 +409,52 @@ describe('real D1 branch replay with durable step and R2 boundaries', () => {
     expect(steps.names).not.toContain('rebuild observations');
     expect(later.events[1].seq).toBe(4);
   });
-  it('replays both event pages past 1000 sources and advances only the contiguous extraction cursor', async () => {
-    for (let round = 0; round < 501; round++)
-      await store.appendTurn({
-        branchId,
-        sessionId,
-        requestId: `page-${round}`,
-        messages: [
-          { role: 'user', text: `请求 ${round}` },
-          { role: 'assistant', text: `第 ${round} 次独立剧情结果。` },
-        ],
-      });
-    const child = await store.fork({ branchId, atSeq: 1002 }),
-      jobId = await rebuildJob(child.id),
-      spy = vi.spyOn(Store.prototype, 'getEvents'),
-      steps = await runMemory(jobId, child.id);
-    expect(steps.names.filter((name) => name.startsWith('replay '))).toHaveLength(501);
-    expect(
-      spy.mock.calls.some(
-        ([target, options]) =>
-          target === child.id && options?.limit === 1000 && options.afterSeq === 1000,
-      ),
-    ).toBe(true);
-    expect(
-      await store.one(
-        'SELECT count(*) AS n FROM memory_event_applications WHERE branch_id=? AND extractor_version=?',
-        child.id,
-        `v3-rebuild:${jobId}`,
-      ),
-    ).toEqual({ n: 1002 });
-    expect(
-      await store.one(
-        'SELECT count(*) AS n FROM memory_versions WHERE branch_id=? AND kind=?',
-        child.id,
-        'episode',
-      ),
-    ).toEqual({ n: 501 });
-    expect((await store.recall(child.id, '500 次')).cursor).toBe(1002);
-    expect(
-      JSON.stringify(await store.memories(child.id, { kinds: ['episode'], limit: 1000 })),
-    ).toContain('第 500 次独立剧情结果。');
-  }, 30000);
+  it(
+    'replays both event pages past 1000 sources and advances only the contiguous extraction cursor',
+    async () => {
+      for (let round = 0; round < 501; round++)
+        await store.appendTurn({
+          branchId,
+          sessionId,
+          requestId: `page-${round}`,
+          messages: [
+            { role: 'user', text: `请求 ${round}` },
+            { role: 'assistant', text: `第 ${round} 次独立剧情结果。` },
+          ],
+        });
+      const child = await store.fork({ branchId, atSeq: 1002 }),
+        jobId = await rebuildJob(child.id),
+        spy = vi.spyOn(Store.prototype, 'getEvents'),
+        steps = await runMemory(jobId, child.id);
+      expect(steps.names.filter((name) => name.startsWith('replay '))).toHaveLength(501);
+      expect(
+        spy.mock.calls.some(
+          ([target, options]) =>
+            target === child.id && options?.limit === 1000 && options.afterSeq === 1000,
+        ),
+      ).toBe(true);
+      expect(
+        await store.one(
+          'SELECT count(*) AS n FROM memory_event_applications WHERE branch_id=? AND extractor_version=?',
+          child.id,
+          `v3-rebuild:${jobId}`,
+        ),
+      ).toEqual({ n: 1002 });
+      expect(
+        await store.one(
+          'SELECT count(*) AS n FROM memory_versions WHERE branch_id=? AND kind=?',
+          child.id,
+          'episode',
+        ),
+      ).toEqual({ n: 501 });
+      expect((await store.recall(child.id, '500 次')).cursor).toBe(1002);
+      expect(
+        JSON.stringify(await store.memories(child.id, { kinds: ['episode'], limit: 1000 })),
+      ).toContain('第 500 次独立剧情结果。');
+      // Shared CI runners may need longer for 501 durable SQLite replay steps.
+    },
+    process.env.CI === 'true' ? 90000 : 30000,
+  );
   it('rebuilds a scrubbed current fact from surviving independent evidence despite its old extraction application', async () => {
     const secret = '删除来源自己的私密背景。',
       blue = '北门钥匙确实是蓝色。';

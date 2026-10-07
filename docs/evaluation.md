@@ -38,6 +38,25 @@ npm run eval:live -- --run --full --max-model-calls=513 --output /absolute/path/
 
 三方案使用同一有效原文及作用域：近期原文仅保留最近 16 条；摘要由真实模型压缩并验证来源；混合方案使用真实 Store 词法、关系和时间召回。注入的旧向量 ID 仅测后验权限过滤，不能算 Vectorize 语义召回质量。答案以归一化的中文 gold 片段严格匹配，报告同时记录未知回答、泄密、纠正、引用有效性及延迟；严格字符串通过率不能当成人工语义盲评。候选抽取仍来自人工 gold，因此抽取 precision/recall 继续为空。
 
-现有 [真实模型报告](live-evaluation-report.json) 的状态为 failed：2026-10-05 已创建 8 个故事、520 次提交和 128 题，连接探测成功，只有 2 道近期原文回答完成，摘要接口返回 422 后停止；摘要和混合方案没有完成题目。失败记录保留，不能据此宣布三方案评测通过。后续修复与重跑应检查完整报告 status、各策略题数和请求失败数。
+早期失败记录保存在 [10 月 5 日运行](live-evaluation-failed-2026-10-05.json) 和 [10 月 7 日运行](live-evaluation-failed-2026-10-07.json)，8 题试跑保存在 [小规模对照](live-evaluation-pilot-report.json)。完整 128 题对照仍在运行，最终必须检查报告 status、每个策略的已尝试题数、有效回答数和请求失败数。计分将请求失败纳入分母，不能只报告成功请求的正确率。
 
 另有 [Workers AI 云端 smoke 记录](cloud-smoke-workers-ai-report.json)：实际叙事提交、后台抽取/观察、Vectorize 索引及再次召回均完成。它验证托管链运行，不提供质量门槛或故障恢复成功率。
+
+## 真实抽取与向量质量
+
+```sh
+# 先检查零网络调用计划
+npm run eval:quality
+# 同一认证环境中，仅运行真实抽取，最多 60 次调用尝试
+npm run eval:quality -- --run --extraction-only --cases=20 --max-model-calls=60
+# 另运行实际 embedding 与 Vectorize；最多 80 次 embedding 调用
+npm run eval:quality -- --run --vector-only --max-embedding-calls=80 --output docs/vector-quality-report.json
+```
+
+抽取语料为 `tests/fixtures/extraction-quality.ts` 中 20 个固定中文案例，覆盖谎言、明确告知、内心、猜测、计划、未知结果、能力学习、反例、同名实体、作者设定及证据伪造。脚本运行产品中的实际 `analyze`，保留模型回应、修复尝试、精确来源检查和固定规则评分。未判定的额外预测不自动当成正确；报告分别给出 precision 下界、上界和已判定预测的条件 precision。完整 precision 未判定时为 null，不能用条件 precision 宣称达到 ≥95%。
+
+`modelCalls` 表示进入调用函数的尝试数，不保证提供方实际执行或收费。`returnedModelResponses` 与 usage 数另列；全无模型输出的传输失败不计算语义 precision/recall。失败响应、截断及修复记录保留，不通过修改 gold 来掩盖问题。[原始抽取基线](model-quality-baseline-report.json) 与 [复杂 schema 传输失败](model-quality-schema-failure-report.json) 均独立存档。
+
+Qwen 的简单摘要／问答 schema 已有成功记录，复杂抽取 schema 曾在提供方返回正文前失败，因此只对这一模型的复杂抽取显式选择提示约束协议，并继续服务端 JSON、来源、归属和规则校验，不把截断片段作为有效结果。其他请求保留原生 schema。协议选择依据本次实测；[Cloudflare JSON Mode 文档](https://developers.cloudflare.com/workers-ai/features/json-mode/) 也要求应用处理 schema 无法满足的错误。
+
+[真实向量报告](vector-quality-report.json) 使用 `@cf/baai/bge-m3` 的 1024 维 embedding 和实际 Vectorize：20 个正向问题的向量 Recall@10 与混合 Recall@10 均为 100%；3 个秘密／删除／跨分支反向用例全部阻止非法展开，禁止结果为 0。删除用例先确认旧向量实际可读，再删除来源并观察旧索引命中被 D1 拒绝。语料只有 20 个固定事实、8 个干扰条目和 2 个权限条目；该结果满足这组小规模用例的 ≥90% 门槛，不能外推大型语料质量。

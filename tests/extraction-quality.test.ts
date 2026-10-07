@@ -1,4 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { AppEnv, Env } from '../src/server/env';
 import { ApiError } from '../src/server/errors';
@@ -297,6 +300,65 @@ it('default CLI performs no requests; unobserved stale vectors remain unmeasured
     staleDeletedVectorObserved: false,
     vectorRecall90Gate: null,
   });
+});
+
+it.each([
+  { code: 'MODEL_HTTP', status: 'transport-failed', usage: [] },
+  { code: 'OUTPUT_TRUNCATED', status: 'failed', usage: [{ completion_tokens: 4096 }] },
+])('stops without a verifiable response, preserving $code as $status', async (failure) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lightrp-quality-cli-')),
+    output = join(directory, 'report.json'),
+    exitCode = process.exitCode;
+  vi.stubEnv('API_AUTH_HEADERS_FILE', '');
+  vi.stubEnv('LRP_BASE_URL', 'https://quality.test');
+  const fixture = extractionQualityCases[0]!,
+    fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/manifest'))
+        return Response.json({
+          extractionCases: extractionQualityCases,
+          vectorFacts: vectorQualityFacts,
+        });
+      if (url.endsWith('/settings')) return Response.json(defaults('gateway'));
+      if (url.endsWith('/extraction'))
+        return Response.json({
+          id: fixture.id,
+          error: { code: failure.code, status: 502 },
+          modelCalls: 1,
+          usage: failure.usage,
+          rawModelAttempts: [
+            { attempt: 1, phase: 'start' },
+            { attempt: 1, phase: 'invalid', errorCode: failure.code },
+          ],
+          score: scoreExtractionQuality(fixture, null),
+        });
+      throw new Error('Unexpected additional request');
+    });
+  vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  try {
+    await main(['--run', '--extraction-only', '--output', output]);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    const report = JSON.parse(await readFile(output, 'utf8'));
+    expect(report).toMatchObject({
+      status: failure.status,
+      modelCalls: 1,
+      returnedModelResponses: 0,
+      reportedUsageEntries: failure.usage.length,
+      measured: { extraction: null },
+      transportAudit: {
+        attemptedCases: 1,
+        measuredCases: 0,
+        noResponseCases: failure.usage.length ? [] : [fixture.id],
+        unusableResponseCases: failure.usage.length ? [fixture.id] : [],
+      },
+    });
+    expect(report.extractionResults).toHaveLength(1);
+    expect(report.error).toContain('未返回可验证正文');
+  } finally {
+    process.exitCode = exitCode;
+    vi.unstubAllEnvs();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 it('builds a complete real-SQLite isolated vector corpus and rejects a deliberately stale indexed source', async () => {

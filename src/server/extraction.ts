@@ -155,7 +155,7 @@ export function parseExtractionOutput(raw: unknown): Extraction {
 export interface AnalyzeOptions {
   onAttempt?: (result: {
     attempt: number;
-    phase: 'start' | 'response' | 'invalid';
+    phase: 'start' | 'response' | 'truncated' | 'invalid';
     rawOutput?: string;
     errorCode?: string;
   }) => void;
@@ -196,8 +196,22 @@ export async function analyze(
       const text = await complete(env, context.settings, messages, {
         json: true,
         jsonSchema: extractionJsonSchema,
+        schemaProtocol:
+          context.settings.mode === 'gateway' &&
+          context.settings.provider === 'workers-ai' &&
+          (context.settings.auxiliaryModel || context.settings.model) ===
+            '@cf/qwen/qwen3-30b-a3b-fp8'
+            ? 'prompt'
+            : 'provider',
         auxiliary: true,
         onUsage: (usage) => options.onUsage?.(usage, attempt + 1),
+        onTruncatedText: (visibleText) =>
+          options.onAttempt?.({
+            attempt: attempt + 1,
+            phase: 'truncated',
+            rawOutput: visibleText,
+            errorCode: 'OUTPUT_TRUNCATED',
+          }),
       });
       previousText = text;
       options.onAttempt?.({ attempt: attempt + 1, phase: 'response', rawOutput: text });
@@ -251,7 +265,7 @@ export function extractionMessages(
   };
   const system: ChatMessage = {
     role: 'system',
-    content: `你是剧情提交验证器。只返回符合JSON Schema的JSON，根据输入与正文抽取有原文证据的事实，禁止改写正文。以下是合法空结构示例，只用于说明格式，不能遗漏原文明确信息：${JSON.stringify(example)}
+    content: `你是剧情提交验证器。直接输出一个完整JSON对象，不输出解释、Markdown或思考。根据输入与正文抽取有原文证据的事实，禁止改写正文。输出键为scene、violations、facts、experiences、capabilities、procedureUses。以下是合法空结构示例，只说明字段结构，不是实际答案；有证据才填写条目，无证据的集合保持空数组：${JSON.stringify(example)}
 字段说明：facts.kind只取canon、belief、relation、episode之一；subject是实体ID或原文明示新实体名称，predicate是关系或属性名，value是实际值，text是原子事实，evidence是[{source: user或assistant, quote: 唯一匹配原文的完整原句}]，knownBy是确实见证或获知的角色ID数组；belief必须给observerId。
 validFrom/validTo可省略；仅当原文明确给出可归一化数值时使用JSON数字。未知时间省略，不输出空字符串、null、数字字符串或解释文字；scene.time保留原文时间标签，禁止编造日期。
 世界真相与对白严格分离：甲说“钥匙在仓库”只支持甲的声称/乙的信念，不能证明钥匙确实在仓库。角色误信用belief及observerId，普通言语事件可用episode。对白、猜测、计划和自称成功不成为canon或已成功经历。引用叙事中的一句对白仍然是角色陈述，不因source=assistant升级为世界事实。内心/秘密/未决推断默认导演可见；不能把在场名单当成全知授权。

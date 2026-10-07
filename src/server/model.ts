@@ -7,9 +7,67 @@ export type CompletionOptions = {
   onText?: (text: string) => Promise<void>;
   json?: boolean;
   jsonSchema?: Record<string, unknown>;
+  schemaProtocol?: 'provider' | 'prompt';
   auxiliary?: boolean;
   onUsage?: (usage: Record<string, unknown>) => void;
+  onTruncatedText?: (visibleText: string) => void;
 };
+const qwenWorkersModel = '@cf/qwen/qwen3-30b-a3b-fp8';
+/** Protocol selection is explicit per request. The measured complex extraction
+ * schema failed before output; simple Qwen schemas have succeeded, so the
+ * default always preserves native schema enforcement without auto fallback.
+ * https://developers.cloudflare.com/workers-ai/features/json-mode/ */
+function responseFormat(settings: ModelSettings, model: string, options: CompletionOptions) {
+  if (!options.json) return undefined;
+  if (options.schemaProtocol === 'prompt') {
+    console.info(
+      JSON.stringify({
+        event: 'model_response_format',
+        model,
+        requested: options.jsonSchema ? 'json_schema' : 'json_object',
+        effective: 'prompt_only',
+        reason:
+          model === qwenWorkersModel
+            ? 'MEASURED_EXTRACTION_FORMAT_FAILURE'
+            : 'EXPLICIT_PROMPT_SCHEMA_PROTOCOL',
+        validation: 'server_schema_required',
+      }),
+    );
+    return undefined;
+  }
+  if (!options.jsonSchema) return { type: 'json_object' };
+  return {
+    type: 'json_schema',
+    json_schema:
+      settings.mode === 'gateway' && settings.provider === 'workers-ai'
+        ? options.jsonSchema
+        : { name: 'lightrp_extraction', schema: options.jsonSchema },
+  };
+}
+/** Binding/HTTP transport rejections are not malformed model JSON and must not
+ * cause repeated calls with the same unsupported protocol or expose secrets. */
+async function transport<T>(call: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason ?? error;
+    if (error instanceof ApiError) throw error;
+    const failure =
+      error && typeof error === 'object'
+        ? (error as { status?: unknown; statusCode?: unknown })
+        : {};
+    const status = typeof failure.status === 'number' ? failure.status : failure.statusCode;
+    const http =
+      typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599
+        ? status
+        : null;
+    throw new ApiError(
+      http && http < 500 && http !== 429 ? 422 : 502,
+      `模型服务调用失败${http ? `（HTTP ${http}）` : ''}，请检查模型能力、响应格式与网关配置`,
+      'MODEL_HTTP',
+    );
+  }
+}
 export async function boundedText(response: Response, limit = 2_000_000): Promise<string> {
   if (!response.body) return '';
   const reader = response.body.getReader();
@@ -51,8 +109,6 @@ export async function readCompletion(
       choices?: { message?: { content?: string }; finish_reason?: string }[];
     };
     if (obj.usage) options.onUsage?.(obj.usage);
-    if (obj.choices?.[0]?.finish_reason === 'length')
-      throw new ApiError(422, '输出达到上限，草稿已保留，请调高输出预算', 'OUTPUT_TRUNCATED');
     const text =
       obj.choices?.[0]?.message?.content ??
       (options.jsonSchema && obj.response && typeof obj.response === 'object'
@@ -60,6 +116,12 @@ export async function readCompletion(
         : typeof obj.response === 'string'
           ? obj.response
           : undefined);
+    if (obj.choices?.[0]?.finish_reason === 'length') {
+      // Only the visible answer may enter explicit diagnostic callbacks. Never
+      // forward reasoning_content or accept a truncated JSON object as valid.
+      options.onTruncatedText?.(typeof text === 'string' ? text.slice(0, 8192) : '');
+      throw new ApiError(422, '输出达到上限，草稿已保留，请调高输出预算', 'OUTPUT_TRUNCATED');
+    }
     if (typeof text !== 'string' || !text.trim())
       throw new ApiError(502, '模型没有返回正文', 'MODEL_EMPTY');
     await options.onText?.(text);
@@ -94,8 +156,10 @@ export async function readCompletion(
         await options.onText?.(part);
       }
       if (choice.finish_reason) {
-        if (choice.finish_reason === 'length')
+        if (choice.finish_reason === 'length') {
+          options.onTruncatedText?.(result.slice(0, 8192));
           throw new ApiError(422, '输出达到上限，草稿已保留，请调高输出预算', 'OUTPUT_TRUNCATED');
+        }
         finished = true;
       }
     }
@@ -139,39 +203,30 @@ export async function complete(
   // toggle. Qwen's documented soft switch avoids spending the output budget on
   // a reasoning channel that cannot become narrative or structured evidence.
   const effectiveMessages =
-    settings.mode === 'gateway' &&
-    settings.provider === 'workers-ai' &&
-    model === '@cf/qwen/qwen3-30b-a3b-fp8'
+    settings.mode === 'gateway' && settings.provider === 'workers-ai' && model === qwenWorkersModel
       ? [...messages, { role: 'system' as const, content: '/no_think' }]
       : messages;
+  const format = responseFormat(settings, model, options);
   const payload = {
     model,
     messages: effectiveMessages,
     max_tokens: options.json ? Math.min(settings.maxOutput, 8192) : settings.maxOutput,
     stream: !!options.onText,
-    ...(options.json
-      ? {
-          response_format: options.jsonSchema
-            ? {
-                type: 'json_schema',
-                json_schema:
-                  settings.mode === 'gateway' && settings.provider === 'workers-ai'
-                    ? options.jsonSchema
-                    : { name: 'lightrp_extraction', schema: options.jsonSchema },
-              }
-            : { type: 'json_object' },
-        }
-      : {}),
+    ...(format ? { response_format: format } : {}),
   };
   let response: Response;
   if (settings.mode === 'gateway' && settings.provider === 'workers-ai') {
-    const result = await env.AI.run(
-      payload.model as keyof AiModels,
-      { ...payload, enable_thinking: false } as never,
-      {
-        signal: options.signal,
-        gateway: { id: env.AI_GATEWAY_ID, skipCache: true, collectLog: false },
-      },
+    const result = await transport(
+      () =>
+        env.AI.run(
+          payload.model as keyof AiModels,
+          { ...payload, enable_thinking: false } as never,
+          {
+            signal: options.signal,
+            gateway: { id: env.AI_GATEWAY_ID, skipCache: true, collectLog: false },
+          },
+        ),
+      options.signal,
     );
     response =
       result instanceof Response
@@ -180,22 +235,26 @@ export async function complete(
           ? new Response(result, { headers: { 'Content-Type': 'text/event-stream' } })
           : Response.json(result);
   } else if (settings.mode === 'gateway')
-    response = await env.AI.gateway(env.AI_GATEWAY_ID).run(
-      {
-        provider: settings.provider,
-        endpoint: 'chat/completions',
-        headers: { 'Content-Type': 'application/json' },
-        query: payload,
-      },
-      {
-        signal: options.signal,
-        gateway: {
-          id: env.AI_GATEWAY_ID,
-          skipCache: true,
-          collectLog: false,
-          retries: { maxAttempts: 1 },
-        },
-      },
+    response = await transport(
+      () =>
+        env.AI.gateway(env.AI_GATEWAY_ID).run(
+          {
+            provider: settings.provider,
+            endpoint: 'chat/completions',
+            headers: { 'Content-Type': 'application/json' },
+            query: payload,
+          },
+          {
+            signal: options.signal,
+            gateway: {
+              id: env.AI_GATEWAY_ID,
+              skipCache: true,
+              collectLog: false,
+              retries: { maxAttempts: 1 },
+            },
+          },
+        ),
+      options.signal,
     );
   else {
     const url = new URL(settings.baseUrl);
@@ -210,13 +269,20 @@ export async function complete(
       throw new ApiError(422, '模型地址必须是公开 HTTPS 地址', 'MODEL_URL');
     if (!env.MODEL_API_KEY)
       throw new ApiError(422, '请配置服务端 MODEL_API_KEY secret', 'MODEL_KEY_MISSING');
-    response = await fetch(`${url.toString().replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.MODEL_API_KEY}` },
-      body: JSON.stringify(payload),
-      signal: options.signal,
-      redirect: 'error',
-    });
+    response = await transport(
+      () =>
+        fetch(`${url.toString().replace(/\/$/, '')}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${env.MODEL_API_KEY}`,
+          },
+          body: JSON.stringify(payload),
+          signal: options.signal,
+          redirect: 'error',
+        }),
+      options.signal,
+    );
   }
   return readCompletion(response, options);
 }
