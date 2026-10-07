@@ -422,6 +422,44 @@ describe('strict unknown normalization and useful bounded repair', () => {
       'invalid_type',
     );
   });
+  it('repairs an unsupported boolean with a precise field path while preserving objective evidence', async () => {
+    const text = '窗外脚步还在。';
+    const unsupported = {
+      ...fact(text),
+      subject: '跑道',
+      predicate: '持续奔跑',
+      value: true,
+      text,
+    };
+    const supported = { ...unsupported, value: '脚步还在' };
+    const { run, env } = binding(result([unsupported]), result([supported]));
+    expect((await analyze(env, context(), input, text)).facts[0]!.value).toBe('脚步还在');
+    expect(run).toHaveBeenCalledTimes(2);
+    const repair = run.mock.calls[1]![1].messages as ChatMessage[];
+    const instruction = repair.filter((m) => m.role === 'user').at(-1)!.content;
+    expect(instruction).toContain('facts.0.value');
+    expect(instruction).toContain('普通叙事动作不能转换');
+    expect(instruction).not.toContain('角色对白或声称不能独自证明');
+    expect(repair[0]!.content).toContain('不可写canon.value=true');
+  });
+  it('reports all invalid fact fields together instead of repairing one hidden failure per call', async () => {
+    const text = '窗外脚步还在。';
+    const a = { ...fact(text), subject: '跑道', predicate: '持续奔跑', value: true, text };
+    const b = { ...a, predicate: '停止', value: false };
+    const { run, env } = binding(
+      result([a, b]),
+      result([
+        { ...a, value: '脚步还在' },
+        { ...b, kind: 'episode', value: '脚步还在' },
+      ]),
+    );
+    expect((await analyze(env, context(), input, text)).facts).toHaveLength(2);
+    expect(run).toHaveBeenCalledTimes(2);
+    const messages = run.mock.calls[1]![1].messages as ChatMessage[];
+    const instruction = messages.filter((m) => m.role === 'user').at(-1)!.content;
+    expect(instruction).toContain('facts.0.value');
+    expect(instruction).toContain('facts.1.value');
+  });
   it('reserves the actual raised JSON output budget before sending mandatory evidence', async () => {
     const { run, env } = binding(result());
     const c = context();

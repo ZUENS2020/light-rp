@@ -173,6 +173,65 @@ export function parseExtractionOutput(raw: unknown): Extraction {
   }
   return extractionSchema.parse(data);
 }
+class ExtractionFieldError extends Error {
+  constructor(
+    readonly path: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+type RepairIssue = { path: string; code: string; message: string };
+class ExtractionRepairError extends ApiError {
+  constructor(
+    error: unknown,
+    readonly issues: RepairIssue[],
+  ) {
+    super(
+      error instanceof ApiError ? error.status : 422,
+      error instanceof Error ? error.message : '结构化校验失败',
+      error instanceof ApiError ? error.code : 'VALIDATION',
+    );
+  }
+}
+function repairIssues(
+  extraction: Extraction,
+  input: TurnInput,
+  narration: string,
+  context: ContextSnapshot,
+): RepairIssue[] {
+  const empty = { ...extraction, facts: [], experiences: [], capabilities: [], procedureUses: [] };
+  const describe = (error: unknown, fallback: string): RepairIssue => ({
+    path: error instanceof ExtractionFieldError ? error.path : fallback,
+    code: error instanceof ApiError ? error.code : 'VALIDATION',
+    message: (error instanceof Error ? error.message : '结构化校验失败').slice(0, 500),
+  });
+  try {
+    validateExtraction(empty, input, narration, context);
+  } catch (error) {
+    return [describe(error, 'scene')];
+  }
+  const issues: RepairIssue[] = [];
+  for (const collection of ['facts', 'experiences', 'capabilities', 'procedureUses'] as const) {
+    for (const [index, candidate] of extraction[collection].entries()) {
+      try {
+        validateExtraction({ ...empty, [collection]: [candidate] }, input, narration, context);
+      } catch (error) {
+        const issue = describe(
+          error,
+          `${collection}.${index}${error instanceof ApiError && error.code === 'KNOWLEDGE_PROOF_INVALID' ? '.knowledge' : ''}`,
+        );
+        issue.path = issue.path.replace(
+          new RegExp(`^${collection}\\.0(?=\\.|$)`),
+          `${collection}.${index}`,
+        );
+        issues.push(issue);
+        if (issues.length >= 8) return issues;
+      }
+    }
+  }
+  return issues;
+}
 export interface AnalyzeOptions {
   signal?: AbortSignal;
   onDecision?: (audit: ExtractionDecisionAudit) => void;
@@ -243,7 +302,14 @@ export async function analyze(
       options.signal?.throwIfAborted();
       options.onAttempt?.({ attempt: attempt + 1, phase: 'response', rawOutput: text });
       const extraction = parseExtractionOutput(parseJson(text));
-      validateExtraction(extraction, input, narration, context);
+      try {
+        validateExtraction(extraction, input, narration, context);
+      } catch (error) {
+        // Fixed-rule violations stay terminal; diagnostics never alter proposals.
+        if (error instanceof ApiError && error.code === 'CANON_CONFLICT') throw error;
+        const issues = repairIssues(extraction, input, narration, context);
+        throw issues.length ? new ExtractionRepairError(error, issues) : error;
+      }
       extraction.decisionAudit = await validateExtractionDecisions(
         env,
         context,
@@ -310,7 +376,8 @@ export function extractionMessages(
   const system: ChatMessage = {
     role: 'system',
     content: `你是剧情提交验证器。直接输出一个完整JSON对象，不输出解释、Markdown或思考。根据输入与正文抽取有原文证据的事实，禁止改写正文。输出键为scene、violations、facts、experiences、capabilities、procedureUses。以下是合法空结构示例，只说明字段结构，不是实际答案；有证据才填写条目，无证据的集合保持空数组：${JSON.stringify(example)}
-字段说明：facts.kind只取canon、belief、relation、episode之一；subject是实体ID或原文明示新实体名称，predicate是关系或属性名，value是实际值，text是原子事实，evidence是[{source: user或assistant, quote: 唯一匹配原文的最小充分片段}]；belief必须给observerId。knownBy只作候选提示，不能授予角色知情。
+字段说明：facts.kind只取canon、belief、relation、episode之一；subject是实体ID或原文明示新实体名称，predicate是关系或属性名，value是实际值，text是原子事实，evidence是[{source: user或assistant, quote: 唯一匹配原文的最小充分片段}]；belief必须给observerId。knownBy只作候选提示，不能授予角色知情。scene.present只使用characters中已有角色ID，不用角色名、玩家或临时身份。
+canon.value为字符串/字符串数组时，每个值必须逐字出现在客观证据中，实体ID可由已登记别名支持。数字须有准确原文；布尔/null只接受author模式user原文的明确字面赋值，普通叙事动作或存在状态不能转换为true/false/null。例：原文“窗外脚步还在”，可用canon.value="脚步还在"并引用该原句，或记录episode；不可写canon.value=true。对白、计划及推断保留为episode或带observerId的belief，不升级为世界事实。
 facts、experiences、capabilities的knowledge均为[{actorId:角色ID,source:user或assistant,channel:witnessed或told或rumor或inferred,quote:逐字获知原句}]。必须有该角色实际听到、被告知、看到、得知或明确推断的原文，不能凭在场、做过动作或获得能力就授权。每名获知者的quote须覆盖此条目的所有evidence，而且每段被读取的内容均有该角色的获取依据；应拆分过宽事实/经历并缩小内容原句，禁止把其他人的内心、导演秘密、未被告知或未听到的片段一起引用。没有明确获知证据时knowledge=[]，保留导演记录。例：原文“甲告诉乙钥匙在仓库。丙没有听到。”可将evidence与乙的told获知quote都设为“甲告诉乙钥匙在仓库”，不能给丙授权，也不能引用整段为乙的证据。
 validFrom/validTo可省略；仅当原文明确给出可归一化数值时使用JSON数字。未知时间省略，不输出空字符串、null、数字字符串或解释文字；scene.time保留原文时间标签，禁止编造日期。
 世界真相与对白严格分离：甲说“钥匙在仓库”只支持甲的声称/乙的信念，不能证明钥匙确实在仓库。角色误信用belief及observerId，普通言语事件可用episode。对白、猜测、计划和自称成功不成为canon或已成功经历。引用叙事中的一句对白仍然是角色陈述，不因source=assistant升级为世界事实。内心/秘密/未决推断默认导演可见；不能把在场名单当成全知授权。
@@ -345,28 +412,30 @@ ${entityResolutionPrompt(context.entities ?? [])}`,
   const userMessage = (): ChatMessage => ({ role: 'user', content: JSON.stringify(payload) });
   if (repair) {
     const detail =
-      repair.error instanceof z.ZodError
-        ? repair.error.issues.slice(0, 8).map((issue) => ({
-            path: issue.path.join('.'),
-            code: issue.code,
-            message: issue.message.slice(0, 200),
-          }))
-        : [
-            {
-              path: '',
-              code: repair.error instanceof ApiError ? repair.error.code : 'VALIDATION',
-              message: (repair.error instanceof Error
-                ? repair.error.message
-                : 'JSON格式错误'
-              ).slice(0, 500),
-            },
-          ];
+      repair.error instanceof ExtractionRepairError
+        ? repair.error.issues
+        : repair.error instanceof z.ZodError
+          ? repair.error.issues.slice(0, 8).map((issue) => ({
+              path: issue.path.join('.'),
+              code: issue.code,
+              message: issue.message.slice(0, 200),
+            }))
+          : [
+              {
+                path: repair.error instanceof ExtractionFieldError ? repair.error.path : '',
+                code: repair.error instanceof ApiError ? repair.error.code : 'VALIDATION',
+                message: (repair.error instanceof Error
+                  ? repair.error.message
+                  : 'JSON格式错误'
+                ).slice(0, 500),
+              },
+            ];
     const instruction: ChatMessage = {
       role: 'user',
       content: `上一次结构化输出校验失败：${JSON.stringify(detail)}。只修复所列字段、合法角色ID和逐字证据引用。保持原叙事、规则冲突及真实结果，不得将未知改成功、陈述改世界事实，也不能更改输入/正文。返回完整JSON。`,
     };
     const available = budget - cost([system, userMessage(), instruction]) - 32;
-    const raw = boundedPromptText(repair.raw, Math.min(2048, available));
+    const raw = boundedPromptText(repair.raw, available);
     if (!raw)
       throw new ApiError(
         422,
@@ -429,7 +498,7 @@ export function validateExtraction(
     const at = source.indexOf(e.quote);
     if (at < 0 || source.indexOf(e.quote, at + 1) >= 0) throw new Error('证据原句不存在或不唯一');
   };
-  for (const f of extraction.facts) {
+  for (const [factIndex, f] of extraction.facts.entries()) {
     for (const reference of [
       f.subject,
       ...(f.kind === 'relation' && typeof f.value === 'string' ? [f.value] : []),
@@ -496,9 +565,19 @@ export function validateExtraction(
                   ),
               )
             : true;
+      if (!objective.length)
+        throw new ExtractionFieldError(
+          `facts.${factIndex}.kind`,
+          '角色对白或声称不能独自证明世界事实，应保留为有认知者的belief或陈述经历episode',
+        );
+      if (!scalarSupported)
+        throw new ExtractionFieldError(
+          `facts.${factIndex}.value`,
+          typeof f.value === 'boolean' || f.value === null
+            ? '世界事实的布尔或null值只接受作者在user原文明确赋值；普通叙事动作不能转换为true/false/null。将实际动作保留为episode，或用客观证据中逐字出现的字符串作为canon.value；不能修改原文或捏造作者确认'
+            : '世界事实的数值没有客观原文支持，须使用客观原文的准确数值或记录episode',
+        );
       if (
-        !objective.length ||
-        !scalarSupported ||
         values.some(
           (value) =>
             !aliasesFor(value).some((alias) =>
@@ -506,8 +585,9 @@ export function validateExtraction(
             ),
         )
       )
-        throw new Error(
-          '角色对白或声称不能独自证明世界事实；客观证据必须支持实际值，应保留为belief或episode',
+        throw new ExtractionFieldError(
+          `facts.${factIndex}.value`,
+          '世界事实的value须逐字出现在客观证据中或匹配已登记实体别名，不能用含义推断替代实际值；描述性动作可保留为episode',
         );
     }
     validateKnowledgeCandidate(f, { user: input.text, assistant: narration }, actors);
