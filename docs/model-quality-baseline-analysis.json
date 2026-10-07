@@ -1,0 +1,324 @@
+{
+  "runId": "31a64058-7d3e-4ff0-bb2b-e0e17dc59066",
+  "synthetic": true,
+  "method": "Replayed final raw response through unchanged schema/source validation; no gold edits",
+  "failed": [
+    {
+      "id": "q01-truth",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.0.validTo",
+          "code": "invalid_type"
+        }
+      ]
+    },
+    {
+      "id": "q03-inner",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.0.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validTo",
+          "code": "invalid_type"
+        }
+      ]
+    },
+    {
+      "id": "q04-told",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.0.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.2.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.2.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.3.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.3.validTo",
+          "code": "invalid_type"
+        }
+      ]
+    },
+    {
+      "id": "q05-guess",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.0.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.2.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.2.validTo",
+          "code": "invalid_type"
+        }
+      ]
+    },
+    {
+      "id": "q08-boast",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        }
+      ]
+    },
+    {
+      "id": "q09-no-tool",
+      "type": "source-or-role",
+      "reason": "角色输入不能独自证明世界事实"
+    },
+    {
+      "id": "q11-reading",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.0.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.2.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.2.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.3.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.3.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "experiences.0.failureCategory",
+          "code": "invalid_value"
+        }
+      ]
+    },
+    {
+      "id": "q12-correction",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.0.validTo",
+          "code": "invalid_type"
+        }
+      ]
+    },
+    {
+      "id": "q13-time",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.0.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validFrom",
+          "code": "invalid_type"
+        }
+      ]
+    },
+    {
+      "id": "q17-selective",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.0.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.2.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.2.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.3.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.3.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.4.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.4.validTo",
+          "code": "invalid_type"
+        }
+      ]
+    },
+    {
+      "id": "q18-stochastic",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.0.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validTo",
+          "code": "invalid_type"
+        }
+      ]
+    },
+    {
+      "id": "q20-confirmed",
+      "type": "schema",
+      "fields": [
+        {
+          "path": "facts.0.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.0.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.1.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.2.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.2.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.3.validFrom",
+          "code": "invalid_type"
+        },
+        {
+          "path": "facts.3.validTo",
+          "code": "invalid_type"
+        },
+        {
+          "path": "experiences.0.failureCategory",
+          "code": "invalid_value"
+        }
+      ]
+    }
+  ],
+  "latency": {
+    "scope": "Worker端每例analyze与校验流程，包括修复调用；不含客户端往返、R2保存及向量阶段",
+    "method": "nearest-rank",
+    "medianMs": 5294,
+    "p95Ms": 10846,
+    "maxMs": 11942
+  },
+  "usage": {
+    "prompt_tokens": 43347,
+    "completion_tokens": 15298,
+    "total_tokens": 58645,
+    "neurons": 666.6647810935974,
+    "currencyCost": null
+  }
+}

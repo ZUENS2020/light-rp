@@ -1,0 +1,199 @@
+{
+  "measuredAt": "2026-10-07T07:28:54.319148+00:00",
+  "environment": {
+    "scope": "local-only isolated persistence",
+    "wrangler": "4.147.0",
+    "miniflare": "5.20261001.0-alpha",
+    "workerd": "1.20261001.1",
+    "compatibilityDate": "2026-10-05",
+    "remoteModelCalls": 0
+  },
+  "references": [
+    "https://developers.cloudflare.com/workflows/build/rules-of-workflows/",
+    "https://developers.cloudflare.com/workers/observability/errors/"
+  ],
+  "minimalReproductions": [
+    {
+      "case": "one pure durable step returning JSON",
+      "id": "a490ad53-7da8-4910-bdf9-31094769c068",
+      "durableSteps": 1,
+      "hungLogObserved": false,
+      "workflowStatus": "complete"
+    },
+    {
+      "case": "one pure durable step returning void",
+      "id": "49ecc472-30e9-48d3-8e5d-988e16d57d7a",
+      "durableSteps": 1,
+      "hungLogObserved": false,
+      "workflowStatus": "complete"
+    },
+    {
+      "case": "two sequential pure durable steps returning JSON",
+      "id": "045af688-d172-420a-acd4-2ce812d09366",
+      "durableSteps": 2,
+      "hungLogObserved": true,
+      "workflowStatus": "complete",
+      "confirmedStepOutputs": 2
+    },
+    {
+      "case": "durable step creates child Workflow",
+      "id": "f5579340-6896-4fc8-85dd-431979403c42",
+      "hungLogObserved": true,
+      "workflowStatus": "complete",
+      "childWorkflowStatus": "complete"
+    },
+    {
+      "case": "three concurrent creates of one stable Workflow ID",
+      "id": "duplicate-6cc52c1b-43c5-424c-a19f-43309e3f491b",
+      "concurrentRequests": 3,
+      "httpStatuses": [200, 200, 200],
+      "hungLogObserved": true,
+      "workflowStatus": "complete"
+    },
+    {
+      "case": "one pure step created through Worker waitUntil",
+      "id": "55d87b1d-b658-45d9-b62f-198bf39b4af3",
+      "durableSteps": 1,
+      "hungLogObserved": true,
+      "workflowStatus": "complete"
+    },
+    {
+      "case": "NonRetryableError with durable failure persistence then rethrow",
+      "id": "4559616c-79d2-4ad9-9e4b-5250ee01652d",
+      "hungLogObserved": false,
+      "workflowStatus": "errored"
+    },
+    {
+      "case": "NonRetryableError with durable failure persistence then normal return",
+      "id": "e42087ba-c07d-4055-b3d8-ff77d73064ec",
+      "hungLogObserved": true,
+      "workflowStatus": "complete"
+    }
+  ],
+  "minimalBindings": {
+    "d1": false,
+    "r2": false,
+    "durableObjects": false,
+    "sse": false,
+    "ai": false,
+    "vectorize": false
+  },
+  "implementedBoundaries": [
+    "Binding I/O, including initial task loads and terminal persistence, occurs inside awaited durable steps.",
+    "Permanent version/source/authorization failures convert to NonRetryableError inside the durable callback.",
+    "Generation cancellation, replacement attempts and job retry identities fence late terminal writes.",
+    "Narration clears its interval and awaits the final in-flight cancellation check before leaving its durable step.",
+    "Workflow callbacks do not dispatch nested Workflows; API polling and Cron dispatch the durable outbox.",
+    "D1 atomically claims an outbox before createBatch; payload and owner fences protect newer retries.",
+    "Expired dispatch leases refund an unconfirmed attempt and retry the stable Workflow ID; failed D1 acknowledgement after successful creation retains the recoverable lease.",
+    "Rebuild uses a stable per-job extractor version and proposal idempotency namespace, while forgotten spans and tombstones remain authoritative.",
+    "The claim timestamp fences delayed dispatch responses from a replacement lease for the same payload."
+  ],
+  "regressions": {
+    "flowpeekRun": "rmuxsanc431611b24cd",
+    "command": "vitest run tests/workflow-terminal.test.ts tests/runtime-boundaries.test.ts tests/rebuild.test.ts tests/delete-rebuild.test.ts",
+    "testsPassed": 39,
+    "exitCode": 0,
+    "typecheck": {
+      "flowpeekRun": "rmuxsao9r887abae97f",
+      "command": "tsc --noEmit",
+      "exitCode": 0
+    }
+  },
+  "freshBrowserRuns": [
+    {
+      "scope": "isolated persist directory before dispatch lease",
+      "port": 8874,
+      "testsPassed": 8,
+      "testsTotal": 8,
+      "hungLogObserved": true,
+      "generationTasksCompleted": 4
+    },
+    {
+      "scope": "new isolated persist directory after dispatch lease",
+      "port": 8875,
+      "flowpeekRuntimeRun": "rmuxs3n3r9960e103e3",
+      "flowpeekBrowserRun": "rmuxs3sfx7e78d6d5a1",
+      "testsPassed": 7,
+      "testsTotal": 8,
+      "exitCode": 1,
+      "hungLogObserved": true,
+      "failedCase": "manual procedure status UI",
+      "failureCode": "STALE_WRITE",
+      "cause": "Background projection changed between reading branch and guarded procedure-status commit.",
+      "outboxCounts": [
+        {
+          "kind": "cleanup",
+          "status": "completed",
+          "count": 1
+        },
+        {
+          "kind": "generation",
+          "status": "completed",
+          "count": 4
+        },
+        {
+          "kind": "index",
+          "status": "completed",
+          "count": 5
+        },
+        {
+          "kind": "memory",
+          "status": "completed",
+          "count": 14
+        }
+      ],
+      "unfinishedOutboxCount": 0,
+      "generationTasksCompleted": 4
+    },
+    {
+      "scope": "new isolated persist directory after lease fence and guarded procedure-status retry",
+      "port": 8876,
+      "flowpeekRuntimeRun": "rmuxsbxtk5de0c00060",
+      "flowpeekBrowserRun": "rmuxscgdt5aad5cee66",
+      "testsPassed": 8,
+      "testsTotal": 8,
+      "exitCode": 0,
+      "elapsedSeconds": 10.8,
+      "hungLogObserved": true,
+      "outboxCounts": [
+        {
+          "kind": "cleanup",
+          "status": "completed",
+          "count": 1
+        },
+        {
+          "kind": "generation",
+          "status": "completed",
+          "count": 4
+        },
+        {
+          "kind": "index",
+          "status": "completed",
+          "count": 7
+        },
+        {
+          "kind": "memory",
+          "status": "completed",
+          "count": 13
+        },
+        {
+          "kind": "memory",
+          "status": "failed",
+          "count": 4
+        }
+      ],
+      "unfinishedOutboxCount": 0,
+      "generationTasksCompleted": 4
+    }
+  ],
+  "interpretation": {
+    "verified": "The local runtime hung log is reproducible using two pure durable steps without application storage, streaming, models or cancellation. Actual terminal database state is independently verified.",
+    "remainingLimitations": [
+      "Local multi-step Workflow hung logs remain on the measured Wrangler/Miniflare versions.",
+      "The prior fresh 7/8 procedure-status race result is preserved; the final fresh run passes all 8 cases after the guarded retry.",
+      "These local results do not establish production runtime behavior."
+    ]
+  },
+  "privacy": "Only synthetic instance IDs, statuses, counts, versions and test metadata are recorded; no conversation text, credentials, model output or gold answers."
+}

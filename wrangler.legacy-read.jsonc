@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lightrp-legacy-read-local",
+  "main": "scripts/legacy-reader.ts",
+  "account_id": "c02febc38a3cfcb6b91c8832a9724370",
+  "compatibility_date": "2026-10-05",
+  "workers_dev": false,
+  "preview_urls": false,
+  "r2_buckets": [{ "binding": "LEGACY", "bucket_name": "lightrp", "remote": true }],
+}

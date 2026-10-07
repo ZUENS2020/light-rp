@@ -1,0 +1,5 @@
+# Copy to .dev.vars for a loopback-only preview. Never deploy local authentication.
+AUTH_MODE="local"
+MODEL_MODE="local-demo"
+MODEL_API_KEY=""
+# For remote Access-protected preview, set Access audience/team in wrangler config.

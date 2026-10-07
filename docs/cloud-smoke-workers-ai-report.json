@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-10-05T10:14:46.434Z",
+  "mode": "real-gateway",
+  "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+  "results": [
+    {
+      "task": "fa1f4ba6-c127-474d-afea-d0f450f96c1b",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "branchId": "b0ba45bd-419b-4db9-9c40-153a8a6f1f7c",
+      "head": 2,
+      "events": [
+        {
+          "role": "correction",
+          "length": 55
+        },
+        {
+          "role": "assistant",
+          "length": 30
+        }
+      ],
+      "memories": 0
+    },
+    {
+      "jobs": [
+        {
+          "kind": "memory",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "kind": "generation",
+          "status": "completed",
+          "error": null
+        }
+      ]
+    },
+    {
+      "facts": [
+        {
+          "kind": "observation",
+          "text": "[c5e4f5ee-9cea-4bc5-8d4c-e680d36c1fa1] canon · 林舟看到蓝钥匙\n[4b050bd4-6205-42be-94d5-966069e2fa59] canon · 蓝钥匙置于仓库木箱上"
+        },
+        {
+          "kind": "observation",
+          "text": "[c5e4f5ee-9cea-4bc5-8d4c-e680d36c1fa1] canon · 林舟看到蓝钥匙\n[4b050bd4-6205-42be-94d5-966069e2fa59] canon · 蓝钥匙置于仓库木箱上"
+        },
+        {
+          "kind": "canon",
+          "text": "林舟看到蓝钥匙"
+        },
+        {
+          "kind": "canon",
+          "text": "蓝钥匙置于仓库木箱上"
+        }
+      ],
+      "recall": 4
+    }
+  ]
+}
