@@ -27,6 +27,7 @@ import {
 import { seedDemo } from './demo';
 import { syncPersonaCapabilities } from './persona';
 import { setPlayerProfile } from './player';
+import { retryGeneration } from './task-retry';
 import { dispatchOutbox, type TaskRow, taskDto } from './workflows';
 export { BranchRuntime } from './runtime';
 export { GenerationWorkflow, MemoryWorkflow } from './workflows';
@@ -430,46 +431,9 @@ app.post('/api/v3/tasks/:id/cancel', async (c) => {
 app.post('/api/v3/tasks/:id/retry', async (c) => {
   const s = store(c),
     t = await task(s, c.req.param('id'));
-  if (t.status !== 'failed')
-    throw new ApiError(409, '只有失败任务可以原地重试；取消的输入请重新提交');
-  const branch = await s.getBranch(t.branch_id);
-  if (branch.headSeq !== t.expected_head) throw new ApiError(409, '剧情已改变，请分叉或重新提交');
-  const attempt = t.attempt + 1,
-    at = now();
-  await s.batch([
-    s.guard('EXISTS(SELECT 1 FROM branches WHERE id=? AND owner_id=? AND head_seq=?)', [
-      t.branch_id,
-      s.ownerId,
-      t.expected_head,
-    ]),
-    s.guard(
-      "NOT EXISTS(SELECT 1 FROM tasks WHERE owner_id=? AND branch_id=? AND id<>? AND status IN ('queued','running','validating','committing'))",
-      [s.ownerId, t.branch_id, t.id],
-    ),
-    s.guard(
-      "EXISTS(SELECT 1 FROM tasks WHERE id=? AND owner_id=? AND status='failed' AND attempt=?)",
-      [t.id, s.ownerId, t.attempt],
-    ),
-    {
-      sql: "UPDATE tasks SET status='queued',attempt=?,error_json=NULL,context_json='{}',draft_text='',updated_at=? WHERE id=?",
-      params: [attempt, at, t.id],
-    },
-    {
-      sql: 'INSERT INTO outbox(id,owner_id,branch_id,kind,payload_json,created_at,updated_at)VALUES(?,?,?,?,?,?,?)',
-      params: [
-        `generation:${t.id}:${attempt}`,
-        s.ownerId,
-        t.branch_id,
-        'generation',
-        JSON.stringify({ taskId: t.id, ownerId: s.ownerId, attempt }),
-        at,
-        at,
-      ],
-    },
-    s.cleanupGuards(),
-  ]);
+  const result = await retryGeneration(s, t, await settings(s, c.env.MODEL_MODE));
   c.executionCtx.waitUntil(dispatchOutbox(c.env));
-  return c.json({ taskId: t.id, attempt }, 202);
+  return c.json(result, 202);
 });
 app.get('/api/v3/branches/:id/context', async (c) => {
   const s = store(c),

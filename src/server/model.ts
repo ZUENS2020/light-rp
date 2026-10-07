@@ -210,7 +210,7 @@ export async function complete(
   const payload = {
     model,
     messages: effectiveMessages,
-    max_tokens: options.json ? Math.min(settings.maxOutput, 8192) : settings.maxOutput,
+    max_tokens: settings.maxOutput,
     stream: !!options.onText,
     ...(format ? { response_format: format } : {}),
   };

@@ -147,6 +147,45 @@ describe('real API branch paging and generation retry fences', () => {
     expect((await request(`/branches/${branchId}?beforeSeq=NaN`)).status).toBe(400);
     expect((await request(`/branches/${branchId}?beforeSeq=0`)).status).toBe(400);
   });
+  it('freezes current saved output settings for a new retry without changing the original input', async () => {
+    await task('budget-retry', 'failed');
+    const input = JSON.stringify({ mode: 'roleplay', text: '继续这一回合' });
+    const previous = settingsSchema.parse({ mode: 'local-demo', maxOutput: 8192 });
+    const current = { ...previous, maxOutput: 16000 };
+    await s.run(
+      'UPDATE tasks SET input_json=?,config_json=? WHERE id=?',
+      input,
+      JSON.stringify(previous),
+      'budget-retry',
+    );
+    await s.run(
+      'INSERT INTO model_settings(owner_id,data_json,updated_at) VALUES(?,?,?)',
+      s.ownerId,
+      JSON.stringify(current),
+      now(),
+    );
+    const response = await request('/tasks/budget-retry/retry', 'POST');
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ taskId: 'budget-retry', attempt: 2 });
+    const saved = await s.one<{ config_json: string; input_json: string }>(
+      'SELECT config_json,input_json FROM tasks WHERE id=?',
+      'budget-retry',
+    );
+    expect(JSON.parse(saved!.config_json)).toEqual(current);
+    expect(saved!.input_json).toBe(input);
+    await s.run(
+      'UPDATE model_settings SET data_json=? WHERE owner_id=?',
+      JSON.stringify({ ...current, maxOutput: 18000 }),
+      s.ownerId,
+    );
+    expect(
+      (await s.one<{ config_json: string }>(
+        'SELECT config_json FROM tasks WHERE id=?',
+        'budget-retry',
+      ))!.config_json,
+    ).toBe(saved!.config_json);
+    expect((await s.getBranch(branchId)).headSeq).toBe(0);
+  });
   it('rejects retry of failed A while queued B exists without changing A or adding outbox', async () => {
     await task('failed-a', 'failed');
     await task('queued-b', 'queued');
@@ -180,6 +219,10 @@ describe('real API branch paging and generation retry fences', () => {
     const response = await request('/tasks/failed-a/retry', 'POST');
     expect(response.status).toBe(409);
     expect(injected).toBe(true);
+    expect(
+      (await s.one<{ config_json: string }>("SELECT config_json FROM tasks WHERE id='failed-a'"))!
+        .config_json,
+    ).toBe('{}');
     expect(await row('failed-a')).toEqual({ status: 'failed', attempt: 1 });
     expect(await generationOutbox()).toHaveLength(0);
     expect((await s.getBranch(branchId)).headSeq).toBe(1);

@@ -197,7 +197,10 @@ export default function Settings({
                 onChange={(event) => change({ contextWindow: Number(event.target.value) })}
               />
             </Field>
-            <Field label="最大正文输出（token）">
+            <Field
+              label="模型输出上限（token）"
+              hint="用于正文和结构化校验；思考模型的推理也可能占用额度。保存后重试使用新设置。"
+            >
               <input
                 type="number"
                 min="128"

@@ -28,6 +28,7 @@ describe('model responses and durable draft boundaries', () => {
       provider: 'commandcode',
       baseUrl: 'https://api.commandcode.ai/provider/v1/',
       model: 'deepseek/deepseek-v4.1-flash',
+      maxOutput: 16000,
     };
     const env = { MODEL_API_KEY: 'test-only', AI: { gateway } } as unknown as Env;
     expect(await complete(env, config, [{ role: 'user', content: '连接测试' }])).toBe('连接成功。');
@@ -45,8 +46,10 @@ describe('model responses and durable draft boundaries', () => {
     });
     expect(JSON.parse(String(fetcher.mock.calls[1]![1]!.body))).toMatchObject({
       model: config.model,
+      max_tokens: 16000,
       response_format: { type: 'json_schema', json_schema: { schema: { type: 'object' } } },
     });
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]!.body)).max_tokens).toBe(16000);
     expect(gateway).not.toHaveBeenCalled();
     fetcher.mockResolvedValue(
       new Response(null, { status: 307, headers: { Location: 'https://other.example' } }),

@@ -422,6 +422,18 @@ describe('strict unknown normalization and useful bounded repair', () => {
       'invalid_type',
     );
   });
+  it('reserves the actual raised JSON output budget before sending mandatory evidence', async () => {
+    const { run, env } = binding(result());
+    const c = context();
+    c.settings = { ...c.settings, maxOutput: 8192 };
+    await analyze(env, c, input, narration);
+    expect(run).toHaveBeenCalledTimes(1);
+    c.settings = { ...c.settings, maxOutput: 30000 };
+    await expect(analyze(env, c, input, narration)).rejects.toMatchObject({
+      code: 'EXTRACTION_BUDGET',
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
   it('normalizes explicit unknown fields on one model call and rejects mandatory budget overflow before any call', async () => {
     const { run, env } = binding(result([{ ...fact(), validFrom: '', validTo: null }]));
     const parsed = await analyze(env, context(), input, narration);
