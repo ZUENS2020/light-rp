@@ -14,6 +14,8 @@ import {
   extractionSchema,
   evidenceFor,
   memoryProposals,
+  knowledgeGrantsFor,
+  type AutomaticKnowledgeGrant,
   type Extraction,
 } from './extraction';
 import { settingsSchema, defaults } from './settings';
@@ -24,6 +26,7 @@ import { estimateAssetTokens } from '../shared/assets';
 import { indexMemories, cleanDeletedVectors, deleteMemoryVectors } from './vectors';
 import { listEntities, resolveExtractionEntities, assertEntityResolution } from './entities';
 import { syncPersonaCapabilities } from './persona';
+import type { ExtractionDecisionAudit } from './extraction-decisions';
 export interface TaskRow {
   id: string;
   owner_id: string;
@@ -64,6 +67,76 @@ const retry = {
   retries: { limit: 2, delay: '1 second' as const, backoff: 'exponential' as const },
   timeout: '10 minutes' as const,
 };
+/** One policy for normal projection, experiences/capabilities and branch replay.
+ * Acquisition claims are already source-validated; grant only their supported
+ * content spans. Historical artifacts with only knownBy yield an empty plan. */
+async function applyAutomaticKnowledge(
+  s: Store,
+  branchId: string,
+  grants: AutomaticKnowledgeGrant[],
+  scopes: string[],
+  options: { ownerEpoch?: number; sourceFence?: Parameters<Store['extract']>[1]['sourceFence'] },
+) {
+  const seen = new Set<string>();
+  for (const grant of grants.filter((grant) => scopes.includes(grant.path.split('.')[0]!))) {
+    const evidence = grant.evidence,
+      identity = `${grant.actorId}:${evidence.sourceId}:${evidence.start}:${evidence.end}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const authorRevoke = await s.one(
+      `SELECT 1 AS revoked FROM (
+       SELECT g.status,ROW_NUMBER() OVER(PARTITION BY g.span_id,g.character_id ORDER BY g.recorded_seq DESC,g.rowid DESC,l.depth ASC) AS rank
+       FROM knowledge_grants g JOIN source_spans p ON p.id=g.span_id
+       JOIN branch_lineage l ON l.ancestor_id=g.branch_id AND l.branch_id=?
+       WHERE g.owner_id=? AND g.character_id IN (?,'*') AND g.source_id=? AND g.channel='author'
+       AND p.start_offset<? AND p.end_offset>? AND p.source_version=? AND p.source_generation=?
+       AND (l.max_seq IS NULL OR g.recorded_seq<=l.max_seq)
+       AND (l.max_grant_rowid IS NULL OR g.rowid<=l.max_grant_rowid))
+       WHERE rank=1 AND status='revoke' LIMIT 1`,
+      branchId,
+      s.ownerId,
+      grant.actorId,
+      evidence.sourceId,
+      evidence.end,
+      evidence.start,
+      evidence.sourceVersion ?? 1,
+      evidence.sourceGeneration ?? 0,
+    );
+    if (authorRevoke) continue;
+    // An idempotent replay neither duplicates a grant nor reverses an explicit
+    // revocation of that same span. Source/owner fences are still checked on a
+    // new write by MemoryEngine in its transaction.
+    const existing = await s.one(
+      `SELECT g.status FROM knowledge_grants g JOIN source_spans p ON p.id=g.span_id
+       JOIN branch_lineage l ON l.ancestor_id=g.branch_id AND l.branch_id=?
+       WHERE g.owner_id=? AND g.character_id IN (?,'*') AND g.source_id=?
+       AND p.start_offset<=? AND p.end_offset>=? AND p.source_version=? AND p.source_generation=?
+       AND (l.max_seq IS NULL OR g.recorded_seq<=l.max_seq)
+       AND (l.max_grant_rowid IS NULL OR g.rowid<=l.max_grant_rowid)
+       ORDER BY g.recorded_seq DESC,g.rowid DESC,l.depth ASC LIMIT 1`,
+      branchId,
+      s.ownerId,
+      grant.actorId,
+      evidence.sourceId,
+      evidence.start,
+      evidence.end,
+      evidence.sourceVersion ?? 1,
+      evidence.sourceGeneration ?? 0,
+    );
+    if (existing) continue;
+    await s.grantKnowledge({
+      branchId,
+      characterId: grant.actorId,
+      sourceId: evidence.sourceId,
+      quote: evidence.quote,
+      start: evidence.start,
+      end: evidence.end,
+      channel: grant.channel,
+      automatic: true,
+      ...options,
+    });
+  }
+}
 /** Persist binding I/O and stop retrying invalid evidence, versions or credentials.
  * https://developers.cloudflare.com/workflows/build/rules-of-workflows/ */
 async function durable<T extends Rpc.Serializable<T>>(
@@ -522,8 +595,43 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env, JobParams> {
         const context = await artifact<ContextSnapshot>(this.env, snapshotKey),
           narration = await artifact<{ text: string }>(this.env, narrationKey),
           input = JSON.parse(task.input_json) as TurnInput;
+        let decisionAudit: ExtractionDecisionAudit | undefined;
+        const controller = new AbortController();
+        let heartbeat: Promise<void> | undefined;
+        const heartbeatTimer = setInterval(() => {
+          if (!heartbeat)
+            heartbeat = writeFence(s, task, context.ownerEpoch)
+              .catch((error) => controller.abort(error))
+              .finally(() => {
+                heartbeat = undefined;
+              });
+        }, 1000);
+        const saveAudit = async () => {
+          if (!decisionAudit) return;
+          const audit = decisionAudit;
+          decisionAudit = undefined;
+          const path = await put(
+            this.env,
+            key(s.ownerId, task.id, task.attempt, 'decision'),
+            audit,
+          );
+          try {
+            await writeFence(s, task, context.ownerEpoch);
+          } catch (error) {
+            await this.env.BUCKET.delete(path);
+            throw error;
+          }
+        };
         try {
-          const data = await analyze(this.env, context, input, narration.text);
+          const data = await analyze(this.env, context, input, narration.text, {
+            onDecision: (audit) => {
+              decisionAudit = audit;
+            },
+            signal: controller.signal,
+          });
+          controller.signal.throwIfAborted();
+          await writeFence(s, task, context.ownerEpoch);
+          await saveAudit();
           const path = await put(this.env, key(s.ownerId, task.id, task.attempt, 'extraction'), {
             input,
             extraction: data,
@@ -536,9 +644,16 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           }
           return path;
         } catch (error) {
+          // The callback only captures metadata. Both successful and rejected
+          // judgments are persisted by this awaited durable callback, with the
+          // same source/cancel fence and cache destruction as extraction data.
+          await saveAudit();
           if (error instanceof ApiError && error.status === 422)
             throw new NonRetryableError(error.message);
           throw error;
+        } finally {
+          clearInterval(heartbeatTimer);
+          await heartbeat;
         }
       });
       await durable(step, 'commit narrative', retry, async () => {
@@ -755,6 +870,7 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           });
           assertEntityResolution(resolved);
           extraction = resolved.extraction;
+          knowledgeGrantsFor(extraction, events, resolved.entities);
           const path = await put(this.env, `jobs/${row.id}/prepared.json`, {
             events,
             extraction,
@@ -778,22 +894,16 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
             through: number;
           }>(this.env, preparedKey);
           if (!data.extraction) return;
+          const grants = knowledgeGrantsFor(
+            data.extraction,
+            data.events,
+            await listEntities(s, p.branchId!, data.through),
+          );
           const proposals = memoryProposals(data.extraction, data.events, data.input.mode);
-          for (const proposal of proposals) {
-            for (const evidence of proposal.evidence)
-              for (const actor of proposal.knownBy ?? []) {
-                await s.grantKnowledge({
-                  branchId: p.branchId!,
-                  sourceId: evidence.sourceId,
-                  characterId: actor,
-                  quote: evidence.quote,
-                  channel: 'witnessed',
-                  ownerEpoch:
-                    typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
-                  sourceFence: payload.sourceFence as never,
-                });
-              }
-          }
+          await applyAutomaticKnowledge(s, p.branchId!, grants, ['facts'], {
+            ownerEpoch: typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
+            sourceFence: payload.sourceFence as never,
+          });
           await s.extract(p.branchId!, {
             eventIds: data.events.map((e) => e.id),
             proposals,
@@ -812,6 +922,15 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
             through: number;
           }>(this.env, preparedKey);
           if (!data.extraction) return;
+          const grants = knowledgeGrantsFor(
+            data.extraction,
+            data.events,
+            await listEntities(s, p.branchId!, data.through),
+          );
+          await applyAutomaticKnowledge(s, p.branchId!, grants, ['experiences', 'capabilities'], {
+            ownerEpoch: typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
+            sourceFence: payload.sourceFence as never,
+          });
           await syncPersonaCapabilities(
             s,
             p.branchId!,
@@ -820,16 +939,6 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           );
           for (const capability of data.extraction.capabilities) {
             const evidence = capability.evidence.map((e) => evidenceFor(e, data.events));
-            for (const proof of evidence)
-              await s.grantKnowledge({
-                branchId: p.branchId!,
-                characterId: capability.actorId,
-                sourceId: proof.sourceId,
-                quote: proof.quote,
-                channel: 'witnessed',
-                ownerEpoch: typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
-                sourceFence: payload.sourceFence as never,
-              });
             await s.addCapability({
               branchId: p.branchId!,
               actorId: capability.actorId,
@@ -842,16 +951,6 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           }
           for (const experience of data.extraction.experiences) {
             const evidence = experience.evidence.map((e) => evidenceFor(e, data.events));
-            for (const item of evidence)
-              await s.grantKnowledge({
-                branchId: p.branchId!,
-                sourceId: item.sourceId,
-                characterId: experience.actorId,
-                quote: item.quote,
-                channel: 'witnessed',
-                ownerEpoch: typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
-                sourceFence: payload.sourceFence as never,
-              });
             await s.addExperience({
               ...experience,
               branchId: p.branchId!,
@@ -1049,6 +1148,7 @@ async function replayBranch(
         });
         assertEntityResolution(resolution);
         extraction = resolution.extraction;
+        const grants = knowledgeGrantsFor(extraction, events, resolution.entities);
         const sourceFence = [];
         for (const event of events) {
           const source = await s.source(event.sourceId);
@@ -1064,18 +1164,16 @@ async function replayBranch(
             ...proposal,
             idempotencyKey: `rebuild:${await digest({ jobId, original: proposal.idempotencyKey })}`,
           });
-        for (const fact of proposals)
-          for (const proof of fact.evidence)
-            for (const characterId of fact.knownBy ?? [])
-              await s.grantKnowledge({
-                branchId,
-                characterId,
-                sourceId: proof.sourceId,
-                quote: proof.quote,
-                channel: 'witnessed',
-                ownerEpoch: epoch,
-                sourceFence,
-              });
+        await applyAutomaticKnowledge(
+          s,
+          branchId,
+          grants,
+          ['facts', 'experiences', 'capabilities'],
+          {
+            ownerEpoch: epoch,
+            sourceFence,
+          },
+        );
         await s.extract(branchId, {
           eventIds: events.map((e) => e.id),
           proposals,
@@ -1086,16 +1184,6 @@ async function replayBranch(
         });
         for (const c of extraction.capabilities) {
           const evidence = c.evidence.map((e) => evidenceFor(e, events));
-          for (const proof of evidence)
-            await s.grantKnowledge({
-              branchId,
-              characterId: c.actorId,
-              sourceId: proof.sourceId,
-              quote: proof.quote,
-              channel: 'witnessed',
-              ownerEpoch: epoch,
-              sourceFence,
-            });
           await s.addCapability({
             branchId,
             actorId: c.actorId,
@@ -1108,16 +1196,6 @@ async function replayBranch(
         }
         for (const exp of extraction.experiences) {
           const evidence = exp.evidence.map((e) => evidenceFor(e, events));
-          for (const proof of evidence)
-            await s.grantKnowledge({
-              branchId,
-              characterId: exp.actorId,
-              sourceId: proof.sourceId,
-              quote: proof.quote,
-              channel: 'witnessed',
-              ownerEpoch: epoch,
-              sourceFence,
-            });
           await s.addExperience({
             ...exp,
             branchId,

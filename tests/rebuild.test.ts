@@ -245,6 +245,9 @@ describe('real D1 branch replay with durable step and R2 boundaries', () => {
             name: '解锁',
             level: '初级',
             evidence: [{ source: 'assistant', quote: ability }],
+            knowledge: [
+              { actorId: characterId, source: 'assistant', channel: 'witnessed', quote: ability },
+            ],
           },
         ],
       }),
@@ -255,7 +258,15 @@ describe('real D1 branch replay with durable step and R2 boundaries', () => {
       one,
       extraction(one, {
         facts: [],
-        experiences: [{ ...method, evidence: [{ source: 'assistant', quote: one }] }],
+        experiences: [
+          {
+            ...method,
+            evidence: [{ source: 'assistant', quote: one }],
+            knowledge: [
+              { actorId: characterId, source: 'assistant', channel: 'witnessed', quote: one },
+            ],
+          },
+        ],
       }),
     );
     await runMemory(first.outboxId);
@@ -264,7 +275,15 @@ describe('real D1 branch replay with durable step and R2 boundaries', () => {
       two,
       extraction(two, {
         facts: [],
-        experiences: [{ ...method, evidence: [{ source: 'assistant', quote: two }] }],
+        experiences: [
+          {
+            ...method,
+            evidence: [{ source: 'assistant', quote: two }],
+            knowledge: [
+              { actorId: characterId, source: 'assistant', channel: 'witnessed', quote: two },
+            ],
+          },
+        ],
       }),
     );
     await runMemory(second.outboxId);

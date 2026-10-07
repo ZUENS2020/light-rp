@@ -1,3 +1,4 @@
+import type { ModelSettings } from '../shared/api';
 export type Data = Record<string, any>;
 export interface Asset {
   id: string;
@@ -54,16 +55,7 @@ export interface Snapshot {
   capabilities: Data[];
   jobs: Data[];
 }
-export interface Settings {
-  model: string;
-  auxiliaryModel: string;
-  baseUrl: string;
-  contextWindow: number;
-  maxOutput: number;
-  systemPrompt: string;
-  mode: 'gateway' | 'openai' | 'local-demo';
-  [key: string]: any;
-}
+export type Settings = ModelSettings;
 export interface Bootstrap {
   worlds: World[];
   stories: Story[];

@@ -1,0 +1,53 @@
+{
+  "format": "lightrp-real-model-quality",
+  "version": 1,
+  "startedAt": "2026-10-07T08:44:41.606Z",
+  "runId": "629395d0-8c98-4cb3-bb6a-5af30cbff163",
+  "status": "failed",
+  "plan": {
+    "synthetic": true,
+    "extractionCases": 1,
+    "positiveVectorQuestions": 0,
+    "negativeVectorQuestions": 0,
+    "worstModelCalls": 3,
+    "maxModelCalls": 3,
+    "maxEmbeddingCalls": 1,
+    "realModelRun": true,
+    "costUSD": null,
+    "note": "默认零网络计划。--run 才调用真实 analyze 和 bge-m3/Vectorize；gold 固定、未判定不计作正确，episode 不计原子事实。"
+  },
+  "manifest": null,
+  "extractionResults": [],
+  "vectorReadiness": [],
+  "vectorResults": [],
+  "modelCalls": 0,
+  "embeddingCalls": 0,
+  "usage": [],
+  "measured": {
+    "extraction": null,
+    "vector": null
+  },
+  "actualCostUSD": null,
+  "methodology": {
+    "modelCalls": "analyze发起complete的尝试次数，包括提供方拒绝或传输失败；不代表成功推理或可计费调用，另保留正文响应数与usage条目。",
+    "extraction": "固定人工规则匹配实际 analyze 输出。保留每次原始模型回应、结构化结果和未判定预测；完整语义precision需人工审查，提供透明上下界。",
+    "vector": "实际 bge-m3 1024维 + immutable Vectorize index；仅返回top10 ID，manifest完整scope映射及D1合法来源/角色授权回查。",
+    "privacy": "仅合成角色/原文；认证头和模型密钥不写入报告。"
+  },
+  "error": "fetch failed",
+  "finishedAt": "2026-10-07T08:44:46.646Z",
+  "returnedModelResponses": 0,
+  "reportedUsageEntries": 0,
+  "truncatedModelResponses": 0,
+  "transportAudit": {
+    "modelInvocationAttempts": 0,
+    "returnedModelResponses": 0,
+    "truncatedModelResponses": 0,
+    "reportedUsageEntries": 0,
+    "attemptedCases": 0,
+    "measuredCases": 0,
+    "noResponseCases": [],
+    "unusableResponseCases": [],
+    "note": "没有正文也没有usage的失败只计传输故障；有usage但缺少可验证正文的失败另列，均不计算语义precision/recall。逐项原始结果仍完整保留。"
+  }
+}

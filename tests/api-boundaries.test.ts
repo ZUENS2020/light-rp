@@ -62,6 +62,48 @@ async function task(id: string, status: string) {
 const row = (id: string) =>
   s.one<{ status: string; attempt: number }>('SELECT status,attempt FROM tasks WHERE id=?', id);
 const generationOutbox = () => s.all("SELECT id FROM outbox WHERE kind='generation'");
+describe('decision audit has the same task owner boundary', () => {
+  it('reads only this owner and current attempt metadata, with private response caching', async () => {
+    await task('decision-task', 'failed');
+    const audit = {
+      model: '@cf/cloudflare/clef',
+      status: 'rejected',
+      requestAttempts: 1,
+      candidates: [
+        {
+          path: 'facts.0',
+          answers: { supported: { probability: 0.04, verdict: 'rejected' } },
+          usage: { input_tokens: 100, output_tokens: 0 },
+          latencyMs: 200,
+        },
+      ],
+    };
+    const get = vi.fn(async () => ({ json: async () => audit }));
+    const response = await app.request(
+      'http://localhost/api/v3/tasks/decision-task/decision',
+      {},
+      { ...env(), BUCKET: { get } } as unknown as Env,
+      context(),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(audit);
+    expect(get).toHaveBeenCalledWith('tasks/local-owner/decision-task/1/decision.json');
+    expect(response.headers.get('cache-control')).toContain('no-store');
+  });
+  it('rejects another owner task before reading R2, including guessed task IDs', async () => {
+    await task('private-other', 'failed');
+    await s.run('UPDATE tasks SET owner_id=? WHERE id=?', 'other-owner', 'private-other');
+    const get = vi.fn();
+    const response = await app.request(
+      'http://localhost/api/v3/tasks/private-other/decision',
+      {},
+      { ...env(), BUCKET: { get } } as unknown as Env,
+      context(),
+    );
+    expect(response.status).toBe(404);
+    expect(get).not.toHaveBeenCalled();
+  });
+});
 describe('real API branch paging and generation retry fences', () => {
   it('returns the latest event beyond 2000 and pages backward to the original first event', async () => {
     for (let n = 0; n < 101; n++)

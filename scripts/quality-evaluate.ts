@@ -4,12 +4,35 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { apiBase, loadAuthHeaders, evaluationResponseError } from './live-evaluate';
 import { settingsSchema } from '../src/server/settings';
-import { aggregateExtractionQuality } from '../src/server/extraction-evaluation';
+import {
+  aggregateExtractionQuality,
+  scoreExtractionQuality,
+  summarizeExtractionAttempts,
+} from '../src/server/extraction-evaluation';
+import { auditExtractionKnowledge } from './quality-knowledge-audit';
 import { extractionQualityCases, vectorQualityFacts } from '../tests/fixtures/extraction-quality';
 const rate = (n: number, d: number) => (d ? n / d : null);
 export function aggregateVectorQuality(rows: any[]) {
-  const positives = rows.filter((row) => vectorQualityFacts.some((f) => f.id === row.id)),
+  const fixedIds = new Set(vectorQualityFacts.map((f) => f.id)),
+    auxiliaryIds = new Set(['secret-owner', 'secret-other', 'erased', 'cross-branch']),
+    positives = rows.filter((row) => fixedIds.has(row.id)),
     negative = rows.filter((row) => ['secret-other', 'erased', 'cross-branch'].includes(row.id));
+  const counts = new Map<string, number>();
+  for (const row of positives) counts.set(row.id, (counts.get(row.id) ?? 0) + 1);
+  const duplicatePositiveIds = [...counts].filter(([, count]) => count > 1).map(([id]) => id),
+    missingPositiveIds = [...fixedIds].filter((id) => !counts.has(id)),
+    unknownIds = rows
+      .filter((row) => !fixedIds.has(row.id) && !auxiliaryIds.has(row.id))
+      .map((row) => row.id),
+    positiveErrors = positives
+      .filter((row) => row.error || typeof row.hitAt10 !== 'boolean')
+      .map((row) => row.id),
+    fullFixedCorpus =
+      positives.length === fixedIds.size &&
+      !duplicatePositiveIds.length &&
+      !missingPositiveIds.length &&
+      !unknownIds.length &&
+      !positiveErrors.length;
   return {
     positiveQuestions: positives.length,
     recallAt10: rate(positives.filter((row) => row.hitAt10 === true).length, positives.length),
@@ -18,15 +41,19 @@ export function aggregateVectorQuality(rows: any[]) {
       positives.length,
     ),
     negativeCases: negative.length,
-    negativeMeasured: negative.filter((row) => row.negativePass !== null).length,
+    duplicatePositiveIds,
+    missingPositiveIds,
+    unknownIds,
+    positiveErrors,
+    fullFixedCorpus,
+    negativeMeasured: negative.filter((row) => typeof row.negativePass === 'boolean').length,
     negativePassed: negative.filter((row) => row.negativePass === true).length,
-    forbiddenResults: rows.reduce((n, row) => n + row.forbiddenResults.length, 0),
+    forbiddenResults: rows.reduce((n, row) => n + (row.forbiddenResults?.length ?? 0), 0),
     staleDeletedVectorObserved:
       rows.find((row) => row.id === 'erased')?.staleDeletedVectorObserved ?? null,
-    vectorRecall90Gate:
-      positives.length === 20
-        ? positives.filter((row) => row.hitAt10 === true).length / 20 >= 0.9
-        : null,
+    vectorRecall90Gate: fullFixedCorpus
+      ? positives.filter((row) => row.hitAt10 === true).length / 20 >= 0.9
+      : null,
     actualVectorize: true,
     embeddingModel: '@cf/baai/bge-m3',
     dimension: 1024,
@@ -108,6 +135,8 @@ export async function main(args = process.argv.slice(2)) {
         'analyze发起complete的尝试次数，包括提供方拒绝或传输失败；不代表成功推理或可计费调用，另保留正文响应数与usage条目。',
       extraction:
         '固定人工规则匹配实际 analyze 输出。保留每次原始模型回应、结构化结果和未判定预测；完整语义precision需人工审查，提供透明上下界。',
+      extractionCondition:
+        '每个请求冻结decisionModel为空，只测辅助抽取模型和服务端来源/知情proof；不写回owner设置。决策模型另有独立实测，不能据此报告联合质量。',
       vector:
         '实际 bge-m3 1024维 + immutable Vectorize index；仅返回top10 ID，manifest完整scope映射及D1合法来源/角色授权回查。',
       privacy: '仅合成角色/原文；认证头和模型密钥不写入报告。',
@@ -135,24 +164,47 @@ export async function main(args = process.argv.slice(2)) {
       signal: AbortSignal.timeout(30000),
     });
     if (!settingsResponse.ok) throw await evaluationResponseError('/settings', settingsResponse);
-    const settings = settingsSchema.parse(await settingsResponse.json());
+    // Judge quality is measured separately; this run compares the actual extractor
+    // and server evidence checks without adding unbudgeted decision-model calls.
+    const settings = {
+      ...settingsSchema.parse(await settingsResponse.json()),
+      decisionModel: '' as const,
+    };
     if (settings.mode === 'local-demo') throw new Error('当前服务配置为演示模式，不能实测');
     report.model = {
       mode: settings.mode,
       provider: settings.provider,
       model: settings.model,
       auxiliaryModel: settings.auxiliaryModel || null,
+      decisionModel: settings.decisionModel || null,
     };
     if (extract)
       for (const fixture of extractionQualityCases.slice(0, cases)) {
         const remaining = maxModelCalls - report.modelCalls;
         if (remaining < 3) throw new Error('剩余模型预算不足以覆盖声明的修复尝试');
-        const result = await invoke('/extraction', {
-          runId,
-          caseId: fixture.id,
-          settings,
-          maxModelCalls: 3,
-        });
+        let result;
+        try {
+          result = await invoke('/extraction', {
+            runId,
+            caseId: fixture.id,
+            settings,
+            maxModelCalls: 3,
+          });
+        } catch (error) {
+          const failed = {
+            id: fixture.id,
+            error: { message: error instanceof Error ? error.message : '抽取请求失败' },
+            extraction: null,
+            rawModelAttempts: [],
+            usage: [],
+            modelCalls: null,
+            modelInvocationCountUnknown: true,
+            score: scoreExtractionQuality(fixture, null),
+          };
+          report.extractionResults.push(failed);
+          await record({ type: 'extraction', ...failed });
+          throw error;
+        }
         report.extractionResults.push(result);
         report.modelCalls += result.modelCalls;
         report.usage.push(...result.usage);
@@ -215,7 +267,19 @@ export async function main(args = process.argv.slice(2)) {
         'cross-branch',
       ]) {
         embedReservation(1);
-        const result = await invoke('/vector/query', { runId, id });
+        let result;
+        try {
+          result = await invoke('/vector/query', { runId, id });
+        } catch (error) {
+          const failed = {
+            id,
+            error: error instanceof Error ? error.message : '向量请求失败',
+            forbiddenResults: [],
+          };
+          report.vectorResults.push(failed);
+          await record({ type: 'vector-query', ...failed });
+          throw error;
+        }
         report.embeddingCalls += result.embeddingCalls;
         report.vectorResults.push(result);
         await record({ type: 'vector-query', ...result });
@@ -242,6 +306,14 @@ export async function main(args = process.argv.slice(2)) {
       0,
     );
     report.reportedUsageEntries = report.usage.length;
+    report.truncatedModelResponses = report.extractionResults.reduce(
+      (count: number, result: any) =>
+        count +
+        result.rawModelAttempts.filter(
+          (attempt: { phase: string }) => attempt.phase === 'truncated',
+        ).length,
+      0,
+    );
     const measuredExtractions = report.extractionResults.filter((result: any) =>
         result.rawModelAttempts.some((attempt: { phase: string }) => attempt.phase === 'response'),
       ),
@@ -249,8 +321,8 @@ export async function main(args = process.argv.slice(2)) {
         (result: any) =>
           result.error &&
           result.usage.length === 0 &&
-          !result.rawModelAttempts.some(
-            (attempt: { phase: string }) => attempt.phase === 'response',
+          !result.rawModelAttempts.some((attempt: { phase: string }) =>
+            ['response', 'truncated'].includes(attempt.phase),
           ),
       );
     if (
@@ -261,7 +333,11 @@ export async function main(args = process.argv.slice(2)) {
       report.status = 'transport-failed';
     report.transportAudit = {
       modelInvocationAttempts: report.modelCalls,
+      unknownModelInvocationCases: report.extractionResults
+        .filter((result: any) => result.modelInvocationCountUnknown)
+        .map((result: any) => result.id),
       returnedModelResponses: report.returnedModelResponses,
+      truncatedModelResponses: report.truncatedModelResponses,
       reportedUsageEntries: report.reportedUsageEntries,
       attemptedCases: report.extractionResults.length,
       measuredCases: measuredExtractions.length,
@@ -269,7 +345,10 @@ export async function main(args = process.argv.slice(2)) {
       unusableResponseCases: report.extractionResults
         .filter(
           (result: any) =>
-            result.usage.length > 0 &&
+            (result.usage.length > 0 ||
+              result.rawModelAttempts.some(
+                (attempt: { phase: string }) => attempt.phase === 'truncated',
+              )) &&
             !result.rawModelAttempts.some(
               (attempt: { phase: string }) => attempt.phase === 'response',
             ),
@@ -285,6 +364,8 @@ export async function main(args = process.argv.slice(2)) {
       extractionMetrics.factPrecision95Gate = null;
     report.measured = {
       extraction: extractionMetrics,
+      extractionEndToEnd: extract ? summarizeExtractionAttempts(report.extractionResults) : null,
+      knowledgeSafety: extract ? auditExtractionKnowledge(report.extractionResults) : null,
       vector: vectors ? aggregateVectorQuality(report.vectorResults) : null,
     };
     await writeFile(output, JSON.stringify(report, null, 2), { mode: 0o600 });
@@ -295,6 +376,7 @@ export async function main(args = process.argv.slice(2)) {
           status: report.status,
           modelCalls: report.modelCalls,
           returnedModelResponses: report.returnedModelResponses,
+          truncatedModelResponses: report.truncatedModelResponses,
           reportedUsageEntries: report.reportedUsageEntries,
           embeddingCalls: report.embeddingCalls,
           measured: report.measured,

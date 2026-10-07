@@ -173,9 +173,89 @@ export function scoreExtractionQuality(
     excludedEpisodes: extraction?.facts.filter((f) => f.kind === 'episode').length ?? 0,
   };
 }
-export function aggregateExtractionQuality(
-  rows: { score: ReturnType<typeof scoreExtractionQuality>; error?: unknown }[],
-) {
+export interface ExtractionQualityResult {
+  id?: string;
+  score: ReturnType<typeof scoreExtractionQuality>;
+  error?: unknown;
+  extraction?: Extraction | null;
+  rawModelAttempts?: { phase: string }[];
+}
+function acceptedExtraction(row: ExtractionQualityResult) {
+  return (
+    !row.error &&
+    !!row.extraction &&
+    Array.isArray(row.extraction.facts) &&
+    Array.isArray(row.extraction.experiences) &&
+    Array.isArray(row.extraction.capabilities) &&
+    !!row.rawModelAttempts?.some((attempt) => attempt.phase === 'response')
+  );
+}
+function extractionCaseCoverage(rows: ExtractionQualityResult[]) {
+  const expectedIds = new Set(extractionQualityCases.map((fixture) => fixture.id)),
+    counts = new Map<string, number>();
+  for (const row of rows) if (row.id) counts.set(row.id, (counts.get(row.id) ?? 0) + 1);
+  const duplicateCaseIds = [...counts].filter(([, count]) => count > 1).map(([id]) => id),
+    unknownCaseIds = [...counts.keys()].filter((id) => !expectedIds.has(id)),
+    missingCaseIds = [...expectedIds].filter((id) => !counts.has(id)),
+    unidentifiedCases = rows.filter((row) => !row.id).length;
+  return {
+    uniqueCases: [...counts.keys()].filter((id) => expectedIds.has(id)).length,
+    duplicateCaseIds,
+    unknownCaseIds,
+    missingCaseIds,
+    unidentifiedCases,
+    fullFixedCorpus:
+      rows.length === expectedIds.size &&
+      !duplicateCaseIds.length &&
+      !unknownCaseIds.length &&
+      !missingCaseIds.length &&
+      !unidentifiedCases,
+  };
+}
+/** Failure and missing accepted output contribute zero recall, using the fixed gold denominator. */
+export function summarizeExtractionAttempts(rows: ExtractionQualityResult[]) {
+  const coverage = extractionCaseCoverage(rows),
+    auditable =
+      !coverage.duplicateCaseIds.length &&
+      !coverage.unknownCaseIds.length &&
+      !coverage.unidentifiedCases;
+  const metrics = (category?: 'fact' | 'experience' | 'capability') => {
+    let expected = 0,
+      matched = 0;
+    for (const row of rows) {
+      const fixture = extractionQualityCases.find((value) => value.id === row.id);
+      if (!fixture) continue;
+      expected += fixture.expected.filter((gold) => !category || gold.category === category).length;
+      if (acceptedExtraction(row))
+        matched +=
+          row.score[
+            category === 'fact'
+              ? 'facts'
+              : category === 'experience'
+                ? 'experiences'
+                : category === 'capability'
+                  ? 'capabilities'
+                  : 'counts'
+          ].matched;
+    }
+    return { expected, matched, recall: auditable && expected ? matched / expected : null };
+  };
+  return {
+    attemptedCases: rows.length,
+    acceptedCases: rows.filter(acceptedExtraction).length,
+    failedCases: rows.filter((row) => row.error).length,
+    unavailableCases: rows.filter((row) => !acceptedExtraction(row)).length,
+    ...coverage,
+    all: metrics(),
+    facts: metrics('fact'),
+    experiences: metrics('experience'),
+    capabilities: metrics('capability'),
+    denominator:
+      '所有已尝试的唯一固定案例的 gold 项数；请求失败、截断和未接受完整输出计零命中。未尝试案例不计入；重复或未知案例使 recall 为 null。',
+    corpusScope: '20 条固定中文合成案例；本统计不代表外部语料或生产总体质量。',
+  };
+}
+export function aggregateExtractionQuality(rows: ExtractionQualityResult[]) {
   const metrics = (key: 'counts' | 'facts' | 'experiences' | 'capabilities') => {
     const sum = rows.reduce(
         (acc, row) => {
@@ -198,22 +278,31 @@ export function aggregateExtractionQuality(
       recall: sum.expected ? sum.matched / sum.expected : null,
     };
   };
-  const facts = metrics('facts');
+  const facts = metrics('facts'),
+    coverage = extractionCaseCoverage(rows),
+    gateEligible = coverage.fullFixedCorpus && rows.every(acceptedExtraction);
   return {
     cases: rows.length,
     failedCases: rows.filter((row) => row.error).length,
+    acceptedCases: rows.filter(acceptedExtraction).length,
+    coverage,
     all: metrics('counts'),
     facts,
     experiences: metrics('experiences'),
     capabilities: metrics('capabilities'),
     calendarViolations: rows.filter((row) => row.score.calendarViolation).length,
-    factPrecision95Gate:
-      facts.precision != null
+    factPrecision95Gate: !gateEligible
+      ? null
+      : facts.precision != null
         ? facts.precision >= 0.95
         : facts.precisionUpperBound != null && facts.precisionUpperBound < 0.95
           ? false
           : null,
     semanticHumanReviewComplete: false,
+    denominator: '仅调用方传入的可审查模型回应；recall 是条件统计。端到端召回须另用全部尝试计算。',
+    gateRequirement:
+      '完整 20 个固定唯一案例、无失败、均接受完整输出；未判定预测保留 precision 上下界。',
+    corpusScope: '20 条固定中文合成案例；本统计不代表外部语料或生产总体质量。',
   };
 }
 export async function qualityOwner(originOwner: string, runId: string) {
@@ -462,6 +551,7 @@ qualityEvaluationRouter.post('/extraction', async (c) => {
       provider: config.provider,
       model: config.model,
       auxiliaryModel: config.auxiliaryModel || null,
+      decisionModel: config.decisionModel || null,
     },
     actualCostUSD: null,
   };

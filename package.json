@@ -15,6 +15,7 @@
     "check": "npm run typecheck && npm test && npm run build && npm run eval",
     "eval:live": "tsx scripts/live-evaluate.ts",
     "eval:quality": "tsx scripts/quality-evaluate.ts",
+    "eval:decisions": "tsx scripts/decision-evaluate.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

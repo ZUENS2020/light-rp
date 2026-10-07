@@ -42,6 +42,32 @@ export default function Settings({
       setProbing(false);
     }
   }
+  async function testDecision() {
+    setProbing(true);
+    setProbe(null);
+    setError('');
+    try {
+      const result = await api('/settings/decision-probe', {
+        method: 'POST',
+        body: JSON.stringify({ model: form.decisionModel }),
+      });
+      const answer = result.answers?.supported;
+      const verdict =
+        answer?.verdict === 'supported'
+          ? '支持'
+          : answer?.verdict === 'rejected'
+            ? '不支持'
+            : '待确认';
+      setProbe({
+        message: `${result.message} 候选判断：${verdict}，支持概率 ${Math.round((answer?.probability ?? 0) * 1000) / 10}%。`,
+        demo: false,
+      });
+    } catch (error) {
+      setError(errorText(error));
+    } finally {
+      setProbing(false);
+    }
+  }
   async function save(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -125,6 +151,32 @@ export default function Settings({
               />
             </Field>
           </div>
+          <Field
+            label="记忆判断模型"
+            hint="额外检查原文是否支持候选记忆；无法确认时保留草稿，供修复或重试。"
+          >
+            <select
+              value={form.decisionModel || ''}
+              onChange={(event) =>
+                change({ decisionModel: event.target.value as Config['decisionModel'] })
+              }
+            >
+              <option value="">关闭额外模型检查</option>
+              <option value="@cf/cloudflare/clef">Clef · 记忆证据检查</option>
+              <option value="@cf/cloudflare/clef-flash">Clef-flash · 较快，需审慎使用</option>
+            </select>
+          </Field>
+          <p className="config-note">
+            判断模型通过 Workers AI
+            调用，每条候选分别核验，会增加调用次数。知情授权、分支隔离和来源删除始终由数据库校验。
+          </p>
+          <button
+            type="button"
+            onClick={() => void testDecision()}
+            disabled={!form.decisionModel || busy || probing || form.mode === 'local-demo'}
+          >
+            {probing ? '正在测试…' : '测试判断模型'}
+          </button>
         </div>
         <div className="settings-section">
           <h2>上下文</h2>

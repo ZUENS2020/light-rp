@@ -6,7 +6,11 @@ import { pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { evaluationStories, goldQuestions } from '../tests/fixtures/evaluation-stories';
 import { settingsSchema, type ModelSettings } from '../src/server/settings';
-import type { EvaluationSummary, EvaluationStrategy } from '../src/server/evaluation';
+import {
+  evaluationCase,
+  type EvaluationSummary,
+  type EvaluationStrategy,
+} from '../src/server/evaluation';
 
 const safeErrorCodes = new Set([
   'REQUEST_FAILED',
@@ -27,6 +31,12 @@ const safeErrorCodes = new Set([
   'MODEL_STREAM_INCOMPLETE',
   'MODEL_URL',
   'MODEL_KEY_MISSING',
+  'DECISION_UNAVAILABLE',
+  'DECISION_RESPONSE',
+  'DECISION_BUDGET',
+  'EXTRACTION_DECISION_REJECTED',
+  'EXTRACTION_DECISION_UNCERTAIN',
+  'KNOWLEDGE_PROOF_INVALID',
   'EVALUATION_BUDGET',
   'EVALUATION_REAL_MODEL_REQUIRED',
   'EVALUATION_SETUP',
@@ -160,6 +170,21 @@ const percentile = (values: number[], fraction: number) => {
 };
 const rate = (numerator: number, denominator: number) =>
   denominator ? numerator / denominator : null;
+// Read the same immutable authored gold as the scorer, including failed HTTP requests whose
+// result rows contain only an ID. This does not rerun answers or modify their scoring rules.
+const liveGold = new Map(
+  goldQuestions.map((question) => {
+    const fixture = evaluationStories.find((story) => story.id === question.storyId)!;
+    return [
+      question.id,
+      evaluationCase(
+        { fixture, branchId: '', forkId: '', ids: {}, events: new Map() },
+        question.caseId,
+        '',
+      ),
+    ];
+  }),
+);
 export function summarizeLiveResults(results: any[]) {
   return Object.fromEntries(
     (['recent', 'summary', 'hybrid'] as EvaluationStrategy[]).map((strategy) => {
@@ -167,7 +192,26 @@ export function summarizeLiveResults(results: any[]) {
         rows = attempted.filter((row) => !row.error),
         positives = rows.filter((row) => row.retrieval.expected.length && strategy === 'hybrid');
       const leakageCases = rows.filter((row) => row.metrics.leakage != null),
-        corrections = rows.filter((row) => row.metrics.correctionPass != null);
+        corrections = rows.filter((row) => row.metrics.correctionPass != null),
+        identifiable = attempted.every((row) => liveGold.has(row.id)),
+        positiveAttempts = attempted.filter((row) => liveGold.get(row.id)?.expected.length),
+        correctionAttempts = attempted.filter(
+          (row) => liveGold.get(row.id)?.gold.caseId === 'early-fact',
+        ),
+        disclosureAttempts = attempted.filter((row) => {
+          const gold = liveGold.get(row.id);
+          return (
+            gold &&
+            ['knowledge-isolation', 'span-isolation'].includes(gold.gold.category) &&
+            gold.forbiddenClaims.length > 0
+          );
+        }),
+        disclosureRows = disclosureAttempts.filter(
+          (row) => !row.error && row.metrics.leakage != null,
+        ),
+        authorizedCitationRows = rows.filter(
+          (row) => row.schemaValid && Array.isArray(row.metrics.citationViolations),
+        );
       const testedClaims = rows.flatMap((row) => [
           ...row.metrics.matchedClaims,
           ...row.metrics.missingClaims,
@@ -190,6 +234,15 @@ export function summarizeLiveResults(results: any[]) {
             attempted.length,
           ),
           exactFactMatchRate: rate(matched.length, testedClaims.length),
+          endToEndExactFactMatchRate: identifiable
+            ? rate(
+                matched.length,
+                attempted.reduce(
+                  (sum, row) => sum + liveGold.get(row.id)!.expectedClaims.length,
+                  0,
+                ),
+              )
+            : null,
           leakageRate: rate(
             leakageCases.filter((row) => row.metrics.leakage).length,
             leakageCases.length,
@@ -198,12 +251,47 @@ export function summarizeLiveResults(results: any[]) {
             corrections.filter((row) => row.metrics.correctionPass).length,
             corrections.length,
           ),
+          endToEndCorrectionPassRate: identifiable
+            ? rate(
+                corrections.filter(
+                  (row) =>
+                    row.schemaValid &&
+                    row.metrics.correctionPass &&
+                    row.metrics.citationViolations?.length === 0,
+                ).length,
+                correctionAttempts.length,
+              )
+            : null,
+          disclosureRate: rate(
+            disclosureRows.filter((row) => row.metrics.leakage).length,
+            disclosureRows.length,
+          ),
+          disclosureMeasuredQuestions: disclosureRows.length,
+          disclosureUnavailableQuestions: disclosureAttempts.length - disclosureRows.length,
+          endToEndDisclosureSafeResponseRate: rate(
+            disclosureRows.filter(
+              (row) =>
+                row.schemaValid &&
+                row.metrics.unknownPass === true &&
+                !row.metrics.leakage &&
+                row.metrics.citationViolations?.length === 0,
+            ).length,
+            disclosureAttempts.length,
+          ),
           recallAt5:
             strategy === 'hybrid'
               ? rate(
                   positives.filter((row) => row.retrieval.rank != null && row.retrieval.rank <= 5)
                     .length,
                   positives.length,
+                )
+              : null,
+          endToEndRecallAt5:
+            strategy === 'hybrid' && identifiable
+              ? rate(
+                  positives.filter((row) => row.retrieval.rank != null && row.retrieval.rank <= 5)
+                    .length,
+                  positiveAttempts.length,
                 )
               : null,
           mrrAt5:
@@ -220,6 +308,20 @@ export function summarizeLiveResults(results: any[]) {
                   positives.length,
                 )
               : null,
+          endToEndMrrAt5:
+            strategy === 'hybrid' && identifiable
+              ? rate(
+                  positives.reduce(
+                    (sum, row) =>
+                      sum +
+                      (row.retrieval.rank != null && row.retrieval.rank <= 5
+                        ? 1 / row.retrieval.rank
+                        : 0),
+                    0,
+                  ),
+                  positiveAttempts.length,
+                )
+              : null,
           forbiddenMemoryResults:
             strategy === 'hybrid'
               ? rows.reduce((sum, row) => sum + row.retrieval.forbiddenResults.length, 0)
@@ -227,6 +329,37 @@ export function summarizeLiveResults(results: any[]) {
           citationViolations: rows.length
             ? rows.reduce((sum, row) => sum + (row.metrics.citationViolations?.length ?? 0), 0)
             : null,
+          citationAuthorizationValidResponseRate: rate(
+            authorizedCitationRows.filter((row) => row.metrics.citationViolations.length === 0)
+              .length,
+            authorizedCitationRows.length,
+          ),
+          citationEvidenceSupport: null,
+          metricScope: {
+            strictGoldClaimPassRate:
+              '所有请求尝试；请求失败、JSON 无效、unknown 不符或引用越权均不通过。',
+            exactFactMatchRate: '有返回结果的预期 gold 片段；请求失败不在该条件统计分母。',
+            recallAt5: 'hybrid 有返回结果的正例问题；请求失败不在该条件统计分母。',
+            endToEnd: '所有请求尝试的固定 gold；失败计零命中。无法识别题目 ID 时为 null。',
+            leakageRate:
+              '有返回结果且存在 forbiddenClaims 的问题；包含旧值、分支/删除/知情隔离片段，不能统称角色秘密泄露。',
+            disclosureRate:
+              '仅 knowledge-isolation 和 span-isolation 中存在禁止知情片段的有返回结果问题；失败单列为 unavailable。',
+            correctionPassRate: '有返回结果的纠正问题；请求失败不在该条件统计分母。',
+            citationAuthorization: '仅验证引用 ID 属于已授权证据集合；不验证引用对事实的语义支持。',
+          },
+          denominators: {
+            returnedGoldClaims: testedClaims.length,
+            attemptedGoldClaims: identifiable
+              ? attempted.reduce((sum, row) => sum + liveGold.get(row.id)!.expectedClaims.length, 0)
+              : null,
+            returnedPositiveQuestions: positives.length,
+            attemptedPositiveQuestions: identifiable ? positiveAttempts.length : null,
+            returnedForbiddenClaimQuestions: leakageCases.length,
+            returnedCorrectionQuestions: corrections.length,
+            attemptedCorrectionQuestions: identifiable ? correctionAttempts.length : null,
+            attemptedDisclosureQuestions: disclosureAttempts.length,
+          },
           latencyMs: {
             p50: percentile(
               rows.map((row) => row.requestElapsedMs),

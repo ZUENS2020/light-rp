@@ -42,11 +42,13 @@ export const turnSchema = z.object({
   }),
   focusCharacterIds: z.array(z.string()).max(50).optional(),
 });
+export const decisionModels = ['@cf/cloudflare/clef', '@cf/cloudflare/clef-flash'] as const;
 export const settingsSchema = z
   .object({
     provider: z.string().min(1).default('workers-ai'),
     model: z.string().min(1).default('@cf/qwen/qwen3-30b-a3b-fp8'),
     auxiliaryModel: z.string().default(''),
+    decisionModel: z.enum(['', ...decisionModels]).default(''),
     baseUrl: z.string().default('https://api.openai.com/v1'),
     contextWindow: z.number().int().min(4096).max(2000000).default(32768),
     maxOutput: z.number().int().min(128).max(65536).default(4096),

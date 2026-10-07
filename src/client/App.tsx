@@ -499,6 +499,13 @@ export default function App() {
           ? `/branches/${branchId}/context?query=${encodeURIComponent(query)}&observer=${encodeURIComponent(observer)}`
           : `/tasks/${selected}/context`,
       );
+      if (selected !== 'preview' && result.settings?.decisionModel) {
+        try {
+          result.decisionAudit = await api(`/tasks/${selected}/decision`);
+        } catch (error) {
+          result.decisionAuditError = errorText(error);
+        }
+      }
       setContext(result);
       setContextTaskId(selected);
     } catch (error) {

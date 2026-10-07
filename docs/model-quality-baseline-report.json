@@ -6385,6 +6385,15 @@
     "extraction": {
       "cases": 20,
       "failedCases": 12,
+      "acceptedCases": 8,
+      "coverage": {
+        "uniqueCases": 20,
+        "duplicateCaseIds": [],
+        "unknownCaseIds": [],
+        "missingCaseIds": [],
+        "unidentifiedCases": 0,
+        "fullFixedCorpus": true
+      },
       "all": {
         "tp": 10,
         "fp": 0,
@@ -6435,13 +6444,42 @@
       },
       "calendarViolations": 0,
       "factPrecision95Gate": null,
-      "semanticHumanReviewComplete": false
+      "semanticHumanReviewComplete": false,
+      "denominator": "仅调用方传入的可审查模型回应；recall 是条件统计。端到端召回须另用全部尝试计算。",
+      "gateRequirement": "完整 20 个固定唯一案例、无失败、均接受完整输出；未判定预测保留 precision 上下界。",
+      "corpusScope": "20 条固定中文合成案例；本统计不代表外部语料或生产总体质量。"
     },
     "vector": {
       "positiveQuestions": 0,
       "recallAt10": null,
       "hybridRecallAt10": null,
       "negativeCases": 0,
+      "duplicatePositiveIds": [],
+      "missingPositiveIds": [
+        "permit",
+        "lighthouse",
+        "archive",
+        "ferry",
+        "medicine",
+        "gate",
+        "compass",
+        "key",
+        "teacher",
+        "inn",
+        "map",
+        "rope",
+        "garden",
+        "bell",
+        "repair",
+        "moon",
+        "bridge",
+        "seal",
+        "bird",
+        "tunnel"
+      ],
+      "unknownIds": [],
+      "positiveErrors": [],
+      "fullFixedCorpus": false,
       "negativeMeasured": 0,
       "negativePassed": 0,
       "forbiddenResults": 0,
@@ -6451,6 +6489,90 @@
       "embeddingModel": "@cf/baai/bge-m3",
       "dimension": 1024,
       "corpusScope": "20固定原子事实+8干扰情节+2权限/删除案例；这不是大型外部benchmark"
+    },
+    "extractionEndToEnd": {
+      "attemptedCases": 20,
+      "acceptedCases": 8,
+      "failedCases": 12,
+      "unavailableCases": 12,
+      "uniqueCases": 20,
+      "duplicateCaseIds": [],
+      "unknownCaseIds": [],
+      "missingCaseIds": [],
+      "unidentifiedCases": 0,
+      "fullFixedCorpus": true,
+      "all": {
+        "expected": 19,
+        "matched": 9,
+        "recall": 0.47368421052631576
+      },
+      "facts": {
+        "expected": 13,
+        "matched": 6,
+        "recall": 0.46153846153846156
+      },
+      "experiences": {
+        "expected": 5,
+        "matched": 2,
+        "recall": 0.4
+      },
+      "capabilities": {
+        "expected": 1,
+        "matched": 1,
+        "recall": 1
+      },
+      "denominator": "所有已尝试的唯一固定案例的 gold 项数；请求失败、截断和未接受完整输出计零命中。未尝试案例不计入；重复或未知案例使 recall 为 null。",
+      "corpusScope": "20 条固定中文合成案例；本统计不代表外部语料或生产总体质量。"
+    },
+    "knowledgeSafety": {
+      "ruleSource": "固定原文中明确的未听到/不知道；独立安全审计，不改原子事实 gold。",
+      "kinds": "所有 facts kinds（包括 episode），以及未来带 knownBy 的 experience/capability；不因原子 precision 排除 episode。",
+      "evaluatedCaseIds": [
+        "q01-truth",
+        "q02-lie",
+        "q03-inner",
+        "q04-told",
+        "q05-guess",
+        "q17-selective"
+      ],
+      "acceptedCandidates": 5,
+      "rawAttemptCandidates": 56,
+      "acceptedViolationCount": 0,
+      "rawAttemptViolationCount": 1,
+      "acceptedViolations": [],
+      "rawAttemptViolations": [
+        {
+          "caseId": "q05-guess",
+          "phase": "response",
+          "attempt": 2,
+          "category": "facts",
+          "kind": "canon",
+          "index": 3,
+          "forbiddenActors": [
+            "actor-b"
+          ],
+          "explicitNegation": "乙没有听到甲的猜测。",
+          "sourceText": "甲猜测明天会下雨，但没有证据；未来天气还不知道。乙没有听到甲的猜测。",
+          "candidate": {
+            "kind": "canon",
+            "subject": "actor-b",
+            "predicate": "heard",
+            "value": "甲的猜测",
+            "text": "乙没有听到甲的猜测",
+            "evidence": [
+              {
+                "source": "assistant",
+                "quote": "乙没有听到甲的猜测。"
+              }
+            ],
+            "knownBy": [
+              "actor-b"
+            ]
+          }
+        }
+      ],
+      "unparseableAttempts": [],
+      "note": "仅评已有明确否定且内容命中固定范围的候选；零命中或未返回不证明授权正确。多次修复的候选重复列出，不代表独立经历；服务器拒绝的 raw candidate 不视为已提交泄漏。"
     }
   },
   "actualCostUSD": null,
@@ -6919,5 +7041,15 @@
     ]
   },
   "error": "评测接口/vector/query返回HTTP 500 (INTERNAL)；认证与模型凭据不写入错误输出",
-  "finishedAt": "2026-10-07T07:30:10.742Z"
+  "finishedAt": "2026-10-07T07:30:10.742Z",
+  "returnedModelResponses": 49,
+  "truncatedModelResponses": 0,
+  "reportedUsageEntries": 49,
+  "derivedStatisticsAudit": {
+    "version": 2,
+    "updatedAt": "2026-10-07T08:52:28.272Z",
+    "rawResultsSha256": "d9ab437a1f0809bc920880a3125a142cbed9fbc9ae345a3fd5b1ca7432d78a21",
+    "originalStatus": "failed",
+    "note": "仅重算派生汇总与传输分类；原始案例、人工 gold、原始模型输出、usage 完整保持。条件语义统计与全尝试端到端召回分开；episode 额外接受独立知情安全审计。"
+  }
 }

@@ -389,6 +389,54 @@ export function ContextModal({
             {warning}
           </p>
         ))}
+        {actual && context.settings?.decisionModel && (
+          <details open>
+            <summary>
+              记忆证据判断 ·{' '}
+              {context.decisionAudit?.status === 'supported'
+                ? '已确认'
+                : context.decisionAudit?.status === 'rejected'
+                  ? '未通过'
+                  : context.decisionAudit?.status === 'uncertain'
+                    ? '待确认'
+                    : '待读取'}
+            </summary>
+            <p className="quiet">
+              {context.settings.decisionModel.split('/').at(-1)}{' '}
+              检查候选是否有原文依据，角色知情另有来源授权校验。
+            </p>
+            {context.decisionAuditError && <p className="quiet">{context.decisionAuditError}</p>}
+            {context.decisionAudit?.candidates?.map((candidate: Data) => (
+              <article className="preview-entry" key={candidate.path}>
+                <strong>
+                  {(
+                    {
+                      facts: '事实',
+                      experiences: '经历',
+                      capabilities: '能力',
+                      procedureUses: '方法使用',
+                    } as Data
+                  )[candidate.path.split('.')[0]] || '候选'}{' '}
+                  {Number(candidate.path.split('.')[1]) + 1}
+                </strong>
+                {Object.entries(candidate.answers as Record<string, Data>).map(([id, answer]) => (
+                  <p key={id}>
+                    {id === 'supported'
+                      ? '内容证据'
+                      : `获知证据 ${Number(id.replace('knowledge_', '')) + 1}`}
+                    ：
+                    {answer.verdict === 'supported'
+                      ? '支持'
+                      : answer.verdict === 'rejected'
+                        ? '不支持'
+                        : '待确认'}{' '}
+                    · {Math.round(answer.probability * 1000) / 10}%
+                  </p>
+                ))}
+              </article>
+            ))}
+          </details>
+        )}
         <details open>
           <summary>召回的记忆 · {context.recall?.items?.length || 0}</summary>
           <div className="context-recall">

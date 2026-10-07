@@ -1489,6 +1489,32 @@ export class MemoryEngine {
         'EXISTS(SELECT 1 FROM branches WHERE id=? AND owner_id=? AND projection_revision=?)',
         [b.id, this.store.ownerId, b.projectionRevision],
       ),
+      ...(input.automatic && (input.status ?? 'grant') === 'grant'
+        ? [
+            this.store.guard(
+              `NOT EXISTS(SELECT 1 FROM (
+          SELECT g.status,ROW_NUMBER() OVER(PARTITION BY g.span_id,g.character_id ORDER BY g.recorded_seq DESC,g.rowid DESC,l.depth ASC) AS rank
+          FROM knowledge_grants g JOIN source_spans p ON p.id=g.span_id
+          JOIN branch_lineage l ON l.ancestor_id=g.branch_id AND l.branch_id=?
+          WHERE g.owner_id=? AND g.source_id=? AND g.character_id IN (?,'*') AND g.channel='author'
+            AND g.acquired_seq<=? AND (l.max_seq IS NULL OR g.recorded_seq<=l.max_seq)
+            AND (l.max_grant_rowid IS NULL OR g.rowid<=l.max_grant_rowid)
+            AND p.source_version=? AND p.source_generation=? AND p.start_offset<? AND p.end_offset>?
+        ) WHERE rank=1 AND status='revoke')`,
+              [
+                b.id,
+                this.store.ownerId,
+                input.sourceId,
+                input.characterId,
+                b.headSeq,
+                e.evidence.sourceVersion,
+                e.evidence.sourceGeneration,
+                e.evidence.end,
+                e.evidence.start,
+              ],
+            ),
+          ]
+        : []),
       e.spec,
       {
         sql: 'INSERT INTO knowledge_grants(id,owner_id,branch_id,source_id,span_id,character_id,recorded_seq,acquired_seq,channel,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',

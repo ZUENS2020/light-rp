@@ -228,6 +228,8 @@ export interface ResourceBinding {
   kind: string;
 }
 export interface KnowledgeInput extends WriteFence {
+  /** Server-only extraction/rebuild path; never overrides a visible author revocation. */
+  automatic?: boolean;
   branchId: string;
   sourceId: string;
   characterId: string;
@@ -235,7 +237,7 @@ export interface KnowledgeInput extends WriteFence {
   spanId?: string;
   start?: number;
   end?: number;
-  channel?: 'witnessed' | 'told' | 'author' | 'persona' | 'public';
+  channel?: 'witnessed' | 'told' | 'rumor' | 'inferred' | 'author' | 'persona' | 'public';
   status?: 'grant' | 'revoke';
 }
 export interface CapabilityInput extends WriteFence {

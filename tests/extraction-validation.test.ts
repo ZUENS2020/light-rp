@@ -158,13 +158,136 @@ describe('bound-rule extraction and source semantics', () => {
   it('keeps provider schema enforcement for a different auxiliary model', async () => {
     const c = context(),
       { run, env } = binding(result());
-    c.settings.auxiliaryModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    c.settings.auxiliaryModel = '@cf/meta/llama-3.1-8b-instruct';
     await analyze(env, c, input, narration);
     expect(run.mock.calls[0]![0]).toBe(c.settings.auxiliaryModel);
     expect(run.mock.calls[0]![1].response_format).toMatchObject({
       type: 'json_schema',
       json_schema: { type: 'object' },
     });
+  });
+  it('uses the measured prompt-only extraction protocol for Llama70b, retaining strict parsing', async () => {
+    const c = context(),
+      { run, env } = binding(result());
+    c.settings.auxiliaryModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    await analyze(env, c, input, narration);
+    expect(run.mock.calls[0]![0]).toBe(c.settings.auxiliaryModel);
+    expect(run.mock.calls[0]![1]).not.toHaveProperty('response_format');
+  });
+  it('keeps a clipped quoted lie or imagined/conditional statement out of canon', () => {
+    for (const source of [
+      '甲撒谎说：“钥匙在仓库。”客观上钥匙实际在工坊。',
+      '甲想象钥匙在仓库。钥匙实际在工坊。',
+      '如果钥匙在仓库，甲就会回来。',
+      '甲计划告诉乙钥匙在仓库。',
+    ])
+      expect(() =>
+        validateExtraction(
+          extractionSchema.parse(result([fact('钥匙在仓库')])),
+          input,
+          source,
+          context(),
+        ),
+      ).toThrow('世界事实');
+    const source = '甲撒谎说：“钥匙在仓库。”客观上钥匙实际在工坊。',
+      objective = { ...fact('钥匙实际在工坊'), value: '工坊', text: '钥匙实际在工坊' };
+    expect(() =>
+      validateExtraction(extractionSchema.parse(result([objective])), input, source, context()),
+    ).not.toThrow();
+    const paddedSource = '甲撒谎说：“钥匙在仓库。”窗外正在下雨。';
+    for (const evidence of [
+      [
+        { source: 'assistant', quote: '钥匙在仓库' },
+        { source: 'assistant', quote: '窗外正在下雨' },
+      ],
+      [{ source: 'assistant', quote: '钥匙在仓库。”窗外正在下雨' }],
+    ])
+      expect(() =>
+        validateExtraction(
+          extractionSchema.parse(result([{ ...fact(), evidence }])),
+          input,
+          paddedSource,
+          context(),
+        ),
+      ).toThrow('世界事实');
+  });
+  it('grounds numeric, boolean and null canon values instead of laundering them with unrelated evidence', () => {
+    const source = '甲撒谎说：“门禁密码是7391。”客观上密码是8520。窗外正在下雨。';
+    const numeric = {
+      ...fact(),
+      subject: '门禁',
+      predicate: '密码',
+      value: 7391,
+      evidence: [
+        { source: 'assistant', quote: '门禁密码是7391' },
+        { source: 'assistant', quote: '窗外正在下雨' },
+      ],
+    };
+    expect(() =>
+      validateExtraction(extractionSchema.parse(result([numeric])), input, source, context()),
+    ).toThrow('世界事实');
+    for (const [value, quote] of [
+      [8520, '客观上密码是8520'],
+      [7391, '密码是73912'],
+      [7391, '密码是７３９１'],
+    ] as const) {
+      const extraction = extractionSchema.parse(
+        result([{ ...numeric, value, evidence: [{ source: 'assistant', quote }] }]),
+      );
+      const validate = () => validateExtraction(extraction, input, quote + '。', context());
+      if (quote.endsWith('73912')) expect(validate).toThrow('世界事实');
+      else expect(validate).not.toThrow();
+    }
+    for (const quote of [
+      '密码是-7391',
+      '密码是+7391',
+      '密码是負7391',
+      '密码是负7391',
+      '密码是7391e2',
+    ])
+      expect(() =>
+        validateExtraction(
+          extractionSchema.parse(
+            result([{ ...numeric, evidence: [{ source: 'assistant', quote }] }]),
+          ),
+          input,
+          quote + '。',
+          context(),
+        ),
+      ).toThrow('世界事实');
+    for (const value of [true, false, null]) {
+      const quote = `作者确认：甲.alive=${String(value)}`,
+        candidate = {
+          ...numeric,
+          subject: 'actor-a',
+          predicate: 'alive',
+          value,
+          evidence: [{ source: 'user', quote }],
+        };
+      expect(() =>
+        validateExtraction(
+          extractionSchema.parse(result([candidate])),
+          { mode: 'author', text: quote },
+          '',
+          context(),
+        ),
+      ).not.toThrow();
+      const misleading = {
+        ...candidate,
+        evidence: [
+          { source: 'assistant', quote: '甲说：“alive=' + String(value) + '。”' },
+          { source: 'assistant', quote: '窗外下雨' },
+        ],
+      };
+      expect(() =>
+        validateExtraction(
+          extractionSchema.parse(result([misleading])),
+          input,
+          `甲说：“alive=${String(value)}。”窗外下雨。`,
+          context(),
+        ),
+      ).toThrow('世界事实');
+    }
   });
   it('rejects quoted claims as canon but accepts independent objective narration and directional belief', () => {
     const said = '甲说：“钥匙在仓库。”';
@@ -211,6 +334,32 @@ describe('bound-rule extraction and source semantics', () => {
         context(),
       ),
     ).toThrow('自称成功');
+    for (const [source, quote] of [
+      ['甲声称：“甲成功打开北门。”窗外下雨。', '甲成功打开北门'],
+      ['甲没有成功打开北门。', '成功打开北门'],
+    ])
+      expect(() =>
+        validateExtraction(
+          extractionSchema.parse({ ...result([]), experiences: [experience(quote)] }),
+          input,
+          source,
+          context(),
+        ),
+      ).toThrow('自称');
+    const claimedCapability = extractionSchema.parse({
+      ...result([]),
+      capabilities: [
+        {
+          actorId: 'actor-a',
+          name: '开锁',
+          level: '初级',
+          evidence: [{ source: 'assistant', quote: '甲学会开锁' }],
+        },
+      ],
+    });
+    expect(() =>
+      validateExtraction(claimedCapability, input, '甲说：“甲学会开锁。”', context()),
+    ).toThrow('实际学习');
     const actual = '甲声称自己成功打开北门。北门实际打开，甲走了进去。';
     expect(() =>
       validateExtraction(

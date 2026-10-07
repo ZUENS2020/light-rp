@@ -29,7 +29,7 @@ D1 是事实账本。`turns/events/sources` 保留提交身份、事件顺序、
 
 `canon` 表示有权威来源的世界事实；`belief` 必须指定 observer，表示该角色所信，不代表客观真相。`relation`、`episode`、`observation`、`experience` 和 `procedure` 分别表示关系、情节、压缩观察、执行案例和适用方法。模型提供候选及 quote，服务端按来源决定 authority/confidence，并验证剧情作用域；roleplay 中玩家单方面声称不会直接升级为世界真相。
 
-`knowledge_grants` 授权某角色知道精确原文片段，包含 witnessed/told/author 渠道和生效顺序。`knownBy` 是派生提示，不是授权凭证。角色召回、来源展开和角色上下文均检查授予片段及撤销；同一消息的公开句子不会授予旁边的导演秘密。导演可以查看所属故事的全部有效来源；角色认知边界是一层叙事约束，用户身份权限仍由 owner 控制。
+`knowledge_grants` 授权某角色知道精确原文片段，包含 witnessed/told/rumor/inferred 和明确作者／设定渠道及生效顺序。`knownBy` 是派生提示，不是授权凭证。自动抽取必须提供独立 `knowledge` 获取证明，定位明确角色、获取方式和逐字原句，并覆盖其将读取的全部内容证据；仅在场、未听见、内心、假设、引文中的获取声称不能授权。事实、情节、经历、能力及重建共用同一检查；旧工件没有证明则不制造新 grant。角色召回、来源展开和角色上下文均检查授予片段及撤销；同一消息的公开句子不会授予旁边的导演秘密。导演可以查看所属故事的全部有效来源；角色认知边界是一层叙事约束，用户身份权限仍由 owner 控制。
 
 ## 生成提交
 
@@ -38,6 +38,8 @@ D1 是事实账本。`turns/events/sources` 保留提交身份、事件顺序、
 3. 统一叙事调用产生草稿并通过 DO 发布增量。正文完成后抽取场景、事实、经验、能力和程序使用记录，校验 JSON、合法角色及原文证据；中断或达到输出上限不会提交半个回合。
 4. DO 调用 `Store.appendTurn`，D1 原子检查 head、task attempt/cancel epoch、owner epoch 和所有来源 fence，提交输入/正文事件、scene、资料更新与 memory outbox。提交重放返回原事件；正文提交和派生记忆推进是两个可观测阶段。
 5. Memory Workflow 写入受控记忆，推进连续 cursor，学习经验，更新观察和向量投影。请求尾部和每分钟 cron 都派发 outbox；稳定 workflow ID 合并重复派发。
+
+可选 Clef 判断在第 3 步确定性校验之后逐候选核验语义证据。它只拒绝或延缓提交，不生成权限；灰区、失败和使用量保留任务审计。模型配置随任务冻结，默认关闭额外判断，设置页可以独立测试并选择 Clef。调用细节与真实合成评测见 [Clef 说明](clef.md)。
 
 作者纠正使用同一 D1 batch 写入 correction 原文、100 权威的记忆 revision、旧版本 supersession、依赖失效、owner epoch 和下一水位的 outbox；head 或 projection 竞争、无效目标和投影插入错误不会留下半个作者事件。
 
@@ -65,6 +67,6 @@ D1 是事实账本。`turns/events/sources` 保留提交身份、事件顺序、
 
 ## 验证边界
 
-真实 SQLite/D1 测试覆盖事务、来源、分支和经验规则；R2/Vectorize/Workflow 故障测试在外部服务边界注入延迟、删除和重复派发。本地 Playwright 覆盖真实 Worker 和浏览器，但使用明确的 local-demo 模式。8 故事/957 次提交/128 问题包含一条 500 回合主线，是合成检索回放。真实托管生成和后台记忆 smoke 已通过；三方案模型评测尚未完整跑完，真实 LLM 抽取、压缩事实保真及开放回答准确率仍未验收，详见 [评测说明](evaluation.md)。
+真实 SQLite/D1 测试覆盖事务、来源、分支和经验规则；R2/Vectorize/Workflow 故障测试在外部服务边界注入延迟、删除和重复派发。本地 Playwright 覆盖真实 Worker 和浏览器，但使用明确的 local-demo 模式。8 故事/957 次提交/128 问题包含一条 500 回合主线，是合成检索回放。真实托管生成和后台记忆 smoke 已通过；三方案真实 Qwen 对照已完成 128 题各一次，但严格字符串评分不是人工语义盲评。自动抽取精确率、压缩事实保真及开放回答准确率仍未验收，详见 [评测说明](evaluation.md)。
 
 故事导出包含所有不可变记忆历史、分支 lineage 水位、来源与证据、资料绑定及原始 JSON revision、能力/使用账本、游标、依赖和删除审计；保留原 SQLite rowid，便于解释分叉冻结边界。PNG 只列出 R2 key 和未内嵌状态，任务产物与完整存储备份仍需另行保存。导出末尾检查 owner epoch 和分支版本，若过程中发生删除或剧情/投影变更则返回冲突，请重试。

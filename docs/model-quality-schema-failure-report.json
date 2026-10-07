@@ -3613,7 +3613,61 @@
   "usage": [],
   "measured": {
     "extraction": null,
-    "vector": null
+    "vector": null,
+    "extractionEndToEnd": {
+      "attemptedCases": 20,
+      "acceptedCases": 0,
+      "failedCases": 20,
+      "unavailableCases": 20,
+      "uniqueCases": 20,
+      "duplicateCaseIds": [],
+      "unknownCaseIds": [],
+      "missingCaseIds": [],
+      "unidentifiedCases": 0,
+      "fullFixedCorpus": true,
+      "all": {
+        "expected": 19,
+        "matched": 0,
+        "recall": 0
+      },
+      "facts": {
+        "expected": 13,
+        "matched": 0,
+        "recall": 0
+      },
+      "experiences": {
+        "expected": 5,
+        "matched": 0,
+        "recall": 0
+      },
+      "capabilities": {
+        "expected": 1,
+        "matched": 0,
+        "recall": 0
+      },
+      "denominator": "所有已尝试的唯一固定案例的 gold 项数；请求失败、截断和未接受完整输出计零命中。未尝试案例不计入；重复或未知案例使 recall 为 null。",
+      "corpusScope": "20 条固定中文合成案例；本统计不代表外部语料或生产总体质量。"
+    },
+    "knowledgeSafety": {
+      "ruleSource": "固定原文中明确的未听到/不知道；独立安全审计，不改原子事实 gold。",
+      "kinds": "所有 facts kinds（包括 episode），以及未来带 knownBy 的 experience/capability；不因原子 precision 排除 episode。",
+      "evaluatedCaseIds": [
+        "q01-truth",
+        "q02-lie",
+        "q03-inner",
+        "q04-told",
+        "q05-guess",
+        "q17-selective"
+      ],
+      "acceptedCandidates": 0,
+      "rawAttemptCandidates": 0,
+      "acceptedViolationCount": 0,
+      "rawAttemptViolationCount": 0,
+      "acceptedViolations": [],
+      "rawAttemptViolations": [],
+      "unparseableAttempts": [],
+      "note": "仅评已有明确否定且内容命中固定范围的候选；零命中或未返回不证明授权正确。多次修复的候选重复列出，不代表独立经历；服务器拒绝的 raw candidate 不视为已提交泄漏。"
+    }
   },
   "actualCostUSD": null,
   "methodology": {
@@ -3668,5 +3722,13 @@
     ],
     "semanticPrecision": null,
     "semanticRecall": null
+  },
+  "truncatedModelResponses": 0,
+  "derivedStatisticsAudit": {
+    "version": 2,
+    "updatedAt": "2026-10-07T08:52:28.275Z",
+    "rawResultsSha256": "38a403ff2d26849b8d23e489409839b7e0d6a2ffe1dba630a5631670d8984c46",
+    "originalStatus": "transport-failed",
+    "note": "仅重算派生汇总与传输分类；原始案例、人工 gold、原始模型输出、usage 完整保持。条件语义统计与全尝试端到端召回分开；episode 额外接受独立知情安全审计。"
   }
 }

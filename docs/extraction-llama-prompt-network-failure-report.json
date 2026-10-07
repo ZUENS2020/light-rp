@@ -1,0 +1,123 @@
+{
+  "format": "lightrp-real-model-quality",
+  "version": 1,
+  "startedAt": "2026-10-07T09:47:01.218Z",
+  "runId": "6fbb243d-dbeb-4398-a023-f0867d121f09",
+  "status": "failed",
+  "plan": {
+    "synthetic": true,
+    "extractionCases": 1,
+    "positiveVectorQuestions": 0,
+    "negativeVectorQuestions": 0,
+    "worstModelCalls": 3,
+    "maxModelCalls": 3,
+    "maxEmbeddingCalls": 1,
+    "realModelRun": true,
+    "costUSD": null,
+    "note": "默认零网络计划。--run 才调用真实 analyze 和 bge-m3/Vectorize；gold 固定、未判定不计作正确，episode 不计原子事实。"
+  },
+  "manifest": null,
+  "extractionResults": [],
+  "vectorReadiness": [],
+  "vectorResults": [],
+  "modelCalls": 0,
+  "embeddingCalls": 0,
+  "usage": [],
+  "measured": {
+    "extraction": null,
+    "extractionEndToEnd": {
+      "attemptedCases": 0,
+      "acceptedCases": 0,
+      "failedCases": 0,
+      "unavailableCases": 0,
+      "uniqueCases": 0,
+      "duplicateCaseIds": [],
+      "unknownCaseIds": [],
+      "missingCaseIds": [
+        "q01-truth",
+        "q02-lie",
+        "q03-inner",
+        "q04-told",
+        "q05-guess",
+        "q06-plan",
+        "q07-success",
+        "q08-boast",
+        "q09-no-tool",
+        "q10-learning",
+        "q11-reading",
+        "q12-correction",
+        "q13-time",
+        "q14-homonyms",
+        "q15-relations",
+        "q16-calendar",
+        "q17-selective",
+        "q18-stochastic",
+        "q19-partial",
+        "q20-confirmed"
+      ],
+      "unidentifiedCases": 0,
+      "fullFixedCorpus": false,
+      "all": {
+        "expected": 0,
+        "matched": 0,
+        "recall": null
+      },
+      "facts": {
+        "expected": 0,
+        "matched": 0,
+        "recall": null
+      },
+      "experiences": {
+        "expected": 0,
+        "matched": 0,
+        "recall": null
+      },
+      "capabilities": {
+        "expected": 0,
+        "matched": 0,
+        "recall": null
+      },
+      "denominator": "所有已尝试的唯一固定案例的 gold 项数；请求失败、截断和未接受完整输出计零命中。未尝试案例不计入；重复或未知案例使 recall 为 null。",
+      "corpusScope": "20 条固定中文合成案例；本统计不代表外部语料或生产总体质量。"
+    },
+    "knowledgeSafety": {
+      "ruleSource": "固定原文中明确的未听到/不知道；独立安全审计，不改原子事实 gold。",
+      "kinds": "所有 facts kinds（包括 episode）、experience、capability 的 knownBy 或 knowledge actorId 主张；不因原子 precision 排除 episode。",
+      "evaluatedCaseIds": [],
+      "acceptedCandidates": 0,
+      "rawAttemptCandidates": 0,
+      "acceptedViolationCount": 0,
+      "rawAttemptViolationCount": 0,
+      "acceptedViolations": [],
+      "rawAttemptViolations": [],
+      "unparseableAttempts": [],
+      "note": "仅评已有明确否定且内容命中固定范围的候选；零命中或未返回不证明授权正确。多次修复的候选重复列出，不代表独立经历；服务器拒绝的 raw candidate 不视为已提交泄漏。"
+    },
+    "vector": null
+  },
+  "actualCostUSD": null,
+  "methodology": {
+    "modelCalls": "analyze发起complete的尝试次数，包括提供方拒绝或传输失败；不代表成功推理或可计费调用，另保留正文响应数与usage条目。",
+    "extraction": "固定人工规则匹配实际 analyze 输出。保留每次原始模型回应、结构化结果和未判定预测；完整语义precision需人工审查，提供透明上下界。",
+    "extractionCondition": "每个请求冻结decisionModel为空，只测辅助抽取模型和服务端来源/知情proof；不写回owner设置。决策模型另有独立实测，不能据此报告联合质量。",
+    "vector": "实际 bge-m3 1024维 + immutable Vectorize index；仅返回top10 ID，manifest完整scope映射及D1合法来源/角色授权回查。",
+    "privacy": "仅合成角色/原文；认证头和模型密钥不写入报告。"
+  },
+  "error": "fetch failed",
+  "finishedAt": "2026-10-07T09:47:06.253Z",
+  "returnedModelResponses": 0,
+  "reportedUsageEntries": 0,
+  "truncatedModelResponses": 0,
+  "transportAudit": {
+    "modelInvocationAttempts": 0,
+    "unknownModelInvocationCases": [],
+    "returnedModelResponses": 0,
+    "truncatedModelResponses": 0,
+    "reportedUsageEntries": 0,
+    "attemptedCases": 0,
+    "measuredCases": 0,
+    "noResponseCases": [],
+    "unusableResponseCases": [],
+    "note": "没有正文也没有usage的失败只计传输故障；有usage但缺少可验证正文的失败另列，均不计算语义precision/recall。逐项原始结果仍完整保留。"
+  }
+}

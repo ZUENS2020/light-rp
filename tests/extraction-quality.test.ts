@@ -78,7 +78,7 @@ it('scores truth, explicit contradictions, unknown predictions and recall withou
     precisionUpperBound: 2 / 3,
     recall: 0.5,
   });
-  expect(metrics.factPrecision95Gate).toBe(false);
+  expect(metrics.factPrecision95Gate).toBe(null);
 });
 it('treats wrong explicit knowledge, imagined capabilities and unknown success as failures', () => {
   const secret = scoreExtractionQuality(
@@ -303,8 +303,14 @@ it('default CLI performs no requests; unobserved stale vectors remain unmeasured
 });
 
 it.each([
-  { code: 'MODEL_HTTP', status: 'transport-failed', usage: [] },
-  { code: 'OUTPUT_TRUNCATED', status: 'failed', usage: [{ completion_tokens: 4096 }] },
+  { code: 'MODEL_HTTP', status: 'transport-failed', usage: [], truncated: false },
+  {
+    code: 'OUTPUT_TRUNCATED',
+    status: 'failed',
+    usage: [{ completion_tokens: 4096 }],
+    truncated: false,
+  },
+  { code: 'OUTPUT_TRUNCATED', status: 'failed', usage: [], truncated: true },
 ])('stops without a verifiable response, preserving $code as $status', async (failure) => {
   const directory = await mkdtemp(join(tmpdir(), 'lightrp-quality-cli-')),
     output = join(directory, 'report.json'),
@@ -328,6 +334,9 @@ it.each([
           usage: failure.usage,
           rawModelAttempts: [
             { attempt: 1, phase: 'start' },
+            ...(failure.truncated
+              ? [{ attempt: 1, phase: 'truncated', rawOutput: '{"scene":' }]
+              : []),
             { attempt: 1, phase: 'invalid', errorCode: failure.code },
           ],
           score: scoreExtractionQuality(fixture, null),
@@ -343,17 +352,60 @@ it.each([
       status: failure.status,
       modelCalls: 1,
       returnedModelResponses: 0,
+      truncatedModelResponses: Number(failure.truncated),
       reportedUsageEntries: failure.usage.length,
       measured: { extraction: null },
       transportAudit: {
         attemptedCases: 1,
         measuredCases: 0,
-        noResponseCases: failure.usage.length ? [] : [fixture.id],
-        unusableResponseCases: failure.usage.length ? [fixture.id] : [],
+        noResponseCases: failure.usage.length || failure.truncated ? [] : [fixture.id],
+        unusableResponseCases: failure.usage.length || failure.truncated ? [fixture.id] : [],
       },
     });
     expect(report.extractionResults).toHaveLength(1);
     expect(report.error).toContain('未返回可验证正文');
+  } finally {
+    process.exitCode = exitCode;
+    vi.unstubAllEnvs();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('keeps an HTTP-failed extraction in the end-to-end denominator without inventing model usage', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lightrp-quality-http-')),
+    output = join(directory, 'report.json'),
+    exitCode = process.exitCode;
+  vi.stubEnv('API_AUTH_HEADERS_FILE', '');
+  vi.stubEnv('LRP_BASE_URL', 'https://quality.test');
+  const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = String(input);
+    if (url.endsWith('/manifest'))
+      return Response.json({
+        extractionCases: extractionQualityCases,
+        vectorFacts: vectorQualityFacts,
+      });
+    if (url.endsWith('/settings'))
+      return Response.json({ ...defaults('gateway'), decisionModel: '@cf/cloudflare/clef' });
+    return Response.json({ code: 'EVALUATION_BUDGET' }, { status: 503 });
+  });
+  vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  try {
+    await main(['--run', '--extraction-only', '--output', output]);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(String(fetch.mock.calls[2]![1]?.body)).settings.decisionModel).toBe('');
+    const report = JSON.parse(await readFile(output, 'utf8'));
+    expect(report.modelCalls).toBe(0);
+    expect(report.extractionResults[0]).toMatchObject({
+      id: 'q01-truth',
+      modelCalls: null,
+      modelInvocationCountUnknown: true,
+      extraction: null,
+    });
+    expect(report.measured).toMatchObject({
+      extraction: null,
+      extractionEndToEnd: { attemptedCases: 1, facts: { expected: 1, matched: 0, recall: 0 } },
+    });
+    expect(report.transportAudit.unknownModelInvocationCases).toEqual(['q01-truth']);
   } finally {
     process.exitCode = exitCode;
     vi.unstubAllEnvs();

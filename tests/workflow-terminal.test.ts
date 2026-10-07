@@ -33,6 +33,7 @@ vi.mock('../src/server/model', async (importOriginal) => ({
 }));
 import { syncPersonaCapabilities } from '../src/server/persona';
 import { complete } from '../src/server/model';
+import { extractionSchema } from '../src/server/extraction';
 import { dispatchOutbox, GenerationWorkflow, MemoryWorkflow } from '../src/server/workflows';
 
 let db: ReturnType<typeof createTestD1>, store: Store, branchId: string, sessionId: string;
@@ -44,6 +45,9 @@ function deferred<T>() {
   return { promise, resolve };
 }
 beforeEach(async () => {
+  vi.mocked(complete)
+    .mockReset()
+    .mockRejectedValue(new Error('Unexpected model call in workflow test'));
   db = createTestD1();
   store = new Store(db.db, 'workflow-terminal-owner');
   const world = await store.createWorld('持久任务终态'),
@@ -255,8 +259,263 @@ async function memory(retryId?: string) {
     ...(retryId ? { retryId } : {}),
   };
 }
+function queueNarration(narrative: string) {
+  return vi.mocked(complete).mockImplementationOnce(async (_env, _settings, _messages, options) => {
+    await options?.onText?.(narrative);
+    return narrative;
+  });
+}
+function setJudge(
+  env: Env,
+  judge: (
+    model: unknown,
+    request: { questions: Record<string, unknown> },
+    options: { signal: AbortSignal },
+  ) => Promise<unknown>,
+) {
+  env.AI = {
+    run: async (
+      model: unknown,
+      request: { questions: Record<string, unknown> },
+      options: { signal: AbortSignal },
+    ) =>
+      model === '@cf/baai/bge-m3'
+        ? { data: [Array(1024).fill(0)] }
+        : judge(model, request, options),
+  } as unknown as Env['AI'];
+  env.VECTORS = {
+    ...env.VECTORS,
+    query: async () => ({ matches: [] }),
+  } as unknown as Env['VECTORS'];
+}
 
 describe('durable task terminal states', () => {
+  it.each([
+    [0.03, 'rejected'],
+    [0.6, 'uncertain'],
+  ] as const)(
+    'persists a %s judgment audit in an awaited step, preserving the draft without committing a turn',
+    async (probability, status) => {
+      const params = await generation(),
+        guarded = strictBindings(),
+        settings = { ...defaults('gateway'), decisionModel: '@cf/cloudflare/clef' },
+        narrative = '钥匙实际在仓库。';
+      await store.run(
+        'UPDATE tasks SET config_json=? WHERE id=?',
+        JSON.stringify(settings),
+        params.taskId,
+      );
+      queueNarration(narrative).mockResolvedValueOnce(
+        JSON.stringify({
+          scene: {},
+          facts: [
+            {
+              kind: 'canon',
+              subject: '钥匙',
+              predicate: '位置',
+              value: '仓库',
+              text: narrative,
+              evidence: [{ source: 'assistant', quote: narrative }],
+            },
+          ],
+        }),
+      );
+      const run = vi.fn(
+        async (_model: unknown, request: { questions: Record<string, unknown> }) => ({
+          model: 'clef',
+          answers: Object.fromEntries(
+            Object.keys(request.questions).map((id) => [id, { type: 'noul', noul: probability }]),
+          ),
+          usage: { input_tokens: 120, output_tokens: 0 },
+        }),
+      );
+      setJudge(guarded.env, run);
+      await expect(
+        new GenerationWorkflow({} as ExecutionContext, guarded.env).run(
+          { payload: params } as never,
+          guarded.step,
+        ),
+      ).rejects.toThrow('判断模型未确认');
+      const path = `tasks/${store.ownerId}/task/1/decision.json`,
+        audit = JSON.parse(guarded.objects.get(path)!);
+      expect(audit).toMatchObject({
+        status,
+        candidates: [{ path: 'facts.0', usage: { input_tokens: 120 } }],
+      });
+      expect(JSON.stringify(audit)).not.toContain(narrative);
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(complete).toHaveBeenCalledTimes(2);
+      expect((await store.getBranch(branchId)).headSeq).toBe(1);
+      expect(
+        await store.one('SELECT status,draft_text FROM tasks WHERE id=?', params.taskId),
+      ).toEqual({ status: 'failed', draft_text: narrative });
+    },
+  );
+  it('keeps a supported judgment in both its standalone audit and validated extraction artifact', async () => {
+    const params = await generation(),
+      guarded = strictBindings(),
+      settings = { ...defaults('gateway'), decisionModel: '@cf/cloudflare/clef' },
+      narrative = '钥匙实际在仓库。';
+    await store.run(
+      'UPDATE tasks SET config_json=? WHERE id=?',
+      JSON.stringify(settings),
+      params.taskId,
+    );
+    queueNarration(narrative).mockResolvedValueOnce(
+      JSON.stringify({
+        scene: {},
+        facts: [
+          {
+            kind: 'canon',
+            subject: '钥匙',
+            predicate: '位置',
+            value: '仓库',
+            text: narrative,
+            evidence: [{ source: 'assistant', quote: narrative }],
+          },
+        ],
+      }),
+    );
+    setJudge(guarded.env, async (_model, request) => ({
+      model: 'clef',
+      answers: Object.fromEntries(
+        Object.keys(request.questions).map((id) => [id, { type: 'noul', noul: 0.98 }]),
+      ),
+      usage: { input_tokens: 120, output_tokens: 0 },
+    }));
+    const stub = guarded.env.BRANCH_RUNTIME.get(guarded.env.BRANCH_RUNTIME.idFromName(branchId)),
+      originalFetch = stub.fetch.bind(stub);
+    guarded.env.BRANCH_RUNTIME = {
+      idFromName: (id: string) => id,
+      get: () => ({
+        fetch: async (url: string, options: RequestInit) => {
+          if (url.endsWith('/commit')) {
+            await new Store(guarded.env.DB, store.ownerId).appendTurn(
+              JSON.parse(String(options.body)).turn,
+            );
+            return Response.json({ ok: true });
+          }
+          return originalFetch(url, options);
+        },
+      }),
+    } as unknown as Env['BRANCH_RUNTIME'];
+    await new GenerationWorkflow({} as ExecutionContext, guarded.env).run(
+      { payload: params } as never,
+      guarded.step,
+    );
+    const audit = JSON.parse(guarded.objects.get(`tasks/${store.ownerId}/task/1/decision.json`)!);
+    const data = JSON.parse(guarded.objects.get(`tasks/${store.ownerId}/task/1/extraction.json`)!);
+    expect(audit.status).toBe('supported');
+    expect(data.extraction.decisionAudit).toEqual(audit);
+    expect((await store.getBranch(branchId)).headSeq).toBe(3);
+    expect(await store.one('SELECT status FROM tasks WHERE id=?', params.taskId)).toEqual({
+      status: 'completed',
+    });
+  });
+  it('destroys a late decision audit after the source epoch changes instead of caching invalid evidence', async () => {
+    const params = await generation(),
+      guarded = strictBindings(),
+      settings = { ...defaults('gateway'), decisionModel: '@cf/cloudflare/clef' },
+      narrative = '钥匙实际在仓库。';
+    await store.run(
+      'UPDATE tasks SET config_json=? WHERE id=?',
+      JSON.stringify(settings),
+      params.taskId,
+    );
+    queueNarration(narrative).mockResolvedValueOnce(
+      JSON.stringify({
+        scene: {},
+        facts: [
+          {
+            kind: 'canon',
+            subject: '钥匙',
+            predicate: '位置',
+            value: '仓库',
+            text: narrative,
+            evidence: [{ source: 'assistant', quote: narrative }],
+          },
+        ],
+      }),
+    );
+    setJudge(guarded.env, async (_model, request) => {
+      await new Store(guarded.env.DB, store.ownerId).run(
+        'UPDATE owners SET deletion_epoch=deletion_epoch+1 WHERE owner_id=?',
+        store.ownerId,
+      );
+      return {
+        model: 'clef',
+        answers: Object.fromEntries(
+          Object.keys(request.questions).map((id) => [id, { type: 'noul', noul: 0.04 }]),
+        ),
+        usage: { input_tokens: 120, output_tokens: 0 },
+      };
+    });
+    await expect(
+      new GenerationWorkflow({} as ExecutionContext, guarded.env).run(
+        { payload: params } as never,
+        guarded.step,
+      ),
+    ).rejects.toThrow('来源已失效');
+    expect(guarded.objects.has(`tasks/${store.ownerId}/task/1/decision.json`)).toBe(false);
+    expect(guarded.objects.has(`tasks/${store.ownerId}/task/1/extraction.json`)).toBe(false);
+    expect((await store.getBranch(branchId)).headSeq).toBe(1);
+  });
+  it('aborts a judge batch on durable cancellation and never starts the remaining paid candidates', async () => {
+    vi.useFakeTimers();
+    const params = await generation(),
+      guarded = strictBindings(),
+      entered = deferred<void>(),
+      settings = { ...defaults('gateway'), decisionModel: '@cf/cloudflare/clef' },
+      narrative = '钥匙实际在仓库。';
+    await store.run(
+      'UPDATE tasks SET config_json=? WHERE id=?',
+      JSON.stringify(settings),
+      params.taskId,
+    );
+    const extraction = extractionSchema.parse({
+      scene: {},
+      facts: Array.from({ length: 8 }, () => ({
+        kind: 'canon',
+        subject: '钥匙',
+        predicate: '位置',
+        value: '仓库',
+        text: narrative,
+        evidence: [{ source: 'assistant', quote: narrative }],
+      })),
+    });
+    queueNarration(narrative).mockResolvedValueOnce(JSON.stringify(extraction));
+    const run = vi.fn(
+      async (_model: unknown, _request: unknown, options: { signal: AbortSignal }) => {
+        entered.resolve();
+        return new Promise((_resolve, reject) =>
+          options.signal.addEventListener('abort', () => reject(options.signal.reason), {
+            once: true,
+          }),
+        );
+      },
+    );
+    setJudge(guarded.env, run);
+    const workflow = new GenerationWorkflow({} as ExecutionContext, guarded.env).run(
+      { payload: params } as never,
+      guarded.step,
+    );
+    const rejected = expect(workflow).rejects.toThrow('任务已取消');
+    await entered.promise;
+    await store.run(
+      "UPDATE tasks SET status='cancelled',cancel_epoch=cancel_epoch+1 WHERE id=?",
+      params.taskId,
+    );
+    await vi.advanceTimersByTimeAsync(1001);
+    await rejected;
+    expect(run).toHaveBeenCalledTimes(4);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(
+      await store.one('SELECT status,draft_text FROM tasks WHERE id=?', params.taskId),
+    ).toEqual({ status: 'cancelled', draft_text: narrative });
+    expect(guarded.objects.has(`tasks/${store.ownerId}/task/1/decision.json`)).toBe(false);
+    expect((await store.getBranch(branchId)).headSeq).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it('claims an outbox once before concurrent dispatchers can create a Workflow', async () => {
     const params = await generation(),
       entered = deferred<void>(),

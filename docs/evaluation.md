@@ -16,7 +16,7 @@ npm run eval -- --output /absolute/path/to/evaluation-report.json
 
 报告包含正向问题 recall@5 和 MRR@5、全部正反问题通过率、越界结果数、token/来源违规数、真实执行 p50/p95/max 延迟、降级查询数及逐类别/逐题结果。延迟包含 recall 与原文回读校验，在本机 SQLite 上测得，不能外推 Cloudflare 网络/托管延迟。身份、分支和删除测试会故意注入越界或过期向量候选 ID，但向量排序输入是测试提供的；不代表真实 embedding/Vectorize 服务的语义质量。
 
-LLM 抽取 precision/recall、摘要事实保真度、开放问答正确率都明确为 `not-run` / null。没有调用模型，不填伪造分数。后续配置模型后，应在同一段原始剧情上运行实际抽取器，与独立人工 gold facts/quotes/grants 比对，记录模型版本、提示版本、成本和取消重试策略；开放问答需另有答案 gold 和人工盲评。当前回放不测情节好坏、自然语言推理质量、托管延迟或真实生产长会话成本。
+本节本地回放的 LLM 抽取 precision/recall、摘要事实保真度、开放问答正确率都明确为 `not-run` / null。它没有调用模型，不填伪造分数；实际模型结果见下文独立评测。开放问答需另有答案 gold 和人工盲评。当前回放不测情节好坏、自然语言推理质量、托管延迟或真实生产长会话成本。
 
 任何题不通过、出现越界、来源不一致或超预算，CLI 返回非零退出码。失败题始终列出，不通过修改 gold 来掩盖行为回归。
 
@@ -38,7 +38,9 @@ npm run eval:live -- --run --full --max-model-calls=513 --output /absolute/path/
 
 三方案使用同一有效原文及作用域：近期原文仅保留最近 16 条；摘要由真实模型压缩并验证来源；混合方案使用真实 Store 词法、关系和时间召回。注入的旧向量 ID 仅测后验权限过滤，不能算 Vectorize 语义召回质量。答案以归一化的中文 gold 片段严格匹配，报告同时记录未知回答、泄密、纠正、引用有效性及延迟；严格字符串通过率不能当成人工语义盲评。候选抽取仍来自人工 gold，因此抽取 precision/recall 继续为空。
 
-早期失败记录保存在 [10 月 5 日运行](live-evaluation-failed-2026-10-05.json) 和 [10 月 7 日运行](live-evaluation-failed-2026-10-07.json)，8 题试跑保存在 [小规模对照](live-evaluation-pilot-report.json)。完整 128 题对照仍在运行，最终必须检查报告 status、每个策略的已尝试题数、有效回答数和请求失败数。计分将请求失败纳入分母，不能只报告成功请求的正确率。
+早期失败记录保存在 [10 月 5 日运行](live-evaluation-failed-2026-10-05.json) 和 [10 月 7 日运行](live-evaluation-failed-2026-10-07.json)，8 题试跑保存在 [小规模对照](live-evaluation-pilot-report.json)。[完整 128 题报告](live-evaluation-report.json) status 为 complete：433 次模型调用，包括 384 份回答、48 份摘要和一次连接探针。三组各尝试 128 题，无 HTTP 失败；严格通过分别为近期原文 58、摘要 100、混合记忆 109。计分将请求失败纳入分母，不能只报告成功请求的正确率。
+
+混合方案 80 个正向召回问题均命中 gold，88 个预设事实片段均精确匹配，但 unknown 标志及严格答案规则仍造成 19 道失败。三个方案各 24 道真正角色／片段隔离问题均未命中泄露片段；摘要另有 2/80 个历史旧值禁止片段命中，该指标不称角色泄密。引用 ID 的活动性及授权有效率与语义证据支持分开，后者未人工评估，保持 null。追加汇总修正保留原始结果、摘要、journal 和固定 gold 哈希，未重写模型答案或 gold。
 
 另有 [Workers AI 云端 smoke 记录](cloud-smoke-workers-ai-report.json)：实际叙事提交、后台抽取/观察、Vectorize 索引及再次召回均完成。它验证托管链运行，不提供质量门槛或故障恢复成功率。
 
@@ -57,6 +59,14 @@ npm run eval:quality -- --run --vector-only --max-embedding-calls=80 --output do
 
 `modelCalls` 表示进入调用函数的尝试数，不保证提供方实际执行或收费。`returnedModelResponses` 与 usage 数另列；全无模型输出的传输失败不计算语义 precision/recall。失败响应、截断及修复记录保留，不通过修改 gold 来掩盖问题。[原始抽取基线](model-quality-baseline-report.json) 与 [复杂 schema 传输失败](model-quality-schema-failure-report.json) 均独立存档。
 
-Qwen 的简单摘要／问答 schema 已有成功记录，复杂抽取 schema 曾在提供方返回正文前失败，因此只对这一模型的复杂抽取显式选择提示约束协议，并继续服务端 JSON、来源、归属和规则校验，不把截断片段作为有效结果。其他请求保留原生 schema。协议选择依据本次实测；[Cloudflare JSON Mode 文档](https://developers.cloudflare.com/workers-ai/features/json-mode/) 也要求应用处理 schema 无法满足的错误。
+Qwen 的简单摘要／问答 schema 已有成功记录；Qwen 与 Llama70B 的复杂抽取 schema 均曾在提供方返回正文前失败，因此只对这两个明确模型的复杂抽取显式选择提示约束协议，省略提供方 `response_format`，继续服务端 JSON、来源、归属和规则校验，不把截断片段作为有效结果。其他请求保留原生 schema。[Llama 原生 schema 失败](extraction-llama-probe-report.json) 为 1 次调用尝试、0 正文、0 usage，不计算模型语义质量。
+
+[Qwen 20 例提示协议报告](model-quality-qwen-prompt-report.json) 保留旧版本完整比较：29 次调用均返回正文和 usage，17 例接受、3 例来源／结构校验失败；固定原子事实命中 2/13（15.38%）。事实预测 TP 2、FP 0、未判定 7，完整 precision 为 null，不能用已判定预测的 100% 宣称达到 ≥95%。独立安全审计包括 episode，发现 q04 同一案例的 3 条已接受候选把未听见告知的丙列为知情者；本评测 API 不提交剧情记忆，这些记录属于授权风险候选。原始候选及引用逐条保存，不能因 episode 未计原子 precision 而省略风险。
+
+[最新抽取报告](model-quality-report.json) 冻结为 `partial`。部署版本 `cce6fae6-fff0-40b9-85e4-c714a13870e3` 已应用 `source-proof-v1` 与 `0004_knowledge_channels`，`knownBy` 仅作为 hint，实际知情授权须有 `knowledge` 原文 proof。统一叙事仍为 Qwen，评测请求固定辅助模型 `@cf/meta/llama-3.3-70b-instruct-fp8-fast`、`decisionModel=''`，不修改 owner 设置；Clef 独立评测不混入此次抽取质量。
+
+[Llama 提示协议探针](extraction-llama-prompt-probe-report.json) 在 18:10 CST 完成 q01：1 次调用、1 份正文、1 项 usage，事实 TP 1、FP 0、未判定 1，完整 precision 与 95% 门槛均为 null。实际 usage 为输入 1,486、输出 150、总计 1,636 tokens，提供方返回 70.348953 neurons；没有读取美元账单。抽取处理耗时 5.199 秒。q01 的已尝试事实命中 1/1，仅表示单例结果；其余 19 例从未启动，系统 turn abort 后恢复时临时凭证已于 18:26 CST 过期，停止追加调用。完整 20 例质量、新版 q04 授权修复效果及其他知情案例均尚未实测，不得把单例零冲突当作全部安全验收通过。
+
+[0 次调用的连接失败](extraction-llama-prompt-network-failure-report.json) 独立保留，失败发生在模型调用前。报告区分可审查正文的条件语义统计、全部已尝试案例的端到端召回，以及尚未尝试的固定案例；原始输出、gold 和 usage 不因补充部署信息或汇总而改变。
 
 [真实向量报告](vector-quality-report.json) 使用 `@cf/baai/bge-m3` 的 1024 维 embedding 和实际 Vectorize：20 个正向问题的向量 Recall@10 与混合 Recall@10 均为 100%；3 个秘密／删除／跨分支反向用例全部阻止非法展开，禁止结果为 0。删除用例先确认旧向量实际可读，再删除来源并观察旧索引命中被 D1 拒绝。语料只有 20 个固定事实、8 个干扰条目和 2 个权限条目；该结果满足这组小规模用例的 ≥90% 门槛，不能外推大型语料质量。
