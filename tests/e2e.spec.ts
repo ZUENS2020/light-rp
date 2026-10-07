@@ -304,7 +304,8 @@ test('多角色故事流式生成、续聊、作者版本、分支隔离和全�
     animations: 'disabled',
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole('button', { name: '收起检查器', exact: true }).click();
+  await expect(page.locator('.inspector')).not.toBeVisible();
+  await expect(page.getByRole('button', { name: '打开检查器', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -762,4 +763,157 @@ test('玩家身份在新故事设定，编辑后跨会话沿用并保留分叉�
   const context = await json(request, 'get', `/branches/${branchId}/context`);
   expect(context.messages[0].content).toContain('特雷森学园训练员');
   expect(context.messages[0].content).toContain('严格模式');
+});
+
+test('长聊天首次到底、流式跟随和向上阅读不被打断，消息来源与历史页明确', async ({
+  page,
+  request,
+}, info) => {
+  // Control incoming content to interleave large chunks with actual wheel/keyboard input.
+  // Other cases exercise the real Worker SSE; this case isolates viewport behaviour.
+  const world = await json(request, 'post', '/worlds', { name: unique() });
+  const story = await json(request, 'post', '/stories', { worldId: world.id, title: unique() });
+  const branch = (await json(request, 'get', `/stories/${story.id}/branches`))[0];
+  const original = await json(request, 'get', `/branches/${branch.id}`);
+  const sessionId = original.sessions[0].id;
+  const taskId = 'ui-scroll-task';
+  const makeEvents = (start: number) =>
+    Array.from({ length: 24 }, (_, i) => ({
+      id: `scroll-${start + i}`,
+      seq: start + i,
+      sessionId,
+      role: i === 2 ? 'correction' : i % 2 === 0 ? 'user' : 'assistant',
+      text:
+        i === 2
+          ? '作者确认：这里是一座临海小城。'
+          : i % 2 === 0
+            ? `我留意街角第 ${i + 1} 盏灯，停下来听听风声。`
+            : `第 ${i + 1} 幕。街道尽头的灯光慢慢亮起来，路边的人收起雨伞，继续向前走。\n\n她回过头，等着你的下一句话。`,
+    }));
+  await page.route(`**/api/v3/branches/${branch.id}*`, async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+    await route.fulfill({
+      json: {
+        ...original,
+        branch: {
+          ...original.branch,
+          headSeq: 2024,
+          scene: { playerProfile: { name: '林', identity: '训练员' } },
+        },
+        events: makeEvents(before ? 1 : 2001),
+        eventsBeforeSeq: before ? Number(before) : null,
+        hasEarlierEvents: !before,
+      },
+    });
+  });
+  await page.route(`**/api/v3/tasks/${taskId}`, (route) =>
+    route.fulfill({ json: { id: taskId, status: 'running', attempt: 1 } }),
+  );
+  await page.addInitScript(
+    ({ storyId, branchId, taskId }) => {
+      localStorage.setItem('lightrp.story', storyId);
+      localStorage.setItem(`lightrp.branch.${storyId}`, branchId);
+      localStorage.setItem(`lightrp.task.${branchId}`, taskId);
+      const sources: EventTarget[] = [];
+      class ControlledSource extends EventTarget {
+        constructor(_url: string | URL) {
+          super();
+          sources.push(this);
+        }
+        close() {
+          const at = sources.indexOf(this);
+          if (at >= 0) sources.splice(at, 1);
+        }
+      }
+      window.EventSource = ControlledSource as unknown as typeof EventSource;
+      (window as any).pushStoryChunk = (kind: string, value: unknown) => {
+        sources.forEach((source) =>
+          source.dispatchEvent(new MessageEvent(kind, { data: JSON.stringify(value) })),
+        );
+      };
+    },
+    { storyId: story.id, branchId: branch.id, taskId },
+  );
+  await page.goto('/');
+  const viewport = page.getByLabel('故事正文', { exact: true });
+  const distance = () =>
+    viewport.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight);
+  const push = (text: string) =>
+    page.evaluate((text) => (window as any).pushStoryChunk('delta', { attempt: 1, text }), text);
+  await expect(
+    page.locator('.story-event[data-sender="player"]').first().locator('strong'),
+  ).toHaveText('你');
+  await expect(page.locator('.story-event[data-sender="player"]').first()).toContainText('林');
+  await expect(page.locator('.story-event[data-sender="ai"]').first().locator('strong')).toHaveText(
+    'AI 叙事',
+  );
+  await expect(page.locator('.story-event[data-sender="author"]').locator('strong')).toHaveText(
+    '作者纠正',
+  );
+  const playerBox = await page.locator('.story-event[data-sender="player"]').first().boundingBox();
+  const aiBox = await page.locator('.story-event[data-sender="ai"]').first().boundingBox();
+  expect(playerBox!.x).toBeGreaterThan(aiBox!.x + 20);
+  await expect.poll(distance).toBeLessThan(2);
+  const toolbarY = (await page.locator('.story-toolbar').boundingBox())!.y;
+  await push('她看向街灯，慢慢讲起那段旧事。\n'.repeat(60));
+  await expect(page.locator('.live-event .prose')).toContainText('旧事');
+  await expect.poll(distance).toBeLessThan(2);
+  await viewport.hover();
+  await page.mouse.wheel(0, -650);
+  await expect(page.getByRole('button', { name: '回到最新', exact: true })).toBeVisible();
+  const readingTop = await viewport.evaluate((node) => node.scrollTop);
+  await push('路上的人渐渐散去，风吹过空荡的台阶。\n'.repeat(45));
+  await expect(
+    page.getByRole('button', { name: '有新内容 · 回到最新', exact: true }),
+  ).toBeVisible();
+  await expect.poll(() => viewport.evaluate((node) => node.scrollTop)).toBeCloseTo(readingTop, 0);
+  // The ordinary 5s snapshot refresh must also preserve the reader's position.
+  await page.waitForResponse((r) => new URL(r.url()).pathname === `/api/v3/branches/${branch.id}`);
+  expect(await viewport.evaluate((node) => node.scrollTop)).toBeCloseTo(readingTop, 0);
+  await page.getByRole('button', { name: '有新内容 · 回到最新', exact: true }).click();
+  await expect.poll(distance).toBeLessThan(2);
+  await push('她停了停，等你继续。\n'.repeat(35));
+  await expect.poll(distance).toBeLessThan(2);
+  expect((await page.locator('.story-toolbar').boundingBox())!.y).toBe(toolbarY);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  // Keyboard navigation and changing width behave like wheel scrolling.
+  await viewport.focus();
+  await page.keyboard.press('Home');
+  await expect(page.getByRole('button', { name: '回到最新', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '查看更早正文', exact: true }).click();
+  await expect(page.getByRole('button', { name: '返回最新剧情', exact: true })).toBeVisible();
+  await expect.poll(() => viewport.evaluate((node) => node.scrollTop)).toBeLessThan(2);
+  await page.screenshot({
+    path: info.outputPath('chat-senders-desktop.png'),
+    animations: 'disabled',
+  });
+  await page.getByRole('button', { name: '返回最新剧情', exact: true }).click();
+  await expect.poll(distance).toBeLessThan(2);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('.inspector')).not.toBeVisible();
+  await expect(page.getByRole('button', { name: '打开检查器', exact: true })).toBeVisible();
+  await expect.poll(distance).toBeLessThan(2);
+  expect(await viewport.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await viewport.focus();
+  await page.keyboard.press('Home');
+  await expect.poll(() => viewport.evaluate((node) => node.scrollTop)).toBeLessThan(2);
+  await page.screenshot({
+    path: info.outputPath('chat-senders-mobile.png'),
+    animations: 'disabled',
+  });
+  await page.getByRole('button', { name: '回到最新', exact: true }).click();
+  await page.evaluate(() =>
+    (window as any).pushStoryChunk('terminal', {
+      status: 'failed',
+      error: { message: '测试草稿尚未提交' },
+      draftText: '保存的草稿第一段。'.repeat(500),
+    }),
+  );
+  await expect(page.getByText('查看保存的草稿', { exact: true })).toBeVisible();
+  await expect.poll(distance).toBeLessThan(2);
+  const draftTop = await viewport.evaluate((node) => node.scrollTop);
+  await page.getByText('查看保存的草稿', { exact: true }).click();
+  await expect.poll(distance).toBeGreaterThan(1000);
+  expect(await viewport.evaluate((node) => node.scrollTop)).toBeCloseTo(draftTop, 0);
 });

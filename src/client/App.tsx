@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import Assets, { characterData, characterName } from './Assets';
 import Settings from './Settings';
+import Transcript, { SenderLabel, senderKind } from './Transcript';
 import {
   ContextModal,
   EvidenceModal,
@@ -121,7 +122,9 @@ export default function App() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<{ message: string; error: boolean } | null>(null);
   const [sidebar, setSidebar] = useState(false);
-  const [inspector, setInspector] = useState(true);
+  const [inspector, setInspector] = useState(
+    () => window.matchMedia('(min-width: 1101px)').matches,
+  );
   const [modal, setModal] = useState<string | null>(null);
   const [evidence, setEvidence] = useState<Data | null>(null);
   const [context, setContext] = useState<Data | null>(null);
@@ -143,8 +146,7 @@ export default function App() {
   } | null>(null);
   const notifyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadToken = useRef(0);
-  const bottom = useRef<HTMLDivElement>(null);
-  const transcript = useRef<HTMLDivElement>(null);
+  const [followRequest, setFollowRequest] = useState(0);
   const branchRef = useRef(branchId);
   const historyBefore = useRef<number | undefined>(undefined);
   branchRef.current = branchId;
@@ -156,10 +158,9 @@ export default function App() {
   );
   const isRunning = sending || (!!task && !TERMINAL.has(task.status || 'queued'));
   const demo = bootstrap?.settings.mode === 'local-demo';
-  const playerIdentity =
-    typeof snapshot?.branch.scene === 'object'
-      ? snapshot.branch.scene?.playerProfile?.identity
-      : '';
+  const playerProfile =
+    typeof snapshot?.branch.scene === 'object' ? snapshot.branch.scene?.playerProfile : undefined;
+  const playerIdentity = playerProfile?.identity || '';
 
   const notify = useCallback((message: string, isError = false) => {
     setNotice({ message, error: isError });
@@ -367,10 +368,13 @@ export default function App() {
     setContext(null);
   }, [branchId]);
   useEffect(() => {
-    const node = transcript.current;
-    if (!node || node.scrollHeight - node.scrollTop - node.clientHeight < 220)
-      bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [snapshot?.events.length, task?.draftText]);
+    const narrow = window.matchMedia('(max-width: 1100px)');
+    const closeOverlay = (event: MediaQueryListEvent) => {
+      if (event.matches) setInspector(false);
+    };
+    narrow.addEventListener('change', closeOverlay);
+    return () => narrow.removeEventListener('change', closeOverlay);
+  }, []);
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === ',') {
@@ -419,6 +423,8 @@ export default function App() {
       });
       remember(`input.${target}`, text.trim());
       setInput('');
+      historyBefore.current = undefined;
+      setFollowRequest((value) => value + 1);
       setTask({
         id: result.taskId || result.id,
         status: 'queued',
@@ -826,18 +832,20 @@ export default function App() {
             </div>
             <div className="studio-body">
               <section className="conversation">
-                <div className="transcript" ref={transcript} aria-label="故事正文">
+                <Transcript
+                  scope={`${branchId}:${history ? 'all' : sessionId}:${snapshot?.eventsBeforeSeq ?? 'latest'}`}
+                  ready={!!snapshot}
+                  older={snapshot?.eventsBeforeSeq != null}
+                  revision={`${visibleEvents.at(-1)?.id ?? ''}:${task?.id ?? ''}:${task?.status ?? ''}:${task?.draftText?.length ?? 0}`}
+                  followRequest={followRequest}
+                >
                   {(snapshot?.hasEarlierEvents || snapshot?.eventsBeforeSeq) && (
                     <div className="history-navigation" aria-label="正文历史分页">
                       {snapshot.hasEarlierEvents && (
                         <button
                           onClick={() => {
                             historyBefore.current = snapshot.events[0]?.seq;
-                            void refreshBranch()
-                              .then(() => {
-                                if (transcript.current) transcript.current.scrollTop = 0;
-                              })
-                              .catch((error) => notify(errorText(error), true));
+                            void refreshBranch().catch((error) => notify(errorText(error), true));
                           }}
                         >
                           查看更早正文
@@ -847,9 +855,7 @@ export default function App() {
                         <button
                           onClick={() => {
                             historyBefore.current = undefined;
-                            void refreshBranch()
-                              .then(() => bottom.current?.scrollIntoView({ block: 'end' }))
-                              .catch((error) => notify(errorText(error), true));
+                            void refreshBranch().catch((error) => notify(errorText(error), true));
                           }}
                         >
                           返回最新剧情
@@ -907,25 +913,31 @@ export default function App() {
                       {visibleEvents.map((event) => (
                         <article
                           key={event.id}
-                          className={`story-event ${event.role === 'assistant' || event.role === 'narrator' ? 'narration' : 'user-event'} ${['author', 'correction'].includes(event.role) ? 'author-event' : ''}`}
+                          data-sender={senderKind(event.role)}
+                          className={`story-event ${senderKind(event.role) === 'ai' ? 'narration' : senderKind(event.role) === 'player' ? 'user-event' : senderKind(event.role) === 'author' ? 'author-event' : 'system-event'}`}
                         >
                           <div className="event-meta">
-                            <span>
-                              {event.role === 'assistant' || event.role === 'narrator'
-                                ? '叙事'
-                                : ['author', 'correction'].includes(event.role)
-                                  ? '作者指令'
-                                  : event.actorId || event.speakerId
+                            <SenderLabel
+                              kind={senderKind(event.role)}
+                              name={event.role === 'correction' ? '作者纠正' : undefined}
+                              detail={
+                                senderKind(event.role) === 'player'
+                                  ? (event.actorId || event.speakerId) &&
+                                    bootstrap.assets.some(
+                                      (asset) => asset.id === (event.actorId || event.speakerId),
+                                    )
                                     ? characterName(
                                         bootstrap.assets.find(
                                           (asset) =>
                                             asset.id === (event.actorId || event.speakerId),
                                         ),
                                       )
-                                    : '玩家'}
-                            </span>
+                                    : playerProfile?.name || playerIdentity || '玩家'
+                                  : undefined
+                              }
+                            />
                             <span className="event-seq mono">
-                              {String(event.seq).padStart(3, '0')}
+                              #{String(event.seq).padStart(3, '0')}
                             </span>
                             <div className="event-actions">
                               <button
@@ -977,11 +989,11 @@ export default function App() {
                       {task && !TERMINAL.has(task.status) && (
                         <article className="story-event narration live-event">
                           <div className="event-meta">
-                            <span>
+                            <SenderLabel kind="ai" />
+                            <span className="stream-state">
                               <LoaderCircle size={12} className="spin" />
-                              {task.draftText ? '正在写下这一幕' : '正在准备上下文'}
+                              生成中 · 未提交
                             </span>
-                            <span className="mono">STREAM</span>
                           </div>
                           <div className="prose" aria-live="polite">
                             <p>{task.draftText || '角色、世界与记忆正在进入当前场景…'}</p>
@@ -994,6 +1006,9 @@ export default function App() {
                           {task.draftText && (
                             <details>
                               <summary>查看保存的草稿</summary>
+                              <div className="event-meta">
+                                <SenderLabel kind="ai" detail="草稿 · 未提交" />
+                              </div>
                               <p>{task.draftText}</p>
                             </details>
                           )}
@@ -1018,6 +1033,9 @@ export default function App() {
                           {task.draftText && (
                             <details>
                               <summary>查看保存的草稿</summary>
+                              <div className="event-meta">
+                                <SenderLabel kind="ai" detail="草稿 · 未提交" />
+                              </div>
                               <p>{task.draftText}</p>
                             </details>
                           )}
@@ -1025,6 +1043,8 @@ export default function App() {
                             onClick={() =>
                               void run(async () => {
                                 const value = await post(`/tasks/${task.id}/retry`);
+                                historyBefore.current = undefined;
+                                setFollowRequest((value) => value + 1);
                                 setTask({
                                   ...task,
                                   id: value.taskId || value.id || task.id,
@@ -1043,8 +1063,7 @@ export default function App() {
                       )}
                     </>
                   )}
-                  <div ref={bottom} />
-                </div>
+                </Transcript>
                 <div className="composer-wrap">
                   <div className="composer">
                     <div className="composer-controls">
