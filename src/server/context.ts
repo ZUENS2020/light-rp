@@ -13,6 +13,7 @@ import type { ChatMessage } from './model';
 import { ApiError } from './errors';
 import { embed, resolveVectorCandidates } from './vectors';
 import { listEntities, type StoryEntity } from './entities';
+import { renderNarrativePreamble } from '../shared/narrative-preamble';
 export interface TurnInput {
   mode: 'roleplay' | 'author';
   text: string;
@@ -157,7 +158,13 @@ export async function buildContext(
       (c) =>
         `角色 ${c.data.name} 局部后置补充：${render(c.data.postHistoryInstructions, c.data.name)}`,
     );
-  const mandatory = [...core, ...cardBlocks, ...postBlocks].join('\n\n'),
+  const preamble = renderNarrativePreamble(
+    settings.narrativePreamble ?? '',
+    characters.filter((c) => viewer === 'director' || c.id === viewer).map((c) => c.data.name),
+    playerName,
+  );
+  const coreMessage = [preamble, ...core].filter(Boolean).join('\n\n');
+  const mandatory = [coreMessage, ...cardBlocks, ...postBlocks].join('\n\n'),
     fixed = estimateAssetTokens(mandatory) + estimateAssetTokens(input.text);
   if (fixed > budget * 0.8)
     throw new ApiError(
@@ -300,7 +307,7 @@ export async function buildContext(
     tokens: recalledItems.length ? recallTokens : 0,
     truncated: retrieved.truncated || recalledItems.length < retrieved.items.length,
   };
-  const messages: ChatMessage[] = [{ role: 'system', content: core.join('\n\n') }];
+  const messages: ChatMessage[] = [{ role: 'system', content: coreMessage }];
   const addEntries = (position: string) => {
     const selected = worldbookTriggers.activated.filter((e) => e.position === position);
     if (selected.length)

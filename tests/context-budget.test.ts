@@ -5,6 +5,7 @@ import { buildContext, validationRules } from '../src/server/context';
 import { defaults } from '../src/server/settings';
 import { normalizeCharacter, normalizeWorldbook } from '../src/shared/assets';
 import type { Env } from '../src/server/env';
+import { HERMES_RP_PREAMBLE } from '../src/shared/narrative-preamble';
 
 const disposers: Array<() => void> = [];
 afterEach(() => {
@@ -50,6 +51,74 @@ async function fixture() {
   return { store, story, ids };
 }
 describe('shared optional narrative context budget', () => {
+  it('prepends the Hermes layer without promoting its identity claims to world rules', async () => {
+    const { store, story } = await fixture();
+    const config = { ...defaults('local-demo'), systemPrompt: '世界中不可复活。' };
+    const snapshot = await buildContext(
+      {} as Env,
+      store,
+      story.branchId,
+      { mode: 'roleplay', text: '到北门集合。' },
+      config,
+      'preamble',
+    );
+    const first = snapshot.messages[0]!.content;
+    expect(first.startsWith('<task_overview')).toBe(true);
+    expect(first.indexOf('[Override Request]')).toBeLessThan(first.indexOf(config.systemPrompt));
+    expect(first).toContain('["角色a","角色b","角色c","角色d"]');
+    expect(first).not.toContain('{{cast}}');
+    expect(first).toContain('只把角色各自的知情块作为角色已知信息');
+    expect(JSON.stringify(validationRules(snapshot))).not.toContain('ANLAN');
+    expect(validationRules(snapshot).find((r) => r.id === 'global:story')?.text).toBe(
+      config.systemPrompt,
+    );
+  });
+
+  it('honors clearing and renders only the requested character in a scoped view', async () => {
+    const { store, story } = await fixture();
+    const config = defaults('local-demo');
+    const cleared = await buildContext(
+      {} as Env,
+      store,
+      story.branchId,
+      { mode: 'roleplay', text: '到北门集合。' },
+      { ...config, narrativePreamble: '' },
+      'cleared',
+    );
+    expect(cleared.messages[0]!.content.startsWith(config.systemPrompt)).toBe(true);
+    expect(cleared.messages[0]!.content).not.toContain('ANLAN');
+    const scoped = await buildContext(
+      {} as Env,
+      store,
+      story.branchId,
+      { mode: 'roleplay', text: '到北门集合。' },
+      { ...config, narrativePreamble: HERMES_RP_PREAMBLE },
+      'scoped',
+      'a',
+    );
+    expect(scoped.messages[0]!.content).toContain('["角色a"]');
+    expect(scoped.messages[0]!.content).not.toContain('角色b');
+  });
+
+  it('rejects oversized preambles instead of dropping the requested layer', async () => {
+    const { store, story } = await fixture();
+    await expect(
+      buildContext(
+        {} as Env,
+        store,
+        story.branchId,
+        { mode: 'author', text: '继续。' },
+        {
+          ...defaults('local-demo'),
+          contextWindow: 8192,
+          maxOutput: 2048,
+          narrativePreamble: '前置规则'.repeat(3000),
+        },
+        'oversized-preamble',
+      ),
+    ).rejects.toMatchObject({ code: 'PINNED_BUDGET' });
+  });
+
   it('freezes bound hard rules including unfocused cards and only the activated worldbook entries', async () => {
     const { store, story, ids } = await fixture();
     const data = normalizeWorldbook({

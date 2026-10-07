@@ -3,6 +3,7 @@ import { PlugZap, Save, Settings2 } from 'lucide-react';
 import { api, errorText } from './api';
 import type { Settings as Config } from './types';
 import { Field } from './ui';
+import { HERMES_RP_PREAMBLE } from '../shared/narrative-preamble';
 
 export default function Settings({
   settings,
@@ -201,6 +202,34 @@ export default function Settings({
                 onChange={(event) => change({ maxOutput: Number(event.target.value) })}
               />
             </Field>
+          </div>
+          <Field
+            label="叙事前置层"
+            hint="位于角色卡和故事上下文之前。{{cast}} 表示当前角色集合，{{user}} 表示玩家；留空即可关闭。"
+          >
+            <textarea
+              className="system-prompt"
+              value={form.narrativePreamble || ''}
+              maxLength={20000}
+              onChange={(event) => change({ narrativePreamble: event.target.value })}
+              placeholder="Hermes RP 前置段或自定义开场指令…"
+            />
+          </Field>
+          <div className="form-grid">
+            <button
+              type="button"
+              onClick={() => change({ narrativePreamble: HERMES_RP_PREAMBLE })}
+              disabled={busy || probing}
+            >
+              载入 Hermes 头部
+            </button>
+            <button
+              type="button"
+              onClick={() => change({ narrativePreamble: '' })}
+              disabled={busy || probing}
+            >
+              清空前置层
+            </button>
           </div>
           <Field label="叙事指引" hint="作者指引与角色对白分开处理。角色经历不会修改系统授权。">
             <textarea

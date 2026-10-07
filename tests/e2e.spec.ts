@@ -453,6 +453,53 @@ test('模型连接测试使用当前未保存配置，演示模式明确不验�
   await expect(page.getByRole('status')).toContainText('未调用远程模型');
 });
 
+test('Hermes 前置层可编辑、保存、明确清空，并用于实际上下文', async ({ page, request }, info) => {
+  const original = await json(request, 'get', '/settings');
+  try {
+    await page.goto('/');
+    await page.getByRole('button', { name: '模型设置', exact: true }).click();
+    await page.getByRole('button', { name: '载入 Hermes 头部', exact: true }).click();
+    await expect(page.getByLabel('叙事前置层', { exact: true })).toHaveValue(/ANLAN/);
+    const custom = '沉浸叙事前置段：当前角色 {{cast}}，保持各自认知。';
+    await page.getByLabel('叙事前置层', { exact: true }).fill(custom);
+    await page.getByRole('button', { name: '保存配置', exact: true }).click();
+    await expect(page.getByRole('status')).toContainText('模型配置已保存');
+    expect((await json(request, 'get', '/settings')).narrativePreamble).toBe(custom);
+    const boot = await json(request, 'get', '/bootstrap');
+    const card = await json(request, 'post', '/assets', {
+      kind: 'character',
+      data: { name: `${unique()}前置层角色`, description: '谨慎的守卫' },
+    });
+    const story = await json(request, 'post', '/stories', {
+      worldId: boot.worlds[0].id,
+      characterIds: [card.id],
+      title: unique(),
+    });
+    const context = await json(request, 'get', `/branches/${story.branchId}/context?query=集合`);
+    expect(context.messages[0].content).toContain('沉浸叙事前置段：当前角色');
+    expect(context.messages[0].content).toContain(card.name);
+    expect(context.messages[0].content).not.toContain('{{cast}}');
+    await page.getByRole('button', { name: '清空前置层', exact: true }).click();
+    await page.getByRole('button', { name: '保存配置', exact: true }).click();
+    await expect
+      .poll(async () => (await json(request, 'get', '/settings')).narrativePreamble)
+      .toBe('');
+    await page.reload();
+    await page.getByRole('button', { name: '模型设置', exact: true }).click();
+    await expect(page.getByLabel('叙事前置层', { exact: true })).toHaveValue('');
+    const cleared = await json(request, 'get', `/branches/${story.branchId}/context?query=集合`);
+    expect(cleared.messages[0].content).not.toContain('沉浸叙事前置段：');
+    await page.getByRole('button', { name: '载入 Hermes 头部', exact: true }).click();
+    await page.screenshot({
+      path: info.outputPath('hermes-preamble-settings.png'),
+      fullPage: true,
+      animations: 'disabled',
+    });
+  } finally {
+    await json(request, 'put', '/settings', original);
+  }
+});
+
 test('角色设定能力可编辑和明确清空，PNG 与未知扩展完整保留', async ({ page, request }) => {
   const name = `${unique()}能力角色`;
   const card: JsonObject = {
