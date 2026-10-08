@@ -130,6 +130,8 @@ export default function App() {
   const [context, setContext] = useState<Data | null>(null);
   const [contextQuery, setContextQuery] = useState('');
   const [contextTaskId, setContextTaskId] = useState('preview');
+  const contextRequest = useRef(0);
+  const [contextBusy, setContextBusy] = useState(false);
   const [observer, setObserver] = useState('director');
   const [input, setInput] = useState('');
   const [mode, setMode] = useState<'roleplay' | 'author'>('roleplay');
@@ -364,6 +366,8 @@ export default function App() {
     };
   }, [task?.id, task?.restartKey, branchId, refreshBranch, notify]);
   useEffect(() => {
+    contextRequest.current++;
+    setContextBusy(false);
     setContextTaskId('preview');
     setContext(null);
   }, [branchId]);
@@ -503,7 +507,8 @@ export default function App() {
   }
   async function loadContext(query = contextQuery, selected = contextTaskId) {
     if (!branchId) return;
-    setActionBusy(true);
+    const request = ++contextRequest.current;
+    setContextBusy(true);
     try {
       const result = await api(
         selected === 'preview'
@@ -517,12 +522,13 @@ export default function App() {
           result.decisionAuditError = errorText(error);
         }
       }
+      if (request !== contextRequest.current) return;
       setContext(result);
       setContextTaskId(selected);
     } catch (error) {
-      notify(errorText(error), true);
+      if (request === contextRequest.current) notify(errorText(error), true);
     } finally {
-      setActionBusy(false);
+      if (request === contextRequest.current) setContextBusy(false);
     }
   }
   function selectStory(id: string) {
@@ -1208,6 +1214,17 @@ export default function App() {
                       notify(status === 'active' ? '经验已启用' : '经验已停用');
                     })
                   }
+                  onArchiveRebuild={(item) =>
+                    void run(async () => {
+                      await post(`/branches/${branchId}/archive/rebuild`, {
+                        memoryId: item.id,
+                        commandId: crypto.randomUUID(),
+                        expectedHead: snapshot?.branch.headSeq,
+                      });
+                      await refreshBranch();
+                      notify('局部归档重建已排队');
+                    })
+                  }
                   onRebuild={() =>
                     void run(async () => {
                       if (!snapshot) return;
@@ -1421,13 +1438,19 @@ export default function App() {
           setQuery={setContextQuery}
           observer={observer}
           setObserver={setObserver}
-          busy={actionBusy}
+          busy={contextBusy}
           reload={() => void loadContext()}
           onEvidence={(item) => {
+            contextRequest.current++;
+            setContextBusy(false);
             setContext(null);
             setEvidence({ ...item, branchId });
           }}
-          onClose={() => setContext(null)}
+          onClose={() => {
+            contextRequest.current++;
+            setContextBusy(false);
+            setContext(null);
+          }}
         />
       )}
       {correction && (
@@ -1483,6 +1506,7 @@ function Inspector({
   onStatus,
   onRetry,
   onRebuild,
+  onArchiveRebuild,
   onClose,
 }: {
   snapshot: Snapshot | null;
@@ -1496,10 +1520,108 @@ function Inspector({
   onStatus: (value: Data, status: string) => void;
   onRetry: (value: Data) => void;
   onRebuild: () => void;
+  onArchiveRebuild: (item: Data) => void;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState('memory');
   const [actor, setActor] = useState('all');
+  const [paged, setPaged] = useState<Data[]>([]);
+  const [after, setAfter] = useState(0);
+  const [exhausted, setExhausted] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [pageError, setPageError] = useState('');
+  const pageGeneration = useRef(0);
+  const selectedBranch = snapshot?.branch.id;
+  const loadPage = async (cursor = 0) => {
+    if (!selectedBranch || !['threads', 'archive'].includes(tab)) return;
+    const generation = pageGeneration.current;
+    setLoading(true);
+    setPageError('');
+    try {
+      const p = await api<Data>(
+        `/branches/${selectedBranch}/${tab}?after=${cursor}&observer=${encodeURIComponent(actor === 'all' ? 'director' : actor)}`,
+      );
+      if (generation !== pageGeneration.current) return;
+      const rows = asList<Data>(p.items).map((m) =>
+        tab === 'threads'
+          ? {
+              ...m,
+              id: m.revisionId,
+              threadId: m.id,
+              recordType: 'plot-thread',
+              threadState: m.state,
+              subject: m.viewer,
+              kind: 'observation',
+              text: m.text || m.title,
+            }
+          : { ...m.data, ...m },
+      );
+      setPaged((old) => (cursor ? [...old, ...rows] : rows));
+      setAfter(p.after);
+      setExhausted(p.exhausted);
+    } catch (error) {
+      if (generation === pageGeneration.current) setPageError(errorText(error));
+    } finally {
+      if (generation === pageGeneration.current) setLoading(false);
+    }
+  };
+  const pageRefresh = useRef<number | null>(null);
+  const requestedPageRevision = useRef('');
+  useEffect(() => {
+    pageGeneration.current++;
+    setPaged([]);
+    setAfter(0);
+    setExhausted(false);
+    return () => {
+      pageGeneration.current++;
+    };
+  }, [selectedBranch, tab, actor]);
+  useEffect(() => {
+    if (!selectedBranch || !['threads', 'archive'].includes(tab)) return;
+    const generation = pageGeneration.current;
+    requestedPageRevision.current = `${snapshot?.branch.headSeq}:${snapshot?.branch.projectionRevision}`;
+    // Coalesce projection updates while a read is pending. Do not discard every
+    // response and clear the list during a busy background extraction.
+    if (pageRefresh.current === generation) return;
+    pageRefresh.current = generation;
+    setLoading(true);
+    setPageError('');
+    void (async () => {
+      try {
+        for (;;) {
+          const revision = requestedPageRevision.current;
+          const p = await api<Data>(
+            `/branches/${selectedBranch}/${tab}?observer=${encodeURIComponent(actor === 'all' ? 'director' : actor)}`,
+          );
+          if (generation !== pageGeneration.current) return;
+          setPaged(
+            asList<Data>(p.items).map((m) =>
+              tab === 'threads'
+                ? {
+                    ...m,
+                    id: m.revisionId,
+                    threadId: m.id,
+                    recordType: 'plot-thread',
+                    threadState: m.state,
+                    subject: m.viewer,
+                    kind: 'observation',
+                    text: m.text || m.title,
+                  }
+                : { ...m.data, ...m },
+            ),
+          );
+          setAfter(p.after);
+          setExhausted(p.exhausted);
+          if (requestedPageRevision.current === revision) break;
+        }
+      } catch (e) {
+        if (generation === pageGeneration.current) setPageError(errorText(e));
+      } finally {
+        if (pageRefresh.current === generation) pageRefresh.current = null;
+        if (generation === pageGeneration.current) setLoading(false);
+      }
+    })();
+  }, [selectedBranch, tab, actor, snapshot?.branch.headSeq, snapshot?.branch.projectionRevision]);
   const ownerName = (id?: string) => {
     if (!id) return '世界';
     const asset = assets.find((a) => a.id === id);
@@ -1508,6 +1630,8 @@ function Inspector({
   const tabs = [
     { id: 'memory', label: '记忆' },
     { id: 'relations', label: '关系' },
+    { id: 'threads', label: '剧情线' },
+    { id: 'archive', label: '归档' },
     { id: 'experience', label: '经历' },
     { id: 'skills', label: '经验' },
     { id: 'jobs', label: '任务' },
@@ -1534,6 +1658,7 @@ function Inspector({
             : tab === 'skills'
               ? snapshot.procedures
               : snapshot.jobs;
+  if (['threads', 'archive'].includes(tab)) records = paged;
   records = records.filter(
     (item) =>
       actor === 'all' ||
@@ -1629,6 +1754,12 @@ function Inspector({
         )}
       </div>
       <div className="inspector-records">
+        {['threads', 'archive'].includes(tab) && snapshot?.policy?.status === 'building' && (
+          <p className="status-note" role="status">
+            正在整理历史，完成后启用新记忆。期间继续使用现有记忆；失败原因及重试入口见“任务”。
+          </p>
+        )}
+        {tab === 'archive' && records.length > 0 && <ArchiveTree items={records} />}
         {!records.length && (
           <div className="inspector-empty">
             <FileText size={23} strokeWidth={1.2} />
@@ -1680,6 +1811,41 @@ function Inspector({
                 ? textOf(item).replaceAll(item.subject, ownerName(item.subject))
                 : textOf(item)}
             </p>
+            {tab === 'threads' && (
+              <p className="quiet">
+                {
+                  {
+                    open: '未完成',
+                    progressing: '进行中',
+                    blocked: '受阻',
+                    resolved: '已解决',
+                    abandoned: '已放弃',
+                  }[item.threadState as 'open']
+                }{' '}
+                · 完成条件：{item.completion}
+              </p>
+            )}
+            {tab === 'archive' && (
+              <details>
+                <summary>
+                  {
+                    { segment: '局部片段', scene: '场景', arc: '剧情段', chapter: '章节' }[
+                      item.level as 'scene'
+                    ]
+                  }{' '}
+                  · 事件 {item.startSeq}–{item.endSeq}
+                  {item.technical ? ' · 场景内分片' : ''}
+                </summary>
+                <p className="quiet">
+                  子归档 {item.children?.length || 0} · 状态引用 {item.references?.length || 0}
+                </p>
+                {item.children?.map((id: string) => (
+                  <p key={id} className="quiet">
+                    {id}
+                  </p>
+                ))}
+              </details>
+            )}
             {tab === 'skills' && (
               <>
                 <ProcedureExplanation item={item} />
@@ -1718,10 +1884,18 @@ function Inspector({
                 <FileText size={12} />
                 来源
               </button>
-              {['memory', 'relations'].includes(tab) && (
+              {['memory', 'relations', 'threads'].includes(tab) && (
                 <>
                   <button
-                    disabled={['invalidated', 'forgotten', 'retired'].includes(item.status)}
+                    disabled={
+                      ['invalidated', 'forgotten', 'retired'].includes(item.status) ||
+                      (tab === 'threads' && item.subject !== 'director')
+                    }
+                    title={
+                      tab === 'threads' && item.subject !== 'director'
+                        ? '角色视角由获知证据维护；请切换导演视角调整剧情线'
+                        : undefined
+                    }
                     aria-label={`纠正${item.title || item.name || '记忆'}`}
                     onClick={() => onCorrection(item)}
                   >
@@ -1759,6 +1933,12 @@ function Inspector({
                             : '重新启用'}
                 </button>
               )}
+              {tab === 'archive' && (
+                <button onClick={() => onArchiveRebuild(item)}>
+                  <RotateCcw size={12} />
+                  局部重建
+                </button>
+              )}
               {tab === 'jobs' && item.status === 'failed' && (
                 <button onClick={() => onRetry(item)}>
                   <RotateCcw size={12} />
@@ -1768,56 +1948,86 @@ function Inspector({
             </div>
           </article>
         ))}
-        {tab === 'memory' && !!snapshot?.memories.some((m) => m.kind === 'observation') && (
-          <section className="observations">
-            <details>
-              <summary>
-                自动整理与长期观察 ·{' '}
-                {snapshot.memories.filter((m) => m.kind === 'observation').length}
-              </summary>
-              {snapshot.compression
-                ?.filter((s) => s.scope === 'director:narrative')
-                .map((state) => (
-                  <p className="quiet" key={state.scope}>
-                    {state.current
-                      ? `已整理至事件 ${state.throughSeq}`
-                      : '来源已变化，等待重新整理'}
-                    {state.pendingEvents > 0
-                      ? ` · 待整理 ${state.pendingEvents} 条`
-                      : ' · 已跟上剧情'}
-                    {` · 自动压缩 ${state.reflectionCount ?? 0} 次`}
-                  </p>
-                ))}
-              {snapshot.memories
-                .filter((m) => m.kind === 'observation')
-                .map((item) => (
-                  <article className="observation-record" key={item.id}>
-                    {item.data?.version === 'rolling-v1' && (
-                      <p className="quiet">
-                        {ownerName(item.subject)} ·{' '}
-                        {
-                          (
-                            {
-                              rules: '规则',
-                              facts: '事实历史',
-                              interpretations: '认知与经历',
-                              narrative: '剧情纪要',
-                            } as Data
-                          )[item.data.bucket]
-                        }
-                        {` · ${item.data.outputTokens} token · 已整理至事件 ${item.data.throughSeq}`}
-                      </p>
-                    )}
-                    <p>{item.text}</p>
-                    <button onClick={() => onEvidence(item)}>
-                      <FileText size={12} />
-                      展开原文证据
-                    </button>
-                  </article>
-                ))}
-            </details>
-          </section>
+        {['threads', 'archive'].includes(tab) && (
+          <>
+            {pageError && <p className="inline-error">{pageError}</p>}
+            {loading ? (
+              <p className="quiet">加载中…</p>
+            ) : (
+              !exhausted && <button onClick={() => void loadPage(after)}>加载更多</button>
+            )}
+          </>
         )}
+        {tab === 'memory' &&
+          !(snapshot?.policy?.strategy === 'unified-v1' && snapshot.policy.status === 'active') &&
+          !!snapshot?.memories.some((m) => m.kind === 'observation' && !m.recordType) && (
+            <section className="observations">
+              <details>
+                <summary>
+                  自动整理与长期观察 ·{' '}
+                  {
+                    snapshot.memories.filter(
+                      (m) =>
+                        m.kind === 'observation' &&
+                        !m.recordType &&
+                        !(
+                          snapshot.policy?.strategy === 'unified-v1' &&
+                          snapshot.policy.status === 'active'
+                        ),
+                    ).length
+                  }
+                </summary>
+                {snapshot.compression
+                  ?.filter((s) => s.scope === 'director:narrative')
+                  .map((state) => (
+                    <p className="quiet" key={state.scope}>
+                      {state.current
+                        ? `已整理至事件 ${state.throughSeq}`
+                        : '来源已变化，等待重新整理'}
+                      {state.pendingEvents > 0
+                        ? ` · 待整理 ${state.pendingEvents} 条`
+                        : ' · 已跟上剧情'}
+                      {` · 自动压缩 ${state.reflectionCount ?? 0} 次`}
+                    </p>
+                  ))}
+                {snapshot.memories
+                  .filter(
+                    (m) =>
+                      m.kind === 'observation' &&
+                      !m.recordType &&
+                      !(
+                        snapshot.policy?.strategy === 'unified-v1' &&
+                        snapshot.policy.status === 'active'
+                      ),
+                  )
+                  .map((item) => (
+                    <article className="observation-record" key={item.id}>
+                      {item.data?.version === 'rolling-v1' && (
+                        <p className="quiet">
+                          {ownerName(item.subject)} ·{' '}
+                          {
+                            (
+                              {
+                                rules: '规则',
+                                facts: '事实历史',
+                                interpretations: '认知与经历',
+                                narrative: '剧情纪要',
+                              } as Data
+                            )[item.data.bucket]
+                          }
+                          {` · ${item.data.outputTokens} token · 已整理至事件 ${item.data.throughSeq}`}
+                        </p>
+                      )}
+                      <p>{item.text}</p>
+                      <button onClick={() => onEvidence(item)}>
+                        <FileText size={12} />
+                        展开原文证据
+                      </button>
+                    </article>
+                  ))}
+              </details>
+            </section>
+          )}
         {tab === 'skills' && !!snapshot?.capabilities.length && (
           <section className="capabilities">
             <h3>角色能力</h3>
@@ -1850,6 +2060,65 @@ function Inspector({
   );
 }
 
+function ArchiveTree({ items }: { items: Data[] }) {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const childIds = new Set(items.flatMap((item) => asList<string>(item.children)));
+  const levels: Record<string, string> = {
+    segment: '片段',
+    scene: '场景',
+    arc: '剧情段',
+    chapter: '章节',
+  };
+  const render = (item: Data, ancestors: Set<string>) => {
+    if (ancestors.has(item.id)) return null;
+    const next = new Set([...ancestors, item.id]);
+    const children = asList<string>(item.children);
+    return (
+      <li key={item.id}>
+        <details>
+          <summary>
+            {levels[item.level] || '归档'} · {item.title} · {item.startSeq}–{item.endSeq}
+          </summary>
+          <button
+            onClick={() =>
+              document
+                .querySelector(`[data-memory-id="${CSS.escape(item.id)}"]`)
+                ?.scrollIntoView({ block: 'nearest' })
+            }
+          >
+            查看此归档
+          </button>
+          {children.length > 0 && (
+            <ul>
+              {children.map((id) =>
+                byId.has(id) ? (
+                  render(byId.get(id)!, next)
+                ) : (
+                  <li key={id} className="quiet">
+                    子归档未加载 · 请加载更多
+                  </li>
+                ),
+              )}
+            </ul>
+          )}
+        </details>
+      </li>
+    );
+  };
+  return (
+    <nav className="archive-tree" aria-label="叙事归档树">
+      <strong>场景 → 剧情段 → 章节</strong>
+      <p className="quiet">已加载 {items.length} 个版本；尚未封存的片段独立列出。</p>
+      <ul>
+        {items
+          .filter((item) => !childIds.has(item.id))
+          .sort((a, b) => a.startSeq - b.startSeq)
+          .map((item) => render(item, new Set()))}
+      </ul>
+    </nav>
+  );
+}
+
 function AuthorCorrectionModal({
   item,
   branchId,
@@ -1865,6 +2134,68 @@ function AuthorCorrectionModal({
 }) {
   const target = useRef({ branchId, expectedHead });
   const attempt = useRef<{ text: string; commandId: string } | null>(null);
+  const [threadState, setThreadState] = useState(item.threadState || 'open');
+  const [threadTitle, setThreadTitle] = useState(item.title || '');
+  const [completion, setCompletion] = useState(item.completion || '');
+  const [progress, setProgress] = useState(item.text || '');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  if (item.recordType === 'plot-thread')
+    return (
+      <Modal title="调整剧情线" onClose={onClose}>
+        <div className="modal-content">
+          <Field label="标题">
+            <input value={threadTitle} onChange={(e) => setThreadTitle(e.target.value)} />
+          </Field>
+          <Field label="状态">
+            <select value={threadState} onChange={(e) => setThreadState(e.target.value)}>
+              {Object.entries({
+                open: '未完成',
+                progressing: '进行中',
+                blocked: '受阻',
+                resolved: '已解决',
+                abandoned: '已放弃',
+              }).map(([v, t]) => (
+                <option value={v} key={v}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="完成条件">
+            <textarea value={completion} onChange={(e) => setCompletion(e.target.value)} />
+          </Field>
+          <Field label="作者确认的进展">
+            <textarea value={progress} onChange={(e) => setProgress(e.target.value)} />
+          </Field>
+          {error && <p className="inline-error">{error}</p>}
+          <button
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError('');
+              const text = JSON.stringify({ threadState, threadTitle, completion, progress });
+              if (!attempt.current || attempt.current.text !== text)
+                attempt.current = { text, commandId: crypto.randomUUID() };
+              void post(`/branches/${target.current.branchId}/threads`, {
+                commandId: attempt.current.commandId,
+                expectedHead: target.current.expectedHead,
+                memoryId: item.id,
+                state: threadState,
+                title: threadTitle,
+                completion,
+                text: progress,
+              })
+                .then(() => onSaved(target.current.branchId))
+                .catch((e) => setError(errorText(e)))
+                .finally(() => setBusy(false));
+            }}
+          >
+            保存作者调整
+          </button>
+        </div>
+      </Modal>
+    );
   return (
     <TextModal
       title={item.id ? '作者纠正' : '添加作者设定'}

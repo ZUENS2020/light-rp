@@ -29,6 +29,8 @@ const criterion: Record<string, string> = {
     'Does the evidence establish this actual experience, performed steps, conditions and claimed outcome? Plans are unfinished, unknown results remain unknown, and a character boast alone cannot count as successful completion. Missing preconditions do not disprove a method, and one random failure does not disprove a stochastic method.',
   capability:
     'Does the exact evidence establish the named actor actually learned or acquired this capability at the claimed level? Reading, recalling, planning or boasting about a method is insufficient.',
+  thread:
+    'Does the exact evidence support this thread update and completion condition? A promise, plan or unresolved mystery cannot be resolved merely by time, a scene boundary or chapter closure. Resolved and abandoned require an explicit result or explicit abandonment, while unclear outcomes remain open/progressing/blocked. Finishing a goal grants no ability and is not an independent successful procedural experience.',
   procedureUse:
     'Does the exact evidence establish this phase and outcome of use? Planned and actually applied are different; success requires a performed action and confirmed result. Unknown outcomes, missing preconditions and random failures must retain their category.',
 };
@@ -45,6 +47,11 @@ export async function validateExtractionDecisions(
   const model = context.settings.decisionModel;
   if (!model || context.settings.mode === 'local-demo') return;
   const candidates: Candidate[] = [
+    ...(extraction.threadChanges ?? []).map((value, i) => ({
+      path: 'threadChanges.' + i,
+      type: 'thread',
+      value: value as unknown as Record<string, unknown>,
+    })),
     ...extraction.facts.map((value, i) => ({
       path: 'facts.' + i,
       type: 'fact',

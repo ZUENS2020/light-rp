@@ -254,6 +254,7 @@ describe('public v3 write contracts', () => {
   it('exports all write JSON schemas without exposing an owner override', () => {
     const schemas = publicApiSchemas();
     expect(Object.keys(schemas).sort()).toEqual([
+      'archiveRebuild',
       'correction',
       'fork',
       'playerProfile',
@@ -262,6 +263,7 @@ describe('public v3 write contracts', () => {
       'resources',
       'settings',
       'story',
+      'thread',
       'turn',
     ]);
     expect(Object.keys(apiWriteSchemas).sort()).toEqual(Object.keys(schemas).sort());

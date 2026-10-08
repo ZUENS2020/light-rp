@@ -152,7 +152,12 @@ export interface MemoryOptions {
   viewer?: 'director' | string;
   includeInactive?: boolean;
   kinds?: MemoryKind[];
+  recordTypes?: string[];
+  excludeRecordTypes?: string[];
   limit?: number;
+  /** Internal revision-keyset pagination; never a total-history cap. */
+  afterVersion?: number;
+  beforeVersion?: number;
 }
 export interface RecallOptions extends MemoryOptions {
   maxCandidates?: number;
@@ -179,6 +184,7 @@ export interface RecallResult {
   cursor: number;
 }
 export interface ObservationInput {
+  policyRevision?: number;
   branchId: string;
   cursor: number;
   expectedMemoryIds: string[];
@@ -296,6 +302,10 @@ export interface ExportArchive {
   memoryApplications?: Record<string, unknown>[];
   observationBatches?: Record<string, unknown>[];
   observationProgress?: Record<string, unknown>[];
+  memoryPolicies?: Record<string, unknown>[];
+  narrativeUnits?: Record<string, unknown>[];
+  plotThreads?: Record<string, unknown>[];
+  narrativeExtractions?: Record<string, unknown>[];
   entities?: Record<string, unknown>[];
   entityAliases?: Record<string, unknown>[];
   tombstones?: Record<string, unknown>[];
@@ -305,4 +315,48 @@ export interface ExportArchive {
 export interface QuerySpec {
   sql: string;
   params?: unknown[];
+}
+
+export type MemoryStrategy = 'rolling-v1' | 'unified-v1';
+export interface MemoryPolicy {
+  branchId: string;
+  strategy: MemoryStrategy;
+  revision: number;
+  status: 'active' | 'building';
+  targetSeq: number;
+}
+export interface PlotThread {
+  id: string;
+  revisionId: string;
+  viewer: string;
+  text: string;
+  memoryKey: string;
+  status: MemoryStatus;
+  title: string;
+  type: 'promise' | 'goal' | 'mystery' | 'foreshadow' | 'conflict';
+  state: 'open' | 'progressing' | 'blocked' | 'resolved' | 'abandoned';
+  completion: string;
+  evidence: Evidence[];
+  references: string[];
+}
+export interface NarrativeUnit {
+  id: string;
+  revisionId: string;
+  viewer: string;
+  level: 'segment' | 'scene' | 'arc' | 'chapter';
+  title: string;
+  startSeq: number;
+  endSeq: number;
+  closed: boolean;
+  children: string[];
+  references: string[];
+}
+export interface ContextSelection {
+  revisionId: string;
+  viewer: string;
+  consumer: 'archive' | 'thread' | 'recall';
+  reason: string[];
+  historical: boolean;
+  covered: { sourceId: string; start: number; end: number }[];
+  duplicateOf?: string;
 }

@@ -11,6 +11,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "eval": "tsx scripts/evaluate.ts",
+    "eval:unified": "tsx scripts/evaluate-unified.ts",
+    "eval:embedding": "tsx scripts/embedding-pilot.ts",
     "db:local": "wrangler d1 migrations apply lightrp-v3 --local",
     "check": "npm run typecheck && npm test && npm run build && npm run eval",
     "eval:live": "tsx scripts/live-evaluate.ts",

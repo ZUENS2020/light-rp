@@ -15,7 +15,7 @@ export async function queueObservationBackfill(env: Env) {
     SELECT 'rolling-v1:'||b.id,b.owner_id,b.id,'memory',
       json_object('branchId',b.id,'ownerId',b.owner_id,'throughSeq',b.head_seq,'ownerEpoch',o.deletion_epoch,'compressOnly',json('true')),
       strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now')
-    FROM branches b JOIN owners o ON o.owner_id=b.owner_id WHERE b.head_seq>0
+    FROM branches b JOIN owners o ON o.owner_id=b.owner_id JOIN memory_policies policy ON policy.branch_id=b.id WHERE b.head_seq>0 AND policy.strategy='rolling-v1'
     AND b.owner_id NOT LIKE 'evaluation:%' AND b.owner_id NOT LIKE 'quality-evaluation:%'
     AND NOT EXISTS(SELECT 1 FROM outbox j WHERE j.branch_id=b.id AND j.status='evaluation-fixture')
     AND NOT EXISTS(SELECT 1 FROM observation_progress p WHERE p.branch_id=b.id AND p.scope='director:narrative')
@@ -49,7 +49,7 @@ type State = Record<string, Json> & {
   outputTokens: number;
 };
 type Unit = { id: string; text: string; evidence: Evidence[]; memoryId?: string };
-interface Plan {
+export interface Plan {
   branchId: string;
   through: number;
   scope: string;
@@ -81,18 +81,19 @@ function prefix(chars: string[], start: number, budget: number) {
   }
   return end;
 }
-async function planPage(
+export async function planPage(
   s: Store,
   branchId: string,
   viewer: string,
   bucket: Bucket,
   through: number,
   epoch: number,
+  version = OBSERVATION_VERSION,
 ): Promise<Plan | null> {
   const branch = await s.getBranch(branchId);
   if ((await s.ownerEpoch()) !== epoch)
     throw new StoreError('OBSERVATION_STALE', '压缩来源已变化，请重新整理');
-  const scope = `${viewer}:${bucket}`;
+  const scope = `${viewer}:${version === OBSERVATION_VERSION ? bucket : 'archive'}`;
   const progress = await s.one<{
     revision: number;
     observation_id: string | null;
@@ -120,24 +121,25 @@ async function planPage(
             )
           )?.n ?? 0,
         );
-  const previous = progress?.observation_id
-    ? ((
-        await s.memory.memories(
-          branchId,
-          { viewer, kinds: ['observation'], asOfSeq: through },
-          `observation:${viewer}:${bucket}`,
-        )
-      ).find((m) => m.id === progress.observation_id) ?? null)
-    : null;
+  const previous =
+    version === OBSERVATION_VERSION && progress?.observation_id
+      ? ((
+          await s.memory.memories(
+            branchId,
+            { viewer, kinds: ['observation'], asOfSeq: through },
+            `observation:${viewer}:${bucket}`,
+          )
+        ).find((m) => m.id === progress.observation_id) ?? null)
+      : null;
   const reset =
-    old.version !== OBSERVATION_VERSION ||
+    old.version !== version ||
     old.epoch !== epoch ||
     old.resources !== resources ||
     old.grants !== grant ||
-    (!!progress?.observation_id && !previous);
+    (version === OBSERVATION_VERSION && !!progress?.observation_id && !previous);
   const state: State = reset
     ? {
-        version: OBSERVATION_VERSION,
+        version,
         viewer,
         bucket,
         epoch,

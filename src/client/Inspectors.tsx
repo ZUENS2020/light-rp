@@ -437,6 +437,47 @@ export function ContextModal({
             ))}
           </details>
         )}
+        {!!context.selections?.length && (
+          <details open>
+            <summary>
+              统一记忆选择 · {context.selections.length} · 去重{' '}
+              {context.deduplications?.length || 0}
+            </summary>
+            {context.selections.map((selection: Data) => (
+              <article
+                className="preview-entry"
+                key={`${selection.viewer}:${selection.revisionId}`}
+              >
+                <strong>
+                  {
+                    { archive: '历史归档', thread: '当前剧情线', recall: '召回证据' }[
+                      selection.consumer as 'archive'
+                    ]
+                  }
+                </strong>
+                <p className="mono">{selection.revisionId}</p>
+                <small>
+                  {selection.viewer === 'director'
+                    ? '导演'
+                    : characterName(cast.find((c) => c.id === selection.viewer))}{' '}
+                  · {selection.reason.join(' / ')}
+                </small>
+                {!!selection.covered?.length && (
+                  <details>
+                    <summary>本回合实际覆盖范围</summary>
+                    <pre>{readable(selection.covered)}</pre>
+                  </details>
+                )}
+              </article>
+            ))}
+            {!!context.deduplications?.length && (
+              <details>
+                <summary>去重依据</summary>
+                <pre>{readable(context.deduplications)}</pre>
+              </details>
+            )}
+          </details>
+        )}
         <details open>
           <summary>召回的记忆 · {context.recall?.items?.length || 0}</summary>
           <div className="context-recall">

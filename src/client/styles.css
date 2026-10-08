@@ -1046,6 +1046,23 @@ svg {
   scrollbar-width: thin;
   scrollbar-color: #cecdca transparent;
 }
+.archive-tree {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.archive-tree ul {
+  padding-left: 16px;
+}
+.archive-tree li {
+  margin: 8px 0;
+}
+.archive-tree summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.archive-tree button {
+  margin-top: 8px;
+}
 .memory-record {
   padding: 17px 0;
   border-bottom: 1px solid #e2e1de;

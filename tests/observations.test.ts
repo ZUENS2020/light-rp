@@ -113,7 +113,7 @@ async function progress(scope = 'director:narrative', id = branchId) {
 }
 
 describe('durable rolling observer and reflector', () => {
-  it('backfills existing user stories exactly once without starting paid fixture jobs', async () => {
+  it('keeps untouched legacy stories out of paid backfill and resumes explicitly pinned legacy policies once', async () => {
     await event('需要补整理的已有剧情。');
     await store.run("UPDATE outbox SET status='completed' WHERE branch_id=?", branchId);
     const fixtures = new Store(db.db, 'evaluation:fixture');
@@ -131,6 +131,8 @@ describe('durable rolling observer and reflector', () => {
       story.branchId,
     );
     await queueObservationBackfill({ ...env, DB: db.db, MODEL_MODE: 'openai' });
+    expect(await store.all("SELECT id FROM outbox WHERE id LIKE 'rolling-v1:%'")).toHaveLength(0);
+    await store.run("INSERT INTO memory_policies VALUES(?,'rolling-v1',1,'active',1)", branchId);
     await queueObservationBackfill({ ...env, DB: db.db, MODEL_MODE: 'openai' });
     const jobs = await store.all<{ branch_id: string; payload_json: string }>(
       "SELECT branch_id,payload_json FROM outbox WHERE id LIKE 'rolling-v1:%'",

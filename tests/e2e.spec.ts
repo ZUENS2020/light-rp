@@ -21,6 +21,20 @@ async function json(
   expect(response.ok(), `${method.toUpperCase()} ${path}: ${await response.text()}`).toBeTruthy();
   return response.json();
 }
+async function findCharacter(request: APIRequestContext, name: string) {
+  let cursor = '';
+  do {
+    const page = await json(
+      request,
+      'get',
+      `/assets?kind=character&cursor=${encodeURIComponent(cursor)}`,
+    );
+    const asset = page.items.find((entry: any) => entry.name === name);
+    if (asset) return asset;
+    cursor = page.nextCursor || '';
+  } while (cursor);
+  throw new Error(`角色不存在：${name}`);
+}
 async function awaitTask(request: APIRequestContext, id: string) {
   await expect
     .poll(async () => (await json(request, 'get', `/tasks/${id}`)).status, {
@@ -91,9 +105,7 @@ test('角色 PNG 往返保留原图和未知扩展，资料编辑与触发预览
     .getByLabel('导入资料文件')
     .setInputFiles({ name: 'captain.png', mimeType: 'image/png', buffer: originalPNG });
   await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
-  const initial = (await json(request, 'get', '/assets?kind=character')).items.find(
-    (asset: any) => asset.name === name,
-  );
+  const initial = await findCharacter(request, name);
   expect(initial.hasPng).toBe(true);
   await page.getByRole('button', { name, exact: true }).click();
   const dialog = page.getByRole('dialog', { name: `编辑 · ${name}` });
@@ -205,13 +217,29 @@ test('多角色故事流式生成、续聊、作者版本、分支隔离和全�
     .poll(
       async () =>
         (await json(request, 'get', `/branches/${parent.id}/compression`)).find(
-          (state: any) => state.scope === 'director:narrative',
+          (state: any) => state.scope === 'director:archive',
         )?.throughSeq,
     )
     .toBe(2);
-  await expect(page.locator('.observations summary')).toContainText('自动整理与长期观察');
-  await page.locator('.observations summary').click();
-  await expect(page.locator('.observations')).toContainText('已整理至事件 2');
+  // A slow read must remain displayable while background snapshots change.
+  const branchRoute = `**${prefix}/branches/${parent.id}`;
+  const archiveRoute = `**${prefix}/branches/${parent.id}/archive*`;
+  let projectedRefresh = 0;
+  await page.route(branchRoute, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.branch.projectionRevision += ++projectedRefresh;
+    await route.fulfill({ response, json: body });
+  });
+  await page.route(archiveRoute, async (route) => {
+    const response = await route.fetch();
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    await route.fulfill({ response });
+  });
+  await page.getByRole('tab', { name: '归档', exact: true }).click();
+  await expect(page.locator('.memory-record').first()).toContainText('局部片段');
+  await page.getByRole('tab', { name: '记忆', exact: true }).click();
+  await page.unrouteAll({ behavior: 'wait' });
   const completedTask = parentAfterTurn.jobs.find((job: any) => job.status === 'completed');
   expect(completedTask).toBeTruthy();
   await page.getByRole('button', { name: '上下文', exact: true }).click();
@@ -582,9 +610,7 @@ test('角色设定能力可编辑和明确清空，PNG 与未知扩展完整保�
   await dialog.getByLabel('能力级别 2', { exact: true }).fill('初级');
   await dialog.getByRole('button', { name: '保存版本', exact: true }).click();
   await expect(dialog).not.toBeVisible();
-  const asset = (await json(request, 'get', '/assets?kind=character')).items.find(
-    (entry: any) => entry.name === name,
-  );
+  const asset = await findCharacter(request, name);
   const revised = await json(request, 'get', `/assets/${asset.id}`);
   expect(revised.raw.data.extensions).toEqual({
     future: { number: 42 },

@@ -55,6 +55,7 @@ export interface Snapshot {
   capabilities: Data[];
   jobs: Data[];
   compression?: Data[];
+  policy?: Data;
 }
 export type Settings = ModelSettings;
 export interface Bootstrap {

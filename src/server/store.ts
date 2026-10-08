@@ -171,7 +171,11 @@ export class Store {
       return await this.db.batch(specs.map((s) => this.statement(s.sql, s.params)));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      if (/FENCE|CHECK constraint failed|SOURCE_SCOPE|UNIQUE constraint failed/.test(message))
+      if (
+        /STALE_WRITE|FENCE|CHECK constraint failed|SOURCE_SCOPE|UNIQUE constraint failed/.test(
+          message,
+        )
+      )
         throw new StoreError('STALE_WRITE', 'State changed; refresh and retry.');
       throw e;
     }
@@ -597,6 +601,13 @@ export class Store {
           ],
         },
       );
+      // Generation already owns one frozen extraction snapshot. Claim the source
+      // in the same guarded commit, before asynchronous archive jobs can see it.
+      if (input.taskFence)
+        statements.push({
+          sql: 'INSERT OR IGNORE INTO narrative_extractions(branch_id,source_id) VALUES(?,?)',
+          params: [branch.id, sourceId],
+        });
     }
     statements.push({
       sql: 'INSERT INTO scene_snapshots(branch_id,event_seq,scene_json,created_at) VALUES(?,?,?,?)',
@@ -815,7 +826,14 @@ export class Store {
     const row = await this.one<{ state_json: string }>(
       'SELECT state_json FROM observation_progress WHERE branch_id=? AND scope=?',
       branchId,
-      'director:narrative',
+      (
+        await this.one<{ status: string }>(
+          "SELECT status FROM memory_policies WHERE branch_id=? AND strategy='unified-v1'",
+          branchId,
+        )
+      )?.status === 'active'
+        ? 'director:archive'
+        : 'director:narrative',
     );
     const state = json<Record<string, Json>>(row?.state_json, {});
     return state.epoch === epoch ? Number(state.throughSeq ?? 0) : 0;
@@ -964,6 +982,10 @@ export class Store {
       memoryApplications,
       observationBatches,
       observationProgress,
+      memoryPolicies,
+      narrativeUnits,
+      plotThreads,
+      narrativeExtractions,
       entities,
       entityAliases,
     ] = await Promise.all([
@@ -986,6 +1008,10 @@ export class Store {
       branchRows('memory_event_applications', false),
       branchRows('observation_batches'),
       branchRows('observation_progress', false),
+      branchRows('memory_policies', false),
+      branchRows('narrative_units', false),
+      branchRows('plot_threads', false),
+      branchRows('narrative_extractions', false),
       branchRows('entities'),
       branchRows('entity_aliases'),
     ]);
@@ -1089,6 +1115,10 @@ export class Store {
       memoryApplications,
       observationBatches,
       observationProgress,
+      memoryPolicies,
+      narrativeUnits,
+      plotThreads,
+      narrativeExtractions,
       entities,
       entityAliases,
       tombstones,

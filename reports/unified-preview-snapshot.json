@@ -1,0 +1,38 @@
+{
+  "format": "lightrp-unified-preview-snapshot",
+  "capturedAt": "2026-10-08T11:09:39.493Z",
+  "privateNarrativeIncluded": false,
+  "head": {
+    "headSeq": 55
+  },
+  "policy": {
+    "strategy": "unified-v1",
+    "status": "building",
+    "targetSeq": 55
+  },
+  "progress": [
+    {
+      "viewer": "director",
+      "revision": 7,
+      "eventSeq": 36,
+      "eventOffset": 742,
+      "throughSeq": 36
+    }
+  ],
+  "archives": {
+    "archiveVersions": 7
+  },
+  "outbox": {
+    "status": "dispatched"
+  },
+  "historicalAttempts": {
+    "failedBeforeFirstActivation": 3,
+    "stoppedForSourceOwnershipUpgrade": 1,
+    "resumedFromPersistedProgress": true
+  },
+  "limitations": [
+    "Backfill status is a snapshot, not an assertion that cutover or indexing completed.",
+    "No new story turn was generated for validation.",
+    "Natural-model fact precision and long narrative quality gates remain unmeasured."
+  ]
+}

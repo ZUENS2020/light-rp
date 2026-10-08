@@ -23,12 +23,21 @@ import {
   rebuildSchema,
   turnSchema,
   publicApiSchemas,
+  threadWriteSchema,
+  archiveRebuildSchema,
 } from '../shared/api';
 import { seedDemo } from './demo';
 import { syncPersonaCapabilities } from './persona';
 import { setPlayerProfile } from './player';
 import { retryGeneration } from './task-retry';
 import { dispatchOutbox, type TaskRow, taskDto } from './workflows';
+import {
+  memoryPolicy,
+  recordPage,
+  threadDto,
+  requestUnifiedBackfill,
+  narrativeRecord,
+} from './narrative-memory';
 import { queueObservationBackfill } from './observations';
 export { BranchRuntime } from './runtime';
 export { GenerationWorkflow, MemoryWorkflow } from './workflows';
@@ -245,7 +254,11 @@ app.get('/api/v3/branches/:id', async (c) => {
     s.listCapabilities(id),
     s.compressionStatus(id),
   ]);
+  await requestUnifiedBackfill(s, id);
+  c.executionCtx.waitUntil(dispatchOutbox(c.env));
+  const policy = await memoryPolicy(s, id);
   return c.json({
+    policy,
     branch,
     sessions,
     events,
@@ -455,6 +468,92 @@ app.get('/api/v3/branches/:id/context', async (c) => {
     c.req.query('observer') ?? 'director',
   );
   return c.json(context);
+});
+for (const type of ['threads', 'archive'] as const)
+  app.get(`/api/v3/branches/:id/${type}`, async (c) => {
+    const after = z.coerce
+      .number()
+      .int()
+      .min(0)
+      .parse(c.req.query('after') ?? 0);
+    const page = await recordPage(
+      store(c),
+      c.req.param('id'),
+      type,
+      c.req.query('observer') ?? 'director',
+      after,
+    );
+    return c.json({ ...page, items: type === 'threads' ? page.items.map(threadDto) : page.items });
+  });
+app.get('/api/v3/branches/:id/memory-policy', async (c) =>
+  c.json(await memoryPolicy(store(c), c.req.param('id'))),
+);
+app.post('/api/v3/branches/:id/threads', async (c) => {
+  const s = store(c),
+    id = c.req.param('id'),
+    body = threadWriteSchema.parse(await c.req.json());
+  const current = (await s.memory.currentByIds(id, [body.memoryId], { includeInactive: true }))[0];
+  if (!current || current.data?.recordType !== 'plot-thread' || current.subject !== 'director')
+    throw new ApiError(409, '只能调整此分支的当前导演剧情线', 'THREAD_VERSION');
+  const result = await s.authorCorrection({
+    branchId: id,
+    commandId: body.commandId,
+    expectedHead: body.expectedHead,
+    memoryId: body.memoryId,
+    text: body.text,
+    value: body.state,
+    projectionPatch: { title: body.title, completion: body.completion, threadState: body.state },
+  });
+  c.executionCtx.waitUntil(dispatchOutbox(c.env));
+  return c.json(threadDto(result));
+});
+app.post('/api/v3/branches/:id/archive/rebuild', async (c) => {
+  const s = store(c),
+    id = c.req.param('id'),
+    body = archiveRebuildSchema.parse(await c.req.json()),
+    branch = await s.getBranch(id),
+    epoch = await s.ownerEpoch();
+  const jobId = `archive-rebuild:${id}:${body.commandId}`;
+  const previous = await s.one<{ payload_json: string }>(
+    'SELECT payload_json FROM outbox WHERE id=? AND owner_id=?',
+    jobId,
+    s.ownerId,
+  );
+  if (previous) {
+    const payload = JSON.parse(previous.payload_json);
+    if (payload.rebuildUnit !== body.memoryId || payload.throughSeq !== body.expectedHead)
+      throw new ApiError(409, '相同幂等键对应不同重建请求', 'IDEMPOTENCY_CONFLICT');
+    return c.json({ jobId });
+  }
+  await narrativeRecord(s, id, body.memoryId);
+  await s.batch([
+    s.epochGuard(epoch),
+    s.guard('EXISTS(SELECT 1 FROM branches WHERE id=? AND owner_id=? AND head_seq=?)', [
+      id,
+      s.ownerId,
+      body.expectedHead,
+    ]),
+    {
+      sql: 'INSERT INTO outbox(id,owner_id,branch_id,kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+      params: [
+        jobId,
+        s.ownerId,
+        id,
+        'memory',
+        JSON.stringify({
+          branchId: id,
+          ownerEpoch: epoch,
+          throughSeq: branch.headSeq,
+          rebuildUnit: body.memoryId,
+        }),
+        now(),
+        now(),
+      ],
+    },
+    s.cleanupGuards(),
+  ]);
+  c.executionCtx.waitUntil(dispatchOutbox(c.env));
+  return c.json({ jobId });
 });
 app.get('/api/v3/branches/:id/memories', async (c) =>
   c.json(

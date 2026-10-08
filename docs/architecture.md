@@ -2,6 +2,8 @@
 
 本说明对应当前实现。运行层为 Cloudflare Workers、D1、R2、SQLite Durable Objects、Workflows、Vectorize 和 Workers AI/AI Gateway；没有 PostgreSQL、Redis、外部记忆服务或常驻记忆进程。
 
+2026-10-08 的长期叙事职责、策略切换及新增接口以[统一记忆说明](unified-memory.md)为准。下文四个滚动桶描述保留为迁移前模式；新策略激活后不再维护或注入这些桶。叙事仍沿用当前保存的模型直连配置。
+
 ```mermaid
 flowchart LR
   UI[React 工作台] --> API[Worker API / Access 身份]

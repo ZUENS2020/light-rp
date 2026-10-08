@@ -20,7 +20,7 @@ import type { Store } from './store';
 
 type Row = Record<string, unknown>;
 /** Space-separated Han unigrams/bigrams plus latin words make unicode61 useful for Chinese. */
-export function searchTokens(text: string): string[] {
+export function searchTokens(text: string, preserveFrequency = false): string[] {
   const words =
       text
         .toLowerCase()
@@ -37,7 +37,7 @@ export function searchTokens(text: string): string[] {
       } else tokens.push(run);
     }
   }
-  return [...new Set(tokens)].slice(0, 4096);
+  return (preserveFrequency ? tokens : [...new Set(tokens)]).slice(0, 16384);
 }
 export function rrf(lists: string[][], k = 60): Map<string, { score: number; arms: number[] }> {
   const scores = new Map<string, { score: number; arms: number[] }>();
@@ -185,11 +185,7 @@ export class MemoryEngine {
       source: s,
     };
   }
-  private async latestRows(
-    branchId: string,
-    options: MemoryOptions = {},
-    keys?: string[],
-  ): Promise<Row[]> {
+  private async latestQuery(branchId: string, options: MemoryOptions = {}, keys?: string[]) {
     const branch = await this.store.getBranch(branchId),
       asof = Math.min(options.asOfSeq ?? branch.headSeq, branch.headSeq),
       time = options.sceneTime;
@@ -204,14 +200,107 @@ export class MemoryEngine {
       params.push(time, time);
     }
     const temporal = clauses.length ? `AND ${clauses.join(' AND ')}` : '';
-    return this.store.all(
-      `WITH visible AS (
+    // Fence the branch/version window before joining FTS. Inlining it lets
+    // SQLite recompute this window per global FTS hit, including other stories.
+    return {
+      sql: `WITH visible AS (
       SELECT m.*,m.rowid AS version_order,l.depth FROM memory_versions m JOIN branch_lineage l ON l.ancestor_id=m.branch_id AND l.branch_id=? WHERE m.owner_id=? AND m.recorded_seq<=? ${selected} AND (l.max_seq IS NULL OR m.recorded_seq<=l.max_seq) AND (l.max_memory_rowid IS NULL OR m.rowid<=l.max_memory_rowid)
     ), eligible AS (SELECT m.* FROM visible m WHERE 1=1 ${temporal}), unsuperseded AS (
-      SELECT m.* FROM eligible m WHERE NOT EXISTS(SELECT 1 FROM eligible n WHERE n.supersedes_id=m.id OR (n.memory_key=m.memory_key AND n.id<>m.id AND n.recorded_seq>=m.recorded_seq AND json_extract(n.data_json,'$.correction')=1 AND COALESCE(n.valid_from,-1e99)<=COALESCE(m.valid_from,1e99)))
-    ), ranked AS (SELECT m.*,ROW_NUMBER() OVER(PARTITION BY memory_key ORDER BY CASE WHEN status IN ('forgotten','invalidated') THEN 1 ELSE 0 END DESC,COALESCE(valid_from,-1e99) DESC,recorded_seq DESC,version_order DESC,depth ASC) AS rank FROM unsuperseded m)
-    SELECT * FROM ranked WHERE rank=1 ORDER BY recorded_seq DESC,version_order DESC`,
-      ...params,
+      SELECT m.* FROM eligible m WHERE NOT EXISTS(SELECT 1 FROM eligible n WHERE n.supersedes_id=m.id) AND NOT EXISTS(SELECT 1 FROM eligible n WHERE n.memory_key=m.memory_key AND n.id<>m.id AND n.recorded_seq>=m.recorded_seq AND json_extract(n.data_json,'$.correction')=1 AND COALESCE(n.valid_from,-1e99)<=COALESCE(m.valid_from,1e99))
+    ), ranked AS MATERIALIZED (SELECT m.*,ROW_NUMBER() OVER(PARTITION BY memory_key ORDER BY CASE WHEN status IN ('forgotten','invalidated') THEN 1 ELSE 0 END DESC,COALESCE(valid_from,-1e99) DESC,recorded_seq DESC,version_order DESC,depth ASC) AS rank FROM unsuperseded m)
+`,
+      params,
+      asof,
+    };
+  }
+  private async latestRows(
+    branchId: string,
+    options: MemoryOptions = {},
+    keys?: string[],
+  ): Promise<Row[]> {
+    const q = await this.latestQuery(branchId, options, keys);
+    const filter = this.rowFilter(options, q.asof);
+    return this.store.all(
+      `${q.sql} SELECT m.* FROM ranked m WHERE m.rank=1 ${filter.sql}
+      ORDER BY ${options.afterVersion != null || options.beforeVersion != null ? 'version_order' : 'recorded_seq DESC,version_order'} ${options.afterVersion != null ? 'ASC' : 'DESC'} LIMIT ?`,
+      ...q.params,
+      ...filter.params,
+      Math.min(options.limit ?? 1000, 10000),
+    );
+  }
+  private rowFilter(options: MemoryOptions, asof: number) {
+    const clauses: string[] = [],
+      params: unknown[] = [];
+    if (!options.includeInactive) clauses.push("m.status='active'");
+    if (options.kinds) {
+      clauses.push('m.kind IN (SELECT value FROM json_each(?))');
+      params.push(JSON.stringify(options.kinds));
+    }
+    if (options.recordTypes) {
+      clauses.push("json_extract(m.data_json,'$.recordType') IN (SELECT value FROM json_each(?))");
+      params.push(JSON.stringify(options.recordTypes));
+    }
+    if (options.excludeRecordTypes) {
+      clauses.push(
+        "COALESCE(json_extract(m.data_json,'$.recordType'),'') NOT IN (SELECT value FROM json_each(?))",
+      );
+      params.push(JSON.stringify(options.excludeRecordTypes));
+    }
+    if (options.afterVersion != null) {
+      clauses.push('m.version_order>?');
+      params.push(options.afterVersion);
+    }
+    if (options.beforeVersion != null) {
+      clauses.push('m.version_order<?');
+      params.push(options.beforeVersion);
+    }
+    if (options.viewer && options.viewer !== 'director') {
+      clauses.push("(m.kind<>'belief' OR m.observer_id=?)");
+      params.push(options.viewer);
+      clauses.push(
+        "(json_extract(m.data_json,'$.recordType') NOT IN ('plot-thread','narrative-unit','narrative-segment') OR json_extract(m.data_json,'$.recordType') IS NULL OR m.subject=?)",
+      );
+      params.push(options.viewer);
+    }
+    return { sql: clauses.length ? 'AND ' + clauses.join(' AND ') : '', params };
+  }
+  /** A bounded current-version page, plus the raw row watermark even if ACL rejects every row. */
+  async page(branchId: string, options: MemoryOptions = {}) {
+    const rows = await this.latestRows(branchId, {
+      ...options,
+      afterVersion: options.afterVersion ?? 0,
+      limit: options.limit ?? 80,
+    });
+    return {
+      items: await this.authorizedRows(branchId, rows, options, undefined, rows),
+      after: rows.length ? Number(rows.at(-1)!.version_order) : (options.afterVersion ?? 0),
+      exhausted: rows.length < (options.limit ?? 80),
+    };
+  }
+  /** Select the applicable revision before testing candidate IDs. An obsolete ID never resurrects. */
+  async currentByIds(branchId: string, ids: string[], options: MemoryOptions = {}) {
+    if (!ids.length) return [];
+    const keys = await this.store.all<{ memory_key: string }>(
+      'SELECT DISTINCT memory_key FROM memory_versions WHERE owner_id=? AND id IN (SELECT value FROM json_each(?))',
+      this.store.ownerId,
+      JSON.stringify(ids),
+    );
+    const wanted = new Set(ids),
+      rows = (
+        await this.latestRows(
+          branchId,
+          { ...options, limit: Math.max(1, keys.length) },
+          keys.map((r) => r.memory_key),
+        )
+      ).filter((r) => wanted.has(String(r.id)));
+    return this.authorizedRows(branchId, rows, { ...options, limit: ids.length }, undefined, rows);
+  }
+  async revisionsByIds(branchId: string, ids: string[], options: MemoryOptions = {}) {
+    return this.observationInputs(
+      branchId,
+      ids,
+      options.asOfSeq ?? (await this.store.getBranch(branchId)).headSeq,
+      options.viewer ?? 'director',
     );
   }
   private async hydrate(rows: Row[]): Promise<Memory[]> {
@@ -316,7 +405,7 @@ export class MemoryEngine {
     const rows = await this.store.all<Row>(
       `SELECT m.*,m.rowid AS version_order FROM memory_versions m
        JOIN branch_lineage l ON l.ancestor_id=m.branch_id AND l.branch_id=?
-       WHERE m.owner_id=? AND m.recorded_seq<=? AND m.rowid>? AND m.kind<>'observation'
+       WHERE m.owner_id=? AND m.recorded_seq<=? AND m.rowid>? AND m.kind<>'observation' AND COALESCE(json_extract(m.data_json,'$.recordType'),'') NOT IN ('plot-thread','narrative-unit','narrative-segment')
        AND (m.status='active' OR (m.kind='procedure' AND m.status IN ('draft','suspended','retired')))
        ${options.bucket ? `AND CASE WHEN m.authority>=85 THEN 'rules' WHEN m.kind IN ('canon','relation') AND m.authority>=70 THEN 'facts' ELSE 'interpretations' END = ?` : ''}
        AND (l.max_seq IS NULL OR m.recorded_seq<=l.max_seq)
@@ -424,7 +513,18 @@ export class MemoryEngine {
     const latestByKey = new Map(
       [
         ...(currentRows ?? []),
-        ...(capabilityKeys.length ? await this.latestRows(branchId, options, capabilityKeys) : []),
+        ...(capabilityKeys.length
+          ? await this.latestRows(
+              branchId,
+              {
+                asOfSeq: options.asOfSeq,
+                sceneTime: options.sceneTime,
+                includeInactive: true,
+                limit: capabilityKeys.length,
+              },
+              capabilityKeys,
+            )
+          : []),
       ].map((m) => [String(m.memory_key), m]),
     );
     const deps = await this.store.all<{ memory_id: string; depends_on_id: string }>(
@@ -557,6 +657,10 @@ export class MemoryEngine {
       const okay =
         !!m &&
         (m.kind !== 'belief' || m.observerId === actor) &&
+        (!['plot-thread', 'narrative-unit', 'narrative-segment'].includes(
+          String(m.data?.recordType),
+        ) ||
+          m.subject === actor) &&
         m.evidence.every((e) => visibleSpan(e, actor)) &&
         (dependencies.get(id) ?? []).every((dep) => authorized(dep, actor));
       aclCache.set(key, okay);
@@ -756,7 +860,10 @@ export class MemoryEngine {
           p.predicate,
           stableJson(p.value),
           p.text,
-          searchTokens(`${p.subject} ${p.predicate} ${p.text}`).join(' '),
+          searchTokens(
+            `${p.subject} ${p.predicate} ${p.text} ${String(p.data?.title ?? '')} ${String(p.data?.completion ?? '')} ${typeof p.value === 'string' ? p.value : ''}`,
+            true,
+          ).join(' '),
           JSON.stringify(knownBy),
           p.observerId ?? null,
           normalized.authority,
@@ -788,7 +895,14 @@ export class MemoryEngine {
     };
   }
   private async byId(branchId: string, id: string) {
-    const rows = await this.latestRows(branchId),
+    const key = await this.store.one<{ memory_key: string }>(
+      'SELECT memory_key FROM memory_versions WHERE id=? AND owner_id=?',
+      id,
+      this.store.ownerId,
+    );
+    const rows = key
+        ? await this.latestRows(branchId, { includeInactive: true }, [key.memory_key])
+        : [],
       r = rows.find((r) => r.id === id);
     if (!r)
       throw new StoreError(
@@ -1054,7 +1168,11 @@ export class MemoryEngine {
       if (authorized.length !== input.expectedMemoryIds.length)
         throw new StoreError('OBSERVATION_STALE', 'Observation knowledge grants changed');
     }
+    if (epoch !== (await this.store.ownerEpoch()))
+      throw new StoreError('STALE_WRITE', '来源已经变化');
     if (existingBatch?.status === 'active') {
+      for (const proposal of input.proposals)
+        for (const e of proposal.evidence) await this.sourceInBranch(input.branchId, e.sourceId);
       const previous = json<{ accepted?: string[] }>(existingBatch.input_json, {});
       return { batchId, accepted: previous.accepted ?? [], cursor: input.cursor, replayed: true };
     }
@@ -1103,6 +1221,19 @@ export class MemoryEngine {
             ),
           ]
         : []),
+      ...(input.policyRevision != null
+        ? [
+            this.store.guard(
+              'EXISTS(SELECT 1 FROM memory_policies WHERE branch_id=? AND revision=? AND strategy=?)',
+              [input.branchId, input.policyRevision, 'unified-v1'],
+            ),
+          ]
+        : [
+            this.store.guard(
+              "NOT EXISTS(SELECT 1 FROM memory_policies WHERE branch_id=? AND strategy='unified-v1' AND status='active')",
+              [input.branchId],
+            ),
+          ]),
       ...dependencyFences,
       ...this.store.sourceGuards([
         ...(input.sourceFence ?? []),
@@ -1216,6 +1347,7 @@ export class MemoryEngine {
   async authorCorrection(input: {
     branchId: string;
     sessionId?: string;
+    projectionPatch?: Record<string, Json>;
     commandId: string;
     expectedHead?: number;
     memoryId?: string;
@@ -1231,6 +1363,7 @@ export class MemoryEngine {
       throw new StoreError('CORRECTION_INPUT', '作者纠正需要有效正文和幂等键', 400);
     const fingerprint = {
       kind: 'author-correction',
+      projectionPatch: input.projectionPatch ?? null,
       memoryId: input.memoryId ?? null,
       subjectId: input.subjectId ?? null,
       predicate: input.predicate ?? null,
@@ -1348,7 +1481,12 @@ export class MemoryEngine {
                 (current?.revision ?? 0) + 1,
                 current?.id ?? null,
                 'active',
-                JSON.stringify({ ...current?.data, correction: true, commandId }),
+                JSON.stringify({
+                  ...current?.data,
+                  ...input.projectionPatch,
+                  correction: true,
+                  commandId,
+                }),
                 `author-correction:${commandId}`,
               ],
             },
@@ -1431,18 +1569,22 @@ export class MemoryEngine {
     reason: string,
     recordedSeq?: number,
   ): Promise<QuerySpec[]> {
-    const current = await this.memories(branchId, { includeInactive: true }),
-      rows = await this.store.all(
+    const rows = await this.store.all(
         'WITH RECURSIVE descendants(id) AS (SELECT memory_id FROM memory_dependencies WHERE depends_on_id=? UNION SELECT d.memory_id FROM memory_dependencies d JOIN descendants p ON d.depends_on_id=p.id) SELECT id FROM descendants',
         id,
       ),
-      ids = new Set(rows.map((r) => String(r.id))),
       specs: QuerySpec[] = [];
-    for (const m of current)
-      if (ids.has(m.id))
+    for (let offset = 0; offset < rows.length; offset += 80) {
+      const current = await this.currentByIds(
+        branchId,
+        rows.slice(offset, offset + 80).map((r) => String(r.id)),
+        { includeInactive: true },
+      );
+      for (const m of current)
         specs.push(
           ...(await this.inactiveVersion(branchId, m, 'invalidated', reason, recordedSeq)).specs,
         );
+    }
     return specs;
   }
   private indexOutbox(branchId: string, ids: string[]): QuerySpec {
@@ -1837,52 +1979,102 @@ export class MemoryEngine {
     query: string,
     options: RecallOptions = {},
   ): Promise<RecallResult> {
-    const branch = await this.store.getBranch(branchId),
-      all = await this.memories(branchId, { ...options, limit: 5000 }),
-      map = new Map(all.map((m) => [m.id, m])),
-      cap = Math.max(1, Math.min(options.maxCandidates ?? 120, 500)),
-      tokens = searchTokens(query).slice(0, 32),
-      degraded: string[] = [],
-      arms: string[][] = [];
-    const lexicalLimit = Math.min(cap, 40);
+    const cap = Math.max(1, Math.min(options.maxCandidates ?? 120, 500));
+    // Bigram/full proper-name terms precede single Han characters; don't spend the query on noise.
+    const tokens = searchTokens(query)
+      .sort((a, b) => Array.from(b).length - Array.from(a).length)
+      .slice(0, 64);
+    const degraded: string[] = [],
+      map = new Map<string, Memory>();
+    const q = await this.latestQuery(branchId, options),
+      filter = this.rowFilter(options, q.asof);
+    const unified = await this.store.one(
+      "SELECT 1 FROM memory_policies WHERE branch_id=? AND strategy='unified-v1' AND status='active'",
+      branchId,
+    );
+    if (unified) filter.sql += " AND m.predicate NOT LIKE 'rolling-observation:%'";
+    const take = async (condition: string, params: unknown[], order: string, join = '') => {
+      const accepted: string[] = [];
+      for (let page = 0; page < 3 && accepted.length < 40; page++) {
+        const rows: Row[] = await this.store.all(
+          `${q.sql} SELECT m.* FROM ranked m ${join} WHERE m.rank=1 ${filter.sql} AND (${condition}) ORDER BY ${order} LIMIT 40 OFFSET ?`,
+          ...q.params,
+          ...filter.params,
+          ...params,
+          page * 40,
+        );
+        const legal = await this.authorizedRows(
+          branchId,
+          rows,
+          { ...options, limit: 40 },
+          undefined,
+          rows,
+        );
+        for (const m of legal) {
+          map.set(m.id, m);
+          accepted.push(m.id);
+        }
+        if (rows.length < 40) break;
+        if (page === 2 && accepted.length < 40) degraded.push('candidate-authorization-budget');
+      }
+      return accepted.slice(0, 40);
+    };
+    const { listEntities, normalizeEntityAlias } = await import('./entities');
+    let entities: Awaited<ReturnType<typeof listEntities>> = [];
+    try {
+      entities = await listEntities(this.store, branchId, options.asOfSeq);
+    } catch (error) {
+      if (!(error instanceof StoreError && error.code === 'ENTITY_RESOURCE')) throw error;
+      degraded.push('entity-binding-unavailable');
+    }
+    const normalized = normalizeEntityAlias(query);
+    const named = entities
+      .filter((e) => e.aliases.some((a) => normalized.includes(normalizeEntityAlias(a))))
+      .map((e) => e.id);
+    const exact = await take(
+      "m.subject IN (SELECT value FROM json_each(?)) OR json_extract(m.value_json,'$') IN (SELECT value FROM json_each(?)) OR instr(?,m.subject)>0 OR instr(?,m.predicate)>0",
+      [JSON.stringify(named), JSON.stringify(named), query, query, query],
+      'CASE WHEN instr(?,m.predicate)>0 THEN 0 ELSE 1 END,m.authority DESC,m.recorded_seq DESC,m.version_order DESC',
+    );
     let lexical: string[] = [];
     if (tokens.length) {
+      const terms = tokens.map((t) => '"' + t.replaceAll('"', '""') + '"').join(' OR ');
       try {
-        const terms = tokens.map((t) => '"' + t.replaceAll('"', '""') + '"').join(' OR ');
-        lexical = (
-          await this.store.all<{ memory_id: string }>(
-            'SELECT memory_id FROM memory_fts WHERE memory_fts MATCH ? AND memory_id IN (SELECT value FROM json_each(?)) ORDER BY bm25(memory_fts) LIMIT ?',
-            terms,
-            JSON.stringify([...map.keys()]),
-            lexicalLimit,
-          )
-        ).map((r) => r.memory_id);
+        lexical = await take(
+          'memory_fts_v2 MATCH ?',
+          [terms],
+          'bm25(memory_fts_v2,0,8,4,3,1),m.id',
+          'JOIN memory_fts_v2 ON memory_fts_v2.memory_id=m.id',
+        );
       } catch {
-        degraded.push('lexical-fallback');
-        lexical = all
-          .filter((m) => tokens.some((t) => searchTokens(m.text).includes(t)))
-          .map((m) => m.id)
-          .slice(0, lexicalLimit);
+        degraded.push('lexical-unavailable');
       }
     }
-    const exact = all
-        .filter((m) => query.includes(m.subject) || query.includes(m.predicate))
-        .map((m) => m.id)
-        .slice(0, cap),
-      vector = (options.vectorCandidates ?? [])
-        .slice()
-        .sort((a, b) => b.score - a.score)
-        .map((candidate) => candidate.id)
-        .filter((id) => map.has(id))
-        .slice(0, cap);
+    const supplied = (options.vectorCandidates ?? []).slice().sort((a, b) => b.score - a.score);
+    const legalVectors = await this.currentByIds(
+      branchId,
+      supplied.map((v) => v.id),
+      options,
+    );
+    legalVectors.splice(
+      0,
+      legalVectors.length,
+      ...legalVectors.filter((m) => !unified || !m.predicate.startsWith('rolling-observation:')),
+    );
+    legalVectors.forEach((m) => map.set(m.id, m));
+    const legalIds = new Set(legalVectors.map((m) => m.id));
+    const vector = supplied
+      .filter((v) => legalIds.has(v.id))
+      .map((v) => v.id)
+      .slice(0, 40);
     const seedIds = [...new Set([...exact, ...lexical, ...vector])].slice(
-        0,
-        Math.min(options.graphSeeds ?? 8, 20),
-      ),
-      graph: string[] = [],
+      0,
+      Math.min(options.graphSeeds ?? 8, 20),
+    );
+    const graph: string[] = [],
       visited = new Set(seedIds),
-      start = performance.now(),
-      maxNodes = Math.min(options.maxGraphNodes ?? 96, 300),
+      start = performance.now();
+    const maxNodes = Math.min(options.maxGraphNodes ?? 96, 300),
       maxHops = Math.min(options.graphHops ?? 2, 3),
       fanout = Math.min(options.graphFanout ?? 8, 24),
       maxMs = options.maxGraphMs ?? 40;
@@ -1892,47 +2084,48 @@ export class MemoryEngine {
       for (const id of frontier) {
         if (performance.now() - start > maxMs) {
           degraded.push('graph-time-budget');
-          frontier = [];
           break;
         }
         const m = map.get(id);
         if (!m) continue;
-        const neighbors = all
-          .filter(
-            (n) =>
-              !visited.has(n.id) &&
-              (n.subject === m.subject ||
-                (typeof m.value === 'string' && n.subject === m.value) ||
-                (typeof n.value === 'string' && n.value === m.subject)),
-          )
-          .slice(0, fanout);
-        for (const n of neighbors) {
-          if (visited.size >= maxNodes) {
-            degraded.push('graph-node-budget');
-            break;
-          }
-          visited.add(n.id);
-          next.push(n.id);
-          graph.push(n.id);
+        const ids = await take(
+          "m.subject=? OR m.subject=? OR json_extract(m.value_json,'$')=?",
+          [m.subject, typeof m.value === 'string' ? m.value : m.subject, m.subject],
+          'm.recorded_seq DESC,m.version_order DESC',
+        );
+        for (const nid of ids.filter((i) => !visited.has(i)).slice(0, fanout)) {
+          if (visited.size >= maxNodes) break;
+          visited.add(nid);
+          next.push(nid);
+          graph.push(nid);
         }
         if (visited.size >= maxNodes) break;
       }
-      if (visited.size >= maxNodes) break;
+      if (visited.size >= maxNodes) {
+        degraded.push('graph-node-budget');
+        break;
+      }
       frontier = next;
     }
-    const temporal = all
-      .filter(
-        (m) =>
-          options.sceneTime != null ||
-          tokens.some((t) => /time|before|after|昨天|以前|之后/.test(t)),
-      )
-      .sort((a, b) => (b.validFrom ?? -Infinity) - (a.validFrom ?? -Infinity))
-      .slice(0, cap)
-      .map((m) => m.id);
-    arms.push(exact, lexical, vector, graph, temporal);
+    const temporal =
+      options.sceneTime != null || /现在|当时|之前|以前|之后|昨天|before|after|time/i.test(query)
+        ? await take('1=1', [], 'COALESCE(m.valid_from,-1e99) DESC,m.version_order DESC')
+        : [];
+    // Exact entity lookup belongs to the lexical arm, not a second vote for the same term.
+    const arms = [[...new Set([...exact, ...lexical])].slice(0, 40), vector, graph, temporal];
     const scores = rrf(arms),
-      names = ['exact', 'lexical', 'vector', 'graph', 'temporal'],
-      sorted = [...scores].sort((a, b) => b[1].score - a[1].score).slice(0, cap),
+      names = ['lexical', 'vector', 'graph', 'temporal'],
+      rankedScore = (entry: [string, { score: number; arms: number[] }]) => {
+        const m = map.get(entry[0])!;
+        return (
+          (entry[1].score *
+            (1 + (query.includes(m.predicate) ? 1 : 0) + Math.min(100, m.authority ?? 0) / 1000)) /
+          (1 + estimateTokens(m.text) / 10000)
+        );
+      },
+      sorted = [...scores]
+        .sort((a, b) => rankedScore(b) - rankedScore(a) || a[0].localeCompare(b[0]))
+        .slice(0, cap),
       items: RecallResult['items'] = [];
     let used = 0,
       truncated = scores.size > cap;

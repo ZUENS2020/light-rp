@@ -323,7 +323,10 @@ async function replayStory(store: Store, fixture: EvaluationStory): Promise<Repl
 }
 
 /** Gold extraction candidates are injected, but all validation, writes, permission checks and recalls are real. */
-export async function runEvaluation(): Promise<EvaluationResult> {
+export async function runEvaluation(
+  options: { longTurns?: number } = {},
+): Promise<EvaluationResult> {
+  const longTurns = options.longTurns ?? 500;
   const started = performance.now(),
     fixtureDb = createTestD1();
   try {
@@ -332,7 +335,7 @@ export async function runEvaluation(): Promise<EvaluationResult> {
     for (const fixture of evaluationStories) stories.push(await replayStory(store, fixture));
     const long = stories[0]!,
       longSession = await store.createSession({ branchId: long.branchId, name: '第五百回合续聊' });
-    for (let round = 65; round <= 500; round++) {
+    for (let round = 65; round <= longTurns; round++) {
       const turn = await store.appendTurn({
         branchId: long.branchId,
         sessionId: longSession.id,
@@ -583,8 +586,8 @@ export async function runEvaluation(): Promise<EvaluationResult> {
         stories: stories.length,
         authoredGoldQuestions: goldQuestions.length,
         replayedTurns: counts.turns,
-        mainStoryTurns: 64 * stories.length + 436,
-        singleBranchReplayTurns: 500,
+        mainStoryTurns: 64 * stories.length + (longTurns - 64),
+        singleBranchReplayTurns: longTurns,
         events: counts.events,
         memories: counts.memories,
         synthetic: true,

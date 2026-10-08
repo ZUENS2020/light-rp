@@ -38,6 +38,16 @@ export const rebuildSchema = z.object({
   commandId: z.string().min(8).max(200),
   expectedHead: z.number().int().min(0),
 });
+export const threadWriteSchema = z.object({
+  commandId: z.string().min(8).max(200),
+  expectedHead: z.number().int().min(0),
+  memoryId: z.string(),
+  state: z.enum(['open', 'progressing', 'blocked', 'resolved', 'abandoned']),
+  title: z.string().min(1).max(250),
+  completion: z.string().min(1).max(1000),
+  text: z.string().trim().min(1).max(2000),
+});
+export const archiveRebuildSchema = rebuildSchema.extend({ memoryId: z.string() });
 export const turnSchema = z.object({
   commandId: z.string().min(8).max(200),
   expectedHead: z.number().int().min(0),
@@ -87,6 +97,8 @@ export const apiWriteSchemas = {
   correction: correctionSchema,
   procedureStatus: procedureStatusSchema,
   rebuild: rebuildSchema,
+  thread: threadWriteSchema,
+  archiveRebuild: archiveRebuildSchema,
   turn: turnSchema,
   settings: settingsSchema,
 } as const;

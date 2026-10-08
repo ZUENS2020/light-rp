@@ -1,5 +1,6 @@
 import type { Env } from './env';
 import { Store } from './store';
+import { ContextComposer } from './context-composer';
 import {
   activateWorldbooks,
   estimateAssetTokens,
@@ -11,7 +12,7 @@ import type { Branch, SourceFence, RecallResult } from '../shared/domain';
 import type { ModelSettings } from './settings';
 import type { ChatMessage } from './model';
 import { ApiError } from './errors';
-import { embed, resolveVectorCandidates } from './vectors';
+import { searchLegalVectors } from './vectors';
 import { listEntities, type StoryEntity } from './entities';
 import { renderNarrativePreamble } from '../shared/narrative-preamble';
 import { hermesCharacterProfile } from '../shared/hermes-rp';
@@ -44,6 +45,9 @@ export interface ContextSnapshot {
   warnings: string[];
   entities?: StoryEntity[];
   hardRules?: HardRule[];
+  plotThreads?: import('../shared/domain').PlotThread[];
+  selections?: import('../shared/domain').ContextSelection[];
+  deduplications?: import('../shared/domain').ContextSelection[];
 }
 /** Older task artifacts and source-prefix rebuilds retain their own bound data.
  * History, recalled beliefs and character examples are never promoted to rules. */
@@ -88,6 +92,10 @@ export async function buildContext(
   viewer = 'director',
 ): Promise<ContextSnapshot> {
   const initialEpoch = await store.ownerEpoch();
+  const { memoryPolicy, plotThreads } = await import('./narrative-memory');
+  const policy = await memoryPolicy(store, branchId);
+  const unified = policy.strategy === 'unified-v1' && policy.status === 'active';
+  const threads = unified ? await plotThreads(store, branchId, viewer) : [];
   const branch = await store.getBranch(branchId),
     story = await store.getStory(branch.storyId);
   const resources = (await store.getResourceBindings(branchId)).sort((a, b) =>
@@ -188,7 +196,7 @@ export async function buildContext(
   );
   const coreMessage = [preamble, ...core].filter(Boolean).join('\n\n');
   const liveState = [
-    `当前场景：${JSON.stringify(viewer === 'director' ? (branch.scene ?? {}) : {})}`,
+    `当前场景：${JSON.stringify(viewer === 'director' ? (unified ? { ...branch.scene, ongoing: threads.filter((t) => !['resolved', 'abandoned'].includes(t.state)).map((t) => t.title) } : (branch.scene ?? {})) : {})}`,
     `本回合模式：${input.mode}；玩家角色：${input.actorId ?? story.playerCharacterId ?? '未指定'}`,
   ].join('\n\n');
   const mandatory = [coreMessage, ...cardBlocks, liveState, ...postBlocks].join('\n\n'),
@@ -208,16 +216,7 @@ export async function buildContext(
     warnings: string[] = [];
   if (settings.mode !== 'local-demo')
     try {
-      const encoded = await embed(env, [input.text.slice(0, 2000)]);
-      const key = await scopeKey(store.ownerId, branchId, viewer);
-      const matches = await env.VECTORS.query(encoded[0]!, {
-        topK: 40,
-        namespace: await branchNamespace(store.ownerId, branchId),
-        filter: { scope: key },
-        returnMetadata: 'none',
-        returnValues: false,
-      });
-      vectors = await resolveVectorCandidates(store, branchId, viewer, key, matches.matches);
+      vectors = await searchLegalVectors(env, store, branchId, viewer, input.text);
     } catch {
       warnings.push('语义索引暂不可用，已使用词法、关系和原文补尾');
     }
@@ -225,13 +224,26 @@ export async function buildContext(
     viewer,
     kinds: ['observation'],
     limit: 100,
+    ...(unified
+      ? { recordTypes: ['narrative-unit', 'narrative-segment'] }
+      : { excludeRecordTypes: ['narrative-unit', 'narrative-segment', 'plot-thread'] }),
   });
+  const composer = new ContextComposer(observations);
+  if (unified)
+    observations.sort(
+      (a, b) =>
+        (({ chapter: 0, arc: 1, scene: 2, segment: 3 })[String(a.data?.level) as 'chapter'] ?? 4) -
+          ({ chapter: 0, arc: 1, scene: 2, segment: 3 }[String(b.data?.level) as 'chapter'] ?? 4) ||
+        b.recordedSeq! - a.recordedSeq!,
+    );
   const usedSources = new Set<string>();
   const selectedObservations: string[] = [];
   let obsTokens = 0,
     representedThrough = 0;
   for (const observation of observations.filter((m) => m.subject === viewer)) {
-    const text = `[观察 ${observation.id}] ${observation.text}`;
+    const candidate = composer.preview(observation, viewer, 'archive', ['archive-budget']);
+    if (!candidate) continue;
+    const text = unified ? candidate.content : `[观察 ${observation.id}] ${observation.text}`;
     const t = estimateAssetTokens(text);
     if (
       observation.predicate === 'rolling-observation:narrative' &&
@@ -243,6 +255,7 @@ export async function buildContext(
     }
     if (obsTokens + t > observationBudget) continue;
     selectedObservations.push(text);
+    candidate.accept();
     if (
       observation.predicate === 'rolling-observation:narrative' &&
       observation.data?.version === 'rolling-v1'
@@ -251,6 +264,13 @@ export async function buildContext(
     observation.sourceIds.forEach((id) => usedSources.add(id));
     obsTokens += t;
   }
+  if (unified)
+    representedThrough = Math.max(
+      0,
+      ...events
+        .filter((e) => composer.covers(viewer, e.sourceId, Array.from(e.text).length))
+        .map((e) => e.seq),
+    );
   const worldbookTriggers = activateWorldbooks(books, {
     text: input.text,
     messages: events.slice(-16).map((e) => e.text),
@@ -296,11 +316,22 @@ export async function buildContext(
   for (const e of events.slice(-16).reverse()) {
     const t = estimateAssetTokens(e.text) + 8;
     if (spent + t > recentBudget && recent.length) {
-      if (e.seq <= representedThrough) continue;
+      if (
+        unified
+          ? composer.covers(viewer, e.sourceId, Array.from(e.text).length)
+          : e.seq <= representedThrough
+      )
+        continue;
       break;
     }
     if (t > recentBudget && !recent.length) {
-      if (t > recentBudget + recallBudget && e.seq <= representedThrough) continue;
+      if (
+        t > recentBudget + recallBudget &&
+        (unified
+          ? composer.covers(viewer, e.sourceId, Array.from(e.text).length)
+          : e.seq <= representedThrough)
+      )
+        continue;
       if (t > recentBudget + recallBudget)
         throw new ApiError(422, '最近回合无法放入上下文', 'RECENT_BUDGET');
       recallBudget -= t - recentBudget;
@@ -311,38 +342,34 @@ export async function buildContext(
   }
   recallBudget += Math.max(0, recentBudget - spent);
   const directorShare = viewer === 'director' ? 0.7 : 1;
+  const threadBudget = unified ? Math.min(1200, recallBudget * 0.2) : 0;
+  const memoryBudget = Math.max(0, recallBudget - threadBudget);
   const retrieved = await store.recall(branchId, input.text, {
     viewer,
-    maxTokens: Math.floor(recallBudget * directorShare),
+    maxTokens: Math.floor(memoryBudget * directorShare),
     maxCandidates: 120,
+    ...(unified
+      ? {}
+      : { excludeRecordTypes: ['narrative-unit', 'narrative-segment', 'plot-thread'] }),
     vectorCandidates: vectors,
     graphSeeds: 8,
     graphHops: 2,
     graphFanout: 8,
     maxGraphNodes: 96,
   });
-  const serializeMemory = (i: RecallResult['items'][number]) =>
-    JSON.stringify({
-      id: i.memory.id,
-      kind: i.memory.kind,
-      subject: i.memory.subject,
-      predicate: i.memory.predicate,
-      value: i.memory.value,
-      authority: i.memory.authority,
-      validFrom: i.memory.validFrom,
-      validTo: i.memory.validTo,
-      observerId: i.memory.observerId,
-      text: i.memory.text,
-      knownBy: i.memory.knownBy,
-      evidence: i.evidence.map((e) => ({ sourceId: e.sourceId, quote: e.quote })),
-    });
+  const serialized = new Map<string, string>();
+  const serializeMemory = (i: RecallResult['items'][number]) => serialized.get(i.memory.id) ?? '';
   // Include the IDs and evidence wrapper in the actual prompt cost; the search
   // engine's estimate covers source content but cannot predict this serializer.
   let recallTokens = 128;
   const recalledItems: RecallResult['items'] = [];
   for (const item of retrieved.items) {
-    const cost = estimateAssetTokens(serializeMemory(item)) + 1;
-    if (recallTokens + cost > recallBudget * directorShare) continue;
+    const candidate = composer.preview(item.memory, viewer, 'recall', item.arms);
+    if (!candidate) continue;
+    const cost = estimateAssetTokens(candidate.content) + 1;
+    if (recallTokens + cost > memoryBudget * directorShare) continue;
+    candidate.accept();
+    serialized.set(item.memory.id, candidate.content);
     recallTokens += cost;
     recalledItems.push(item);
   }
@@ -367,7 +394,30 @@ export async function buildContext(
   addEntries('author-note-top');
   // KV caches match from the beginning. Keep bound cards, lore positions and
   // growing history ahead of per-turn scene/recall data; never reuse stale data.
+  const threadTexts: string[] = [];
+  let threadTokens = 0;
+  if (unified)
+    for (const thread of threads.filter((t) => !['resolved', 'abandoned'].includes(t.state))) {
+      const text = JSON.stringify({
+        threadId: thread.id,
+        revisionId: thread.revisionId,
+        title: thread.title,
+        state: thread.state,
+        completion: thread.completion,
+      });
+      const cost = estimateAssetTokens(text) + 8;
+      if (threadTokens + cost > threadBudget) continue;
+      if (!composer.reserveThread(thread.revisionId, viewer)) continue;
+      thread.evidence.forEach((e) => usedSources.add(e.sourceId));
+      threadTokens += cost;
+      threadTexts.push(text);
+    }
   const dynamicMessages: ChatMessage[] = [{ role: 'system', content: liveState }];
+  if (threadTexts.length)
+    dynamicMessages.push({
+      role: 'system',
+      content: '未完成剧情线（完成条件依据结果；章节结束不等于结案）：\n' + threadTexts.join('\n'),
+    });
   if (selectedObservations.length)
     dynamicMessages.push({ role: 'system', content: selectedObservations.join('\n') });
   if (recall.items.length)
@@ -382,15 +432,33 @@ export async function buildContext(
     )) {
       const known = await store.recall(branchId, input.text, {
         viewer: c.id,
-        maxTokens: Math.floor((recallBudget * 0.3) / Math.max(1, [...focus].length)),
+        maxTokens: Math.floor((memoryBudget * 0.3) / Math.max(1, [...focus].length)),
         maxCandidates: 40,
         graphHops: 1,
       });
+      known.items = known.items.filter(
+        (i) => !unified || !String(i.memory.predicate).startsWith('rolling-observation:'),
+      );
       known.items.flatMap((i) => i.memory.sourceIds).forEach((id) => usedSources.add(id));
-      if (known.items.length)
+      const expanded: string[] = [];
+      let knownTokens = 0;
+      const knownBudget = Math.floor((memoryBudget * 0.3) / Math.max(1, [...focus].length));
+      for (const item of known.items) {
+        const candidate = composer.preview(item.memory, c.id, 'recall', item.arms);
+        if (!candidate) continue;
+        const text = recalledItems.some((r) => r.memory.id === item.memory.id)
+          ? `已展开版本 ${item.memory.id}`
+          : candidate.content;
+        const cost = estimateAssetTokens(text) + 8;
+        if (knownTokens + cost > knownBudget) continue;
+        candidate.accept();
+        expanded.push(text);
+        knownTokens += cost;
+      }
+      if (expanded.length)
         dynamicMessages.push({
           role: 'system',
-          content: `${c.data.name} 可用认知：${known.items.map((i) => i.memory.text).join('\n')}。该角色不能使用未列明的导演秘密。`,
+          content: `${c.data.name} 可用认知：${expanded.join('\n')}。该角色不能使用未列明的导演秘密。`,
         });
     }
   addEntries('examples-top');
@@ -529,6 +597,9 @@ export async function buildContext(
     warnings,
     entities: viewer === 'director' ? await listEntities(store, branchId) : [],
     hardRules,
+    plotThreads: threads,
+    selections: composer.selections,
+    deduplications: composer.deduplications,
   };
 }
 export async function scopeKey(owner: string, branch: string, viewer: string) {
