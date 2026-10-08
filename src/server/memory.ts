@@ -157,7 +157,13 @@ export class MemoryEngine {
         e.start,
         e.end,
       ),
-      id = existing?.id ?? e.spanId ?? uuid();
+      // Multiple proposals are prepared before their shared transaction. Use
+      // one canonical ID for identical evidence; random IDs let INSERT OR IGNORE
+      // discard the second span while its memory_evidence referenced a missing ID.
+      id =
+        existing?.id ??
+        e.spanId ??
+        `span_${await digest({ sourceId: e.sourceId, version: Number(s.version), generation: Number(s.generation), start: e.start, end: e.end })}`;
     if (e.spanId && existing && e.spanId !== existing.id)
       throw new StoreError('SPAN_ID', 'Evidence span identity mismatch', 400);
     return {

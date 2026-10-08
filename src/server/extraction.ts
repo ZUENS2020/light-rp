@@ -391,7 +391,9 @@ procedureUses只能引用本快照提供的active procedure版本ID，phase为pl
     // scene, retrieval results and texts. Repairs reuse this exact input too.
     characters: context.characters.map((c) => ({ id: c.id, name: c.data.name })),
     boundHardRules: validationRules(context),
-    entityResolution: entityResolutionPrompt(context.entities ?? []),
+    entityResolution:
+      entityResolutionPrompt(context.entities ?? []) +
+      '\n新实体名称必须逐字出现在该条事实自己的 evidence.quote 中；不能用场景、旧回合或自行概括的标签给本段未命名对象命名。无法指明对象时保留原文事件，用 subject=narrator、kind=episode，不编造人物身份或地点别名。',
     mode: input.mode,
     scene: context.branch.scene,
     memoryCandidates: [] as {

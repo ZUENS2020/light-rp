@@ -24,7 +24,12 @@ import { ApiError, errorMessage } from './errors';
 import type { Event, MemoryProposal } from '../shared/domain';
 import { estimateAssetTokens } from '../shared/assets';
 import { indexMemories, cleanDeletedVectors, deleteMemoryVectors } from './vectors';
-import { listEntities, resolveExtractionEntities, assertEntityResolution } from './entities';
+import {
+  listEntities,
+  resolveMemoryEntities,
+  entityReviewProposals,
+  type RejectedEntityFact,
+} from './entities';
 import { syncPersonaCapabilities } from './persona';
 import type { ExtractionDecisionAudit } from './extraction-decisions';
 export interface TaskRow {
@@ -865,10 +870,9 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
               events.some((e) => e.role !== 'correction' && e.text === f.evidence[0]?.quote),
             );
           }
-          const resolved = await resolveExtractionEntities(s, p.branchId!, extraction, events, [], {
+          const resolved = await resolveMemoryEntities(s, p.branchId!, extraction, events, [], {
             ownerEpoch: typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
           });
-          assertEntityResolution(resolved);
           extraction = resolved.extraction;
           knowledgeGrantsFor(extraction, events, resolved.entities);
           const path = await put(this.env, `jobs/${row.id}/prepared.json`, {
@@ -876,6 +880,7 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
             extraction,
             input,
             through,
+            rejectedFacts: resolved.rejectedFacts,
           });
           if (
             typeof payload.ownerEpoch === 'number' &&
@@ -892,6 +897,7 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
             extraction: Extraction | null;
             input: TurnInput;
             through: number;
+            rejectedFacts?: RejectedEntityFact[];
           }>(this.env, preparedKey);
           if (!data.extraction) return;
           const grants = knowledgeGrantsFor(
@@ -899,7 +905,10 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
             data.events,
             await listEntities(s, p.branchId!, data.through),
           );
-          const proposals = memoryProposals(data.extraction, data.events, data.input.mode);
+          const proposals = [
+            ...memoryProposals(data.extraction, data.events, data.input.mode),
+            ...entityReviewProposals(data.rejectedFacts ?? [], data.events),
+          ];
           await applyAutomaticKnowledge(s, p.branchId!, grants, ['facts'], {
             ownerEpoch: typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
             sourceFence: payload.sourceFence as never,
@@ -1142,11 +1151,10 @@ async function replayBranch(
           else extraction = extractionSchema.parse({ scene: context.branch.scene, facts: [] });
         }
         await syncPersonaCapabilities(s, branchId, seq, epoch);
-        const resolution = await resolveExtractionEntities(s, branchId, extraction, events, [], {
+        const resolution = await resolveMemoryEntities(s, branchId, extraction, events, [], {
           ownerEpoch: epoch,
           asOfSeq: seq,
         });
-        assertEntityResolution(resolution);
         extraction = resolution.extraction;
         const grants = knowledgeGrantsFor(extraction, events, resolution.entities);
         const sourceFence = [];
@@ -1164,6 +1172,7 @@ async function replayBranch(
             ...proposal,
             idempotencyKey: `rebuild:${await digest({ jobId, original: proposal.idempotencyKey })}`,
           });
+        proposals.push(...entityReviewProposals(resolution.rejectedFacts, events));
         await applyAutomaticKnowledge(
           s,
           branchId,

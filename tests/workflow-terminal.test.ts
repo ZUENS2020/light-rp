@@ -759,6 +759,61 @@ describe('durable task terminal states', () => {
       await store.one('SELECT status,last_error FROM outbox WHERE id=?', params.outboxId),
     ).toMatchObject({ status: 'failed', last_error: expect.stringContaining('STALE_WRITE') });
   });
+  it('completes a saved extraction with an unsupported entity as a review draft and advances its source cursor', async () => {
+    const event = (await store.getEvents(branchId))[0]!;
+    const params = await memory('entity-review'),
+      guarded = strictBindings();
+    await store.run(
+      'UPDATE outbox SET payload_json=? WHERE id=?',
+      JSON.stringify({
+        throughSeq: 1,
+        ownerEpoch: await store.ownerEpoch(),
+        retryId: 'entity-review',
+        taskId: 'saved-extraction',
+        attempt: 1,
+      }),
+      params.outboxId,
+    );
+    guarded.objects.set(
+      `tasks/${encodeURIComponent(store.ownerId)}/saved-extraction/1/extraction.json`,
+      JSON.stringify({
+        input: { mode: 'roleplay', text: '' },
+        extraction: extractionSchema.parse({
+          scene: {},
+          facts: [
+            {
+              kind: 'canon',
+              subject: '没有命名的人',
+              predicate: '位置',
+              value: '桌面',
+              text: event.text,
+              evidence: [{ source: 'assistant', quote: event.text }],
+            },
+          ],
+        }),
+      }),
+    );
+    await new MemoryWorkflow({} as ExecutionContext, guarded.env).run(
+      { payload: params } as never,
+      guarded.step,
+    );
+    expect(
+      await store.one('SELECT status,last_error FROM outbox WHERE id=?', params.outboxId),
+    ).toEqual({ status: 'completed', last_error: null });
+    const records = await store.memories(branchId, { includeInactive: true });
+    expect(records.filter((m) => m.status === 'draft')).toHaveLength(1);
+    expect(records.some((m) => m.status === 'active' && m.predicate === 'source_episode')).toBe(
+      true,
+    );
+    expect(
+      await store.one(
+        "SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version='v3-facts'",
+        branchId,
+      ),
+    ).toEqual({ applied_seq: 1 });
+    expect(await store.all('SELECT * FROM entities')).toEqual([]);
+    expect(complete).not.toHaveBeenCalled();
+  });
   it('persists observation invalidation and preserves the committed atomic facts', async () => {
     const event = (await store.getEvents(branchId))[0]!;
     await store.propose(branchId, {

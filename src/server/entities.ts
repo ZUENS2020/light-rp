@@ -1,6 +1,6 @@
 import { digest, now, Store, StoreError } from './store';
 import { evidenceFor, type Extraction } from './extraction';
-import type { Event, QuerySpec, SourceFence } from '../shared/domain';
+import type { Event, QuerySpec, SourceFence, MemoryProposal } from '../shared/domain';
 
 export interface EntityAlias {
   name: string;
@@ -32,6 +32,22 @@ export interface EntityResolution {
   ambiguities: EntityAmbiguity[];
   draftFactIndexes: number[];
   entities: StoryEntity[];
+}
+class EntityNameEvidenceError extends StoreError {
+  constructor(
+    readonly factIndex: number,
+    readonly path: string,
+    readonly reference: string,
+  ) {
+    super('ENTITY_NAME_EVIDENCE', `实体“${reference}”没有在所引原文中明确出现`, 422);
+  }
+}
+export interface RejectedEntityFact {
+  factIndex: number;
+  path: string;
+  reference: string;
+  code: string;
+  fact: Extraction['facts'][number];
 }
 interface EntityRow {
   id: string;
@@ -381,7 +397,14 @@ export async function resolveExtractionEntities(
       return reference;
     }
     if (!create || !normalized) return reference;
-    const { source } = await sourceFor(fact, reference);
+    let source: SourceRow;
+    try {
+      ({ source } = await sourceFor(fact, reference));
+    } catch (error) {
+      if (error instanceof StoreError && error.code === 'ENTITY_NAME_EVIDENCE')
+        throw new EntityNameEvidenceError(factIndex, path, reference);
+      throw error;
+    }
     const id = `ent_${await digest({ owner: store.ownerId, story: branch.storyId, source: source.id, name: normalized })}`;
     const entity: StoryEntity = {
       id,
@@ -442,7 +465,14 @@ export async function resolveExtractionEntities(
             : [];
       if (entity)
         for (const alias of values) {
-          const { source } = await sourceFor(fact, alias);
+          let source: SourceRow;
+          try {
+            ({ source } = await sourceFor(fact, alias));
+          } catch (error) {
+            if (error instanceof StoreError && error.code === 'ENTITY_NAME_EVIDENCE')
+              throw new EntityNameEvidenceError(index, 'alias', alias);
+            throw error;
+          }
           await writeAlias(entity, alias, source, 25);
         }
     }
@@ -472,4 +502,105 @@ export async function resolveExtractionEntities(
     draftFactIndexes: [...new Set(ambiguities.map((item) => item.factIndex))],
     entities: [...entities.values()],
   };
+}
+
+/** Background projections quarantine unsupported references per candidate.
+ * Each unsuccessful resolver pass writes nothing. Source/epoch/DB failures
+ * remain terminal; only naming/ambiguity errors can become reviewable drafts. */
+export async function resolveMemoryEntities(
+  store: Store,
+  branchId: string,
+  extraction: Extraction,
+  events: Event[],
+  characters: EntityCharacter[],
+  options: Parameters<typeof resolveExtractionEntities>[5] = {},
+) {
+  const candidate = structuredClone(extraction);
+  const indexes = candidate.facts.map((_, index) => index);
+  const rejectedFacts: RejectedEntityFact[] = [];
+  for (;;) {
+    let failures: { factIndex: number; path: string; reference: string; code: string }[];
+    try {
+      const resolved = await resolveExtractionEntities(
+        store,
+        branchId,
+        candidate,
+        events,
+        characters,
+        options,
+      );
+      if (!resolved.ambiguities.length) return { ...resolved, rejectedFacts };
+      failures = resolved.ambiguities.map((issue) => ({ ...issue, code: 'ENTITY_AMBIGUOUS' }));
+    } catch (error) {
+      if (!(error instanceof EntityNameEvidenceError)) throw error;
+      failures = [
+        {
+          factIndex: error.factIndex,
+          path: error.path,
+          reference: error.reference,
+          code: error.code,
+        },
+      ];
+    }
+    const removed = new Set(failures.map((f) => f.factIndex));
+    for (const issue of new Map(failures.map((f) => [f.factIndex, f])).values())
+      rejectedFacts.push({
+        ...issue,
+        factIndex: indexes[issue.factIndex]!,
+        fact: structuredClone(candidate.facts[issue.factIndex]!),
+      });
+    candidate.facts = candidate.facts.filter((_, index) => !removed.has(index));
+    const kept = indexes.filter((_, index) => !removed.has(index));
+    indexes.splice(0, indexes.length, ...kept);
+  }
+}
+
+/** Review drafts never enter recall or grant knowledge. Preserve a director-only
+ * raw episode for affected sources so rejecting a name does not erase history. */
+export function entityReviewProposals(
+  rejected: RejectedEntityFact[],
+  events: Event[],
+): MemoryProposal[] {
+  const drafts: MemoryProposal[] = rejected.map((item) => {
+    const evidence = item.fact.evidence.map((quote) => evidenceFor(quote, events));
+    return {
+      kind: 'episode',
+      subject: 'narrator',
+      predicate: 'unresolved_entity',
+      value: item.fact.value,
+      text: item.fact.text,
+      status: 'draft',
+      knownBy: [],
+      evidence,
+      memoryKey: `entity-review:${evidence.map((e) => e.sourceId).join(':')}:${item.factIndex}`,
+      data: {
+        code: item.code,
+        path: item.path,
+        reference: item.reference,
+        originalFact: JSON.parse(JSON.stringify(item.fact)),
+      },
+    };
+  });
+  const affected = new Set(drafts.flatMap((p) => p.evidence.map((e) => e.sourceId)));
+  return [
+    ...drafts,
+    ...events
+      .filter((e) => affected.has(e.sourceId))
+      .map((event): MemoryProposal => ({
+        kind: 'episode',
+        subject: 'narrator',
+        predicate: 'source_episode',
+        value: event.text,
+        text: event.text,
+        knownBy: [],
+        memoryKey: `source-episode:${event.sourceId}`,
+        evidence: [
+          evidenceFor(
+            { source: event.role === 'assistant' ? 'assistant' : 'user', quote: event.text },
+            events,
+          ),
+        ],
+        data: { entityResolution: 'raw-source-fallback' },
+      })),
+  ];
 }

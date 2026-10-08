@@ -6,6 +6,8 @@ import {
   entityResolutionPrompt,
   listEntities,
   resolveExtractionEntities,
+  resolveMemoryEntities,
+  entityReviewProposals,
   type EntityCharacter,
 } from '../src/server/entities';
 import type { Event } from '../src/shared/domain';
@@ -96,6 +98,84 @@ const resolve = (
 ) => resolveExtractionEntities(store, target, extracted(event, facts), [event], cast);
 
 describe('explicit character IDs and homonym disambiguation', () => {
+  it('quarantines unsupported entity candidates without blocking valid facts or reviving partial registrations', async () => {
+    const event = await turn('门开着。白钥匙在桌面。');
+    const proposed = extracted(event, [
+      { subject: '门', predicate: '持有', kind: 'relation', value: '无依据钥匙' },
+      { subject: '白钥匙', predicate: '位置', value: '桌面' },
+    ]);
+    const resolved = await resolveMemoryEntities(store, branchId, proposed, [event], characters);
+    expect(resolved.rejectedFacts).toMatchObject([
+      { factIndex: 0, path: 'value', code: 'ENTITY_NAME_EVIDENCE' },
+    ]);
+    expect(resolved.extraction.facts).toHaveLength(1);
+    expect(
+      (await listEntities(store, branchId))
+        .filter((e) => e.kind === 'entity')
+        .map((e) => e.name)
+        .sort(),
+    ).toEqual(['桌面', '白钥匙']);
+    const reviews = entityReviewProposals(resolved.rejectedFacts, [event]);
+    await store.extract(branchId, {
+      eventIds: [event.id],
+      cursor: event.seq,
+      extractorVersion: 'v3-facts',
+      proposals: reviews,
+    });
+    await store.extract(branchId, {
+      eventIds: [event.id],
+      cursor: event.seq,
+      extractorVersion: 'v3-facts',
+      proposals: reviews,
+    });
+    const all = await store.memories(branchId, { includeInactive: true });
+    expect(all.filter((m) => m.status === 'draft')).toHaveLength(1);
+    expect(all.filter((m) => m.status === 'active')).toHaveLength(1);
+    expect(
+      (await store.recall(branchId, '无依据钥匙')).items.every((i) => i.memory.status === 'active'),
+    ).toBe(true);
+    expect((await store.recall(branchId, '白钥匙', { viewer: characters[0]!.id })).items).toEqual(
+      [],
+    );
+    expect(
+      (
+        await store.one<{ applied_seq: number }>(
+          "SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version='v3-facts'",
+          branchId,
+        )
+      )?.applied_seq,
+    ).toBe(event.seq);
+    await store.deleteSource(event.sourceId);
+    await expect(
+      resolveMemoryEntities(store, branchId, proposed, [event], characters),
+    ).rejects.toMatchObject({ code: 'ENTITY_SOURCE' });
+    expect((await store.recall(branchId, '白钥匙')).items).toEqual([]);
+  });
+  it('quarantines ambiguous homonyms while keeping explicit card IDs usable', async () => {
+    const event = await turn('两位小明站在北门。');
+    const resolved = await resolveMemoryEntities(
+      store,
+      branchId,
+      extracted(event, [
+        { subject: '小明', kind: 'relation', value: '小明' },
+        { subject: characters[0]!.id },
+      ]),
+      [event],
+      characters,
+    );
+    expect(resolved.rejectedFacts[0]?.code).toBe('ENTITY_AMBIGUOUS');
+    expect(resolved.rejectedFacts).toHaveLength(1);
+    expect(resolved.extraction.facts[0]?.subject).toBe(characters[0]!.id);
+    await expect(
+      resolveMemoryEntities(
+        store,
+        branchId,
+        extracted({ ...event, sourceId: 'invalid' }, [{ subject: '小明' }]),
+        [{ ...event, sourceId: 'invalid' }],
+        characters,
+      ),
+    ).rejects.toMatchObject({ code: 'ENTITY_SOURCE' });
+  });
   it('keeps two 小明 cards independent and leaves name-only reference ambiguous', async () => {
     const event = await turn('两位小明站在北门，各有不同任务。');
     const ambiguous = await resolve(event, [{ subject: '小明' }]);
