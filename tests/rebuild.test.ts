@@ -191,6 +191,43 @@ async function rebuildJob(target: string) {
 }
 
 describe('real D1 branch replay with durable step and R2 boundaries', () => {
+  it('compression-only backfill refreshes a closed factual gap without reextracting or appending plot', async () => {
+    const original = await cachedTurn('compression-only', '北门已开放。');
+    await runMemory(original.outboxId);
+    const before = await store.all('SELECT id FROM memory_versions WHERE kind<>?', 'observation');
+    await store.run(
+      'UPDATE memory_cursors SET applied_seq=0 WHERE branch_id=? AND extractor_version=?',
+      branchId,
+      'v3-facts',
+    );
+    const id = 'compression-only',
+      at = new Date().toISOString();
+    await store.run(
+      'INSERT INTO outbox(id,owner_id,branch_id,kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+      id,
+      store.ownerId,
+      branchId,
+      'memory',
+      JSON.stringify({ compressOnly: true, throughSeq: 2, ownerEpoch: await store.ownerEpoch() }),
+      at,
+      at,
+    );
+    await runMemory(id);
+    expect(
+      await store.one(
+        'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+        branchId,
+        'v3-facts',
+      ),
+    ).toEqual({ applied_seq: 2 });
+    expect(await store.getEvents(branchId)).toHaveLength(2);
+    expect(await store.all('SELECT id FROM memory_versions WHERE kind<>?', 'observation')).toEqual(
+      before,
+    );
+    expect(await store.one('SELECT status FROM outbox WHERE id=?', id)).toEqual({
+      status: 'completed',
+    });
+  });
   it('applies an oversized imported opening before requiring the semantic compression model', async () => {
     const text = '开篇。'.repeat(8000) + '信使终于抵达。';
     const imported = await store.appendTurn({

@@ -239,6 +239,32 @@ describe('durable rolling observer and reflector', () => {
     expect((await root())!.text).toContain('旧约定');
     expect((await root())!.text).toContain('新增结果');
   });
+  it('publishes completed event prefixes while a later page is still pending', async () => {
+    for (let i = 0; i < 10; i++) await event(`事件${i}。` + '风'.repeat(500));
+    await expect(
+      rollObservations(
+        env,
+        store,
+        branchId,
+        10,
+        await store.ownerEpoch(),
+        settings,
+        async (name, callback) => {
+          if (name === 'observe director narrative 1.0 load')
+            throw new Error('模拟下一页暂时不可用');
+          return callback();
+        },
+      ),
+    ).rejects.toThrow('模拟下一页暂时不可用');
+    const state = (await progress()).state;
+    expect(state.throughSeq).toBeGreaterThan(0);
+    expect(state.throughSeq).toBeLessThan(10);
+    expect(state.throughSeq).toBe(state.eventSeq);
+    expect((await root())!.data?.throughSeq).toBe(state.throughSeq);
+    expect(await store.narrativeCursor(branchId)).toBe(state.throughSeq);
+    await roll();
+    expect((await progress()).state.throughSeq).toBe(10);
+  });
   it('rejects a source deletion between preparation and activation, including inherited summaries', async () => {
     const first = await event('【密令：星河】');
     await roll();
@@ -520,6 +546,36 @@ describe('durable rolling observer and reflector', () => {
     await roll();
     expect((await root('facts'))!.text).toContain('赴会');
     expect((await progress('director:facts')).state.observedCount).toBe(1);
+  });
+  it('catches the factual watermark up to already processed later events when a historical gap closes', async () => {
+    const first = await event('先发生的事件。'),
+      second = await event('后来发生的事件。');
+    await store.extract(branchId, {
+      eventIds: [second.id],
+      proposals: [],
+      cursor: 2,
+      extractorVersion: 'v3-facts',
+    });
+    expect(
+      await store.one(
+        'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+        branchId,
+        'v3-facts',
+      ),
+    ).toEqual({ applied_seq: 0 });
+    await store.extract(branchId, {
+      eventIds: [first.id],
+      proposals: [],
+      cursor: 1,
+      extractorVersion: 'v3-facts',
+    });
+    expect(
+      await store.one(
+        'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+        branchId,
+        'v3-facts',
+      ),
+    ).toEqual({ applied_seq: 2 });
   });
   it('publishes the complete watermark after a full page of invisible sources and exports resumable progress', async () => {
     for (let i = 0; i < 24; i++) await event(`短事件${i}。`);

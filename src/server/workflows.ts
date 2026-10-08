@@ -801,6 +801,15 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
         const through = await durable(step, 'load compression target', retry, async () =>
           Number(payload.throughSeq ?? (await s.getBranch(p.branchId!)).headSeq),
         );
+        await durable(step, 'refresh applied fact prefix', retry, () =>
+          s.extract(p.branchId!, {
+            eventIds: [],
+            proposals: [],
+            cursor: through,
+            extractorVersion: 'v3-facts',
+            ownerEpoch: typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
+          }),
+        );
         await observe(
           this.env,
           s,

@@ -240,6 +240,10 @@ async function planPage(
       state.eventOffset = 0;
     }
     if (exhausted) state.eventSeq = through;
+    // Each accepted raw page already proves its completed event prefix.
+    // A fragment of the next event does not move eventSeq, while complete
+    // earlier events can become usable before the entire target is finished.
+    state.throughSeq = state.eventSeq;
   } else {
     const page = await s.observationPage(branchId, {
       viewer,
