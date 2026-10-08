@@ -88,6 +88,23 @@ function binding(...outputs: unknown[]) {
   return { run, env: { AI: { run }, AI_GATEWAY_ID: 'mock-only' } as unknown as Env };
 }
 describe('bound-rule extraction and source semantics', () => {
+  it('keeps validator and bound rules stable before changing scene and entity data', () => {
+    const c = context();
+    const before = extractionMessages(c, input, narration);
+    const after = extractionMessages(
+      { ...c, branch: { ...c.branch, scene: { location: '另一个场景' } } },
+      { ...input, text: '另一段输入' },
+      '另一段正文',
+    );
+    expect(before[0]).toEqual(after[0]);
+    const stable = JSON.stringify(JSON.parse(before[1]!.content).boundHardRules);
+    expect(after[1]!.content).toContain(stable);
+    expect(after[1]!.content.indexOf('boundHardRules')).toBeLessThan(
+      after[1]!.content.indexOf('scene'),
+    );
+    expect(JSON.parse(after[1]!.content).entityResolution).toContain('实体');
+    expect(JSON.parse(after[1]!.content).assistant).toBe('另一段正文');
+  });
   it('sends frozen global, character and activated lore rules without promoting historical dialogue', async () => {
     const c = context(),
       { run, env } = binding(result());

@@ -51,6 +51,8 @@ D1 是事实账本。`turns/events/sources` 保留提交身份、事件顺序、
 
 向量 namespace 按 owner/branch 隔离，metadata scope 进一步区分 director 和 character。每个不可变记忆 revision 的 embedding 在 D1 缓存，跨认知者复用；viewer 向量分别建索引。索引 ID 是 memory revision 与完整 scope 的 SHA-256，固定 64 ASCII 字节，符合 [Vectorize ID 限制](https://developers.cloudflare.com/vectorize/platform/limits/)；查询只通过受 owner/branch/viewer/scope 约束的 manifest 反查，不从字符串切割记忆 ID。纠正/失效 revision 从 manifest 和 Vectorize 剔除，来源删除也清理 embedding cache。外部 upsert 与 D1 之间没有分布式事务：实现依靠 epoch guard、写后校验、补偿删除和查询端后验过滤保证旧候选不成为有效召回。
 
+叙事及结构化验证提示词将稳定的规则、绑定资料前置，变化的场景与召回内容后置，以提高直连模型的前缀缓存复用。模型仍处理本轮完整有效上下文；来源校验与删除水位保持原流程。实际 token 命中统计及合成对照见[语言模型缓存说明](./model-cache.md)。
+
 上下文分别分配固定规则/角色、近期原文、观察、召回和世界书预算。核心规则和必要资料放不下时显式失败，超出近期窗口但尚未经过连续整理的事件触发 `MEMORY_BACKLOG`；不会默默跳过整个长会话尾部。角色聚焦影响卡片详细度和定向认知块；director 的事实块与每位角色的已知块分开组装。总提示预算包含最终消息开销。
 
 观察压缩只引用仍有效的原子记忆，限制来源片段数量，并保留 critical IDs。`activateObservation` 原子检查 expected memory IDs、projection revision、source fences 和 owner epoch，避免纠正或删除期间把旧结论重新激活。观察按认知者及规则、事实、解释分桶，避免把角色误信与客观真相压成同一结论；压缩失败保留已有观察和来源。

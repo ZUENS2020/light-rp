@@ -16,6 +16,7 @@
     "eval:live": "tsx scripts/live-evaluate.ts",
     "eval:quality": "tsx scripts/quality-evaluate.ts",
     "eval:decisions": "tsx scripts/decision-evaluate.ts",
+    "eval:cache": "tsx scripts/evaluate-model-cache.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

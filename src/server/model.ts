@@ -2,6 +2,39 @@ import type { Env } from './env';
 import type { ModelSettings } from './settings';
 import { ApiError } from './errors';
 export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+export interface PromptCacheUsage {
+  inputTokens: number | null;
+  cachedTokens: number | null;
+  uncachedTokens: number | null;
+  cacheHitRate: number | null;
+  outputTokens: number | null;
+}
+/** Provider-reported counts only. Missing cache telemetry is unknown, not zero.
+ * Never log the raw usage object: custom providers may attach arbitrary data. */
+export function promptCacheUsage(usage: Record<string, unknown>): PromptCacheUsage {
+  const count = (value: unknown) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const details = usage.prompt_tokens_details;
+  const cached =
+    count(usage.prompt_cache_hit_tokens) ??
+    count(details && typeof details === 'object' ? Reflect.get(details, 'cached_tokens') : null);
+  const miss = count(usage.prompt_cache_miss_tokens);
+  const input =
+    count(usage.prompt_tokens) ?? (cached !== null && miss !== null ? cached + miss : null);
+  const valid =
+    cached !== null &&
+    input !== null &&
+    Number.isSafeInteger(input) &&
+    cached <= input &&
+    (miss === null || cached + miss === input);
+  return {
+    inputTokens: input,
+    cachedTokens: valid ? cached : null,
+    uncachedTokens: valid ? input - cached : null,
+    cacheHitRate: valid && input > 0 ? cached / input : null,
+    outputTokens: count(usage.completion_tokens),
+  };
+}
 export type CompletionOptions = {
   signal?: AbortSignal;
   onText?: (text: string) => Promise<void>;
@@ -212,6 +245,11 @@ export async function complete(
     messages: effectiveMessages,
     max_tokens: settings.maxOutput,
     stream: !!options.onText,
+    // Command Code's direct endpoint implements Chat Completions. Request the
+    // final usage chunk; keep unsupported Workers AI binding payloads unchanged.
+    ...(options.onText && settings.mode === 'openai' && settings.provider === 'commandcode'
+      ? { stream_options: { include_usage: true } }
+      : {}),
     ...(format ? { response_format: format } : {}),
   };
   let response: Response;
@@ -286,7 +324,28 @@ export async function complete(
       options.signal,
     );
   }
-  return readCompletion(response, options);
+  const started = Date.now();
+  let usage: PromptCacheUsage | undefined;
+  try {
+    return await readCompletion(response, {
+      ...options,
+      onUsage: (raw) => {
+        usage = promptCacheUsage(raw);
+        options.onUsage?.(raw);
+      },
+    });
+  } finally {
+    console.info(
+      JSON.stringify({
+        event: 'model_prompt_cache',
+        model,
+        phase: options.json ? 'structured' : options.auxiliary ? 'auxiliary' : 'narrative',
+        ...promptCacheUsage({}),
+        ...usage,
+        responseReadMs: Date.now() - started,
+      }),
+    );
+  }
 }
 export function parseJson(text: string): unknown {
   return JSON.parse(

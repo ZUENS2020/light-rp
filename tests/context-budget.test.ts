@@ -53,6 +53,129 @@ async function fixture() {
   return { store, story, ids };
 }
 describe('shared optional narrative context budget', () => {
+  it('preserves lore positions and measures depth in chat messages after moving dynamic blocks', async () => {
+    const { store, story, ids } = await fixture();
+    const contents = [
+      '卡前规则',
+      '卡后规则',
+      '作者顶部规则',
+      '作者底部规则',
+      '历史深度规则',
+      '示例顶部规则',
+      '示例底部规则',
+    ];
+    const book = normalizeWorldbook({
+      entries: Object.fromEntries(
+        contents.map((content, position) => [
+          position,
+          { uid: position, constant: true, content, position, depth: 1, role: 1 },
+        ]),
+      ),
+    });
+    const encoded = JSON.stringify(book),
+      at = new Date().toISOString();
+    await store.run(
+      "INSERT INTO assets(id,owner_id,kind,name,revision,raw_json,data_json,created_at,updated_at) VALUES('position-book',?,'worldbook','位置测试',1,?,?,?,?)",
+      store.ownerId,
+      encoded,
+      encoded,
+      at,
+      at,
+    );
+    await store.run(
+      "INSERT INTO asset_revisions(id,asset_id,revision,raw_json,data_json,created_at) VALUES('position-rev','position-book',1,?,?,?)",
+      encoded,
+      encoded,
+      at,
+    );
+    const target = await store.createStory({
+      worldId: (await store.getStory(story.id)).worldId,
+      characterIds: ids,
+      worldbookIds: ['position-book'],
+    });
+    const session = await store.createSession({ branchId: target.branchId });
+    await store.appendTurn({
+      branchId: target.branchId,
+      sessionId: session.id,
+      requestId: 'position-history',
+      messages: [
+        { role: 'user', text: '来到港口。' },
+        { role: 'assistant', text: '船长站在岸边。' },
+      ],
+    });
+    const context = await buildContext(
+      {} as Env,
+      store,
+      target.branchId,
+      { mode: 'roleplay', text: '继续检查。', focusCharacterIds: ['a'] },
+      defaults('local-demo'),
+      'positions',
+    );
+    const index = (text: string) => context.messages.findIndex((m) => m.content.includes(text));
+    expect(index('卡前规则')).toBeLessThan(index('必须遵守独立认知'));
+    expect(index('必须遵守独立认知')).toBeLessThan(index('卡后规则'));
+    expect(index('作者顶部规则')).toBeLessThan(index('示例顶部规则'));
+    expect(index('示例顶部规则')).toBeLessThan(index('语气示例'));
+    expect(index('语气示例')).toBeLessThan(index('示例底部规则'));
+    expect(index('示例底部规则')).toBeLessThan(index('来到港口。'));
+    expect(index('来到港口。')).toBeLessThan(index('历史深度规则'));
+    expect(index('历史深度规则')).toBeLessThan(index('船长站在岸边。'));
+    expect(context.messages[index('历史深度规则')]!.role).toBe('user');
+    expect(index('船长站在岸边。')).toBeLessThan(index('当前场景：'));
+    expect(index('当前场景：')).toBeLessThan(index('作者底部规则'));
+    expect(index('作者底部规则')).toBeLessThan(index('继续检查。'));
+  });
+  it('keeps cards and growing history ahead of changing scene, mode and recall data', async () => {
+    const { store, story } = await fixture();
+    const session = await store.createSession({ branchId: story.branchId });
+    await store.appendTurn({
+      branchId: story.branchId,
+      sessionId: session.id,
+      requestId: 'cache-history',
+      messages: [{ role: 'user', text: '已提交的港口线索。' }],
+    });
+    const config = defaults('local-demo');
+    const before = await buildContext(
+      {} as Env,
+      store,
+      story.branchId,
+      { mode: 'roleplay', text: '继续。', focusCharacterIds: ['a'] },
+      config,
+      'cache-a',
+    );
+    await store.run(
+      'UPDATE branches SET scene_json=? WHERE id=?',
+      JSON.stringify({ location: '山顶' }),
+      story.branchId,
+    );
+    const after = await buildContext(
+      {} as Env,
+      store,
+      story.branchId,
+      { mode: 'author', text: '下雨了。', focusCharacterIds: ['a'] },
+      config,
+      'cache-b',
+    );
+    const split = before.messages.findIndex((m) => m.content.startsWith('当前场景：'));
+    expect(split).toBeGreaterThan(1);
+    expect(before.messages.slice(0, split)).toEqual(after.messages.slice(0, split));
+    expect(before.messages.slice(0, split).some((m) => m.content === '已提交的港口线索。')).toBe(
+      true,
+    );
+    expect(after.messages[split]!.content).toContain('山顶');
+    expect(after.messages[split]!.content).toContain('author');
+    expect(after.messages.at(-1)!.content).toBe('下雨了。');
+    const edited = await buildContext(
+      {} as Env,
+      store,
+      story.branchId,
+      { mode: 'roleplay', text: '继续。', focusCharacterIds: ['a'] },
+      { ...config, systemPrompt: '新的作者规则。' },
+      'cache-edited',
+    );
+    expect(edited.messages[0]).not.toEqual(before.messages[0]);
+    expect(after.tokens).toBeLessThanOrEqual(after.budget);
+  });
   it('retains first-message style after the opening and scopes Hermes profile fields by viewer', async () => {
     const { store, story } = await fixture();
     const session = await store.createSession({ branchId: story.branchId });

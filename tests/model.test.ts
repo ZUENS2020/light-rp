@@ -1,5 +1,11 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { readCompletion, boundedText, complete, type ChatMessage } from '../src/server/model';
+import {
+  readCompletion,
+  boundedText,
+  complete,
+  promptCacheUsage,
+  type ChatMessage,
+} from '../src/server/model';
 import { defaults } from '../src/server/settings';
 import type { Env } from '../src/server/env';
 afterEach(() => vi.restoreAllMocks());
@@ -16,6 +22,71 @@ function stream(text: string, split = 3) {
   );
 }
 describe('model responses and durable draft boundaries', () => {
+  it('normalizes actual cache tokens and keeps missing or invalid cache counts unknown', () => {
+    expect(
+      promptCacheUsage({
+        prompt_tokens: 1000,
+        prompt_cache_hit_tokens: 900,
+        prompt_cache_miss_tokens: 100,
+      }),
+    ).toMatchObject({ cachedTokens: 900, uncachedTokens: 100, cacheHitRate: 0.9 });
+    expect(
+      promptCacheUsage({ prompt_tokens: 2000, prompt_tokens_details: { cached_tokens: 1024 } }),
+    ).toMatchObject({ cachedTokens: 1024, cacheHitRate: 0.512 });
+    expect(promptCacheUsage({ prompt_tokens: 1000 })).toMatchObject({
+      cachedTokens: null,
+      cacheHitRate: null,
+    });
+    for (const hit of [-1, 1001, '900', NaN, 2.5])
+      expect(
+        promptCacheUsage({ prompt_tokens: 1000, prompt_cache_hit_tokens: hit }).cacheHitRate,
+      ).toBeNull();
+    expect(
+      promptCacheUsage({
+        prompt_tokens: 1000,
+        prompt_cache_hit_tokens: 900,
+        prompt_cache_miss_tokens: 101,
+      }).cacheHitRate,
+    ).toBeNull();
+    expect(
+      promptCacheUsage({ prompt_tokens: 0, prompt_cache_hit_tokens: 0 }).cacheHitRate,
+    ).toBeNull();
+  });
+  it('requests streaming usage and records cache telemetry without prompt or provider extras', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const fetcher = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () =>
+        stream(
+          'data: {"choices":[{"delta":{"content":"新正文"},"finish_reason":"stop"}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":1000,"prompt_tokens_details":{"cached_tokens":768},"private_extra":"不应进入日志"}}\n\ndata: [DONE]\n',
+        ),
+      );
+    const onUsage = vi.fn();
+    await complete(
+      { MODEL_API_KEY: 'test-only' } as Env,
+      {
+        ...defaults('openai'),
+        provider: 'commandcode',
+        baseUrl: 'https://api.commandcode.ai/provider/v1',
+        model: 'deepseek/deepseek-v4.1-flash',
+      },
+      [{ role: 'user', content: '私有提示词' }],
+      { onText: async () => undefined, onUsage },
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]!.body))).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+    expect(onUsage).toHaveBeenCalledTimes(1);
+    const log = JSON.parse(String(info.mock.calls[0]![0]));
+    expect(log).toMatchObject({
+      event: 'model_prompt_cache',
+      cachedTokens: 768,
+      cacheHitRate: 0.768,
+      phase: 'narrative',
+    });
+    expect(JSON.stringify(log)).not.toMatch(/私有提示词|private_extra|不应进入日志|test-only/);
+  });
   it('calls Command Code directly for narrative and extraction without forwarding credentials across redirects', async () => {
     const fetcher = vi
       .spyOn(globalThis, 'fetch')
@@ -92,7 +163,11 @@ describe('model responses and durable draft boundaries', () => {
       type: 'json_schema',
       json_schema: jsonSchema,
     });
-    expect(info).toHaveBeenCalledTimes(1);
+    expect(
+      info.mock.calls.filter(
+        ([line]) => JSON.parse(String(line)).event === 'model_response_format',
+      ),
+    ).toHaveLength(1);
     await complete(env, defaults('gateway'), [{ role: 'user', content: 'JSON' }], {
       json: true,
       jsonSchema,
@@ -101,7 +176,11 @@ describe('model responses and durable draft boundaries', () => {
       type: 'json_schema',
       json_schema: jsonSchema,
     });
-    expect(info).toHaveBeenCalledTimes(1);
+    expect(
+      info.mock.calls.filter(
+        ([line]) => JSON.parse(String(line)).event === 'model_response_format',
+      ),
+    ).toHaveLength(1);
   });
   it('turns binding rejection into a safe transport error without repeating or exposing private provider details', async () => {
     const run = vi.fn(async () => {
