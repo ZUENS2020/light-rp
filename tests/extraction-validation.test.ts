@@ -488,6 +488,11 @@ describe('strict unknown normalization and useful bounded repair', () => {
       code: 'EXTRACTION_BUDGET',
     });
     expect(run).toHaveBeenCalledTimes(1);
+    c.settings = { ...c.settings, maxOutput: 4096, auxiliaryMaxOutput: 30000 };
+    await expect(analyze(env, c, input, narration)).rejects.toMatchObject({
+      code: 'EXTRACTION_BUDGET',
+    });
+    expect(run).toHaveBeenCalledTimes(1);
   });
   it('normalizes explicit unknown fields on one model call and rejects mandatory budget overflow before any call', async () => {
     const { run, env } = binding(result([{ ...fact(), validFrom: '', validTo: null }]));

@@ -199,7 +199,7 @@ export default function Settings({
             </Field>
             <Field
               label="模型输出上限（token）"
-              hint="用于正文和结构化校验；思考模型的推理也可能占用额度。保存后重试使用新设置。"
+              hint="正文生成上限；思考模型的推理也可能占用额度。保存后重试使用新设置。"
             >
               <input
                 type="number"
@@ -208,6 +208,19 @@ export default function Settings({
                 required
                 value={form.maxOutput || 2048}
                 onChange={(event) => change({ maxOutput: Number(event.target.value) })}
+              />
+            </Field>
+            <Field
+              label="记忆与剧情校验输出上限（token）"
+              hint="独立预留抽取、校验及记忆整理的额度；0表示沿用正文上限。需小于上下文窗口减去安全余量。"
+            >
+              <input
+                type="number"
+                min="0"
+                max="65536"
+                required
+                value={form.auxiliaryMaxOutput || 0}
+                onChange={(event) => change({ auxiliaryMaxOutput: Number(event.target.value) })}
               />
             </Field>
           </div>

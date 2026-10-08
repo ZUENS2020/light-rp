@@ -409,8 +409,12 @@ procedureUses只能引用本快照提供的active procedure版本ID，phase为pl
   };
   const schemaCost = estimateAssetTokens(JSON.stringify(extractionJsonSchema)) + 32;
   const budget =
-    Math.min(32768, context.settings.contextWindow - context.settings.maxOutput - 1024) -
-    schemaCost;
+    Math.min(
+      32768,
+      context.settings.contextWindow -
+        (context.settings.auxiliaryMaxOutput || context.settings.maxOutput) -
+        1024,
+    ) - schemaCost;
   const extras: ChatMessage[] = [];
   const cost = (messages: ChatMessage[]) =>
     messages.reduce((n, message) => n + estimateAssetTokens(message.content) + 8, 0) + 16;

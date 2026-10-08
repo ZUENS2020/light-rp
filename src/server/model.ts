@@ -8,6 +8,7 @@ export interface PromptCacheUsage {
   uncachedTokens: number | null;
   cacheHitRate: number | null;
   outputTokens: number | null;
+  reasoningTokens: number | null;
 }
 /** Provider-reported counts only. Missing cache telemetry is unknown, not zero.
  * Never log the raw usage object: custom providers may attach arbitrary data. */
@@ -15,6 +16,7 @@ export function promptCacheUsage(usage: Record<string, unknown>): PromptCacheUsa
   const count = (value: unknown) =>
     typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
   const details = usage.prompt_tokens_details;
+  const completionDetails = usage.completion_tokens_details;
   const cached =
     count(usage.prompt_cache_hit_tokens) ??
     count(details && typeof details === 'object' ? Reflect.get(details, 'cached_tokens') : null);
@@ -33,6 +35,11 @@ export function promptCacheUsage(usage: Record<string, unknown>): PromptCacheUsa
     uncachedTokens: valid ? input - cached : null,
     cacheHitRate: valid && input > 0 ? cached / input : null,
     outputTokens: count(usage.completion_tokens),
+    reasoningTokens: count(
+      completionDetails && typeof completionDetails === 'object'
+        ? Reflect.get(completionDetails, 'reasoning_tokens')
+        : null,
+    ),
   };
 }
 export type CompletionOptions = {
@@ -243,7 +250,10 @@ export async function complete(
   const payload = {
     model,
     messages: effectiveMessages,
-    max_tokens: settings.maxOutput,
+    max_tokens:
+      options.auxiliary || options.json
+        ? settings.auxiliaryMaxOutput || settings.maxOutput
+        : settings.maxOutput,
     stream: !!options.onText,
     // Command Code's direct endpoint implements Chat Completions. Request the
     // final usage chunk; keep unsupported Workers AI binding payloads unchanged.
@@ -340,6 +350,7 @@ export async function complete(
         event: 'model_prompt_cache',
         model,
         phase: options.json ? 'structured' : options.auxiliary ? 'auxiliary' : 'narrative',
+        outputLimit: payload.max_tokens,
         ...promptCacheUsage({}),
         ...usage,
         responseReadMs: Date.now() - started,

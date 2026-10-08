@@ -734,7 +734,11 @@ export function evaluationCallConfig(config: ModelSettings, purpose: 'summary' |
       '完整故事摘要至少需要1024输出预算，请明确调整模型配置',
       'EVALUATION_SUMMARY_OUTPUT_BUDGET',
     );
-  return { ...config, maxOutput: Math.min(config.maxOutput, purpose === 'summary' ? 8192 : 2048) };
+  return {
+    ...config,
+    maxOutput: Math.min(config.maxOutput, purpose === 'summary' ? 8192 : 2048),
+    auxiliaryMaxOutput: 0,
+  };
 }
 export function parseEvaluationSummary(
   text: string,

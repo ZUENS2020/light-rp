@@ -454,6 +454,36 @@ test('模型连接测试使用当前未保存配置，演示模式明确不验�
   await expect(page.getByRole('status')).toContainText('未调用远程模型');
 });
 
+test('正文与辅助校验输出预算独立保存，辅助设为0后沿用正文预算', async ({ page, request }) => {
+  const original = await json(request, 'get', '/settings');
+  try {
+    await page.goto('/');
+    await page.getByRole('button', { name: '模型设置', exact: true }).click();
+    await page.getByLabel('上下文窗口（token）', { exact: true }).fill('131072');
+    await page.getByLabel('模型输出上限（token）', { exact: true }).fill('16000');
+    await page.getByLabel('记忆与剧情校验输出上限（token）', { exact: true }).fill('32768');
+    await page.getByRole('button', { name: '保存配置', exact: true }).click();
+    await expect(page.getByRole('status')).toContainText('模型配置已保存');
+    expect(await json(request, 'get', '/settings')).toMatchObject({
+      contextWindow: 131072,
+      maxOutput: 16000,
+      auxiliaryMaxOutput: 32768,
+    });
+    await page.reload();
+    await page.getByRole('button', { name: '模型设置', exact: true }).click();
+    await expect(page.getByLabel('记忆与剧情校验输出上限（token）', { exact: true })).toHaveValue(
+      '32768',
+    );
+    await page.getByLabel('记忆与剧情校验输出上限（token）', { exact: true }).fill('0');
+    await page.getByRole('button', { name: '保存配置', exact: true }).click();
+    await expect
+      .poll(async () => (await json(request, 'get', '/settings')).auxiliaryMaxOutput)
+      .toBe(0);
+  } finally {
+    await json(request, 'put', '/settings', original);
+  }
+});
+
 test('Hermes 前置层可编辑、保存、明确清空，并用于实际上下文', async ({ page, request }, info) => {
   const original = await json(request, 'get', '/settings');
   try {

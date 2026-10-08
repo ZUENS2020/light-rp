@@ -36,7 +36,14 @@ describe('model responses and durable draft boundaries', () => {
     expect(promptCacheUsage({ prompt_tokens: 1000 })).toMatchObject({
       cachedTokens: null,
       cacheHitRate: null,
+      reasoningTokens: null,
     });
+    expect(
+      promptCacheUsage({ completion_tokens_details: { reasoning_tokens: 1200 } }),
+    ).toMatchObject({ reasoningTokens: 1200 });
+    expect(
+      promptCacheUsage({ completion_tokens_details: { reasoning_tokens: '1200' } }),
+    ).toMatchObject({ reasoningTokens: null });
     for (const hit of [-1, 1001, '900', NaN, 2.5])
       expect(
         promptCacheUsage({ prompt_tokens: 1000, prompt_cache_hit_tokens: hit }).cacheHitRate,
@@ -127,6 +134,27 @@ describe('model responses and durable draft boundaries', () => {
     );
     await expect(complete(env, config, [])).rejects.toMatchObject({ code: 'MODEL_HTTP' });
     expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+  it('uses the independent auxiliary budget for structured/observation calls, preserving narrative and legacy limits', async () => {
+    const fetcher = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () =>
+        Response.json({ choices: [{ message: { content: '{}', finish_reason: 'stop' } }] }),
+      );
+    const config = {
+      ...defaults('openai'),
+      maxOutput: 16000,
+      auxiliaryMaxOutput: 32768,
+      contextWindow: 131072,
+    };
+    const env = { MODEL_API_KEY: 'test-only' } as Env;
+    await complete(env, config, []);
+    await complete(env, config, [], { auxiliary: true });
+    await complete(env, config, [], { json: true });
+    await complete(env, { ...config, auxiliaryMaxOutput: 0 }, [], { json: true });
+    expect(fetcher.mock.calls.map((call) => JSON.parse(String(call[1]!.body)).max_tokens)).toEqual([
+      16000, 32768, 32768, 16000,
+    ]);
   });
   it('uses explicit extraction prompt protocol while keeping native schema for simple Qwen and other models', async () => {
     const jsonSchema = {

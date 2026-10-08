@@ -60,13 +60,23 @@ export const settingsSchema = z
     baseUrl: z.string().default('https://api.openai.com/v1'),
     contextWindow: z.number().int().min(4096).max(2000000).default(32768),
     maxOutput: z.number().int().min(128).max(65536).default(4096),
+    auxiliaryMaxOutput: z
+      .number()
+      .int()
+      .min(0)
+      .max(65536)
+      .refine((value) => value === 0 || value >= 128, '辅助输出上限至少为128，或设为0沿用正文上限')
+      .default(0),
     systemPrompt: z
       .string()
       .max(40000)
       .default('你是统一叙事者。维护人物动机、各自知情边界和世界规则，不替玩家决定行为。'),
     mode: z.enum(['gateway', 'openai', 'local-demo']).default('gateway'),
   })
-  .refine((s) => s.maxOutput + 1024 < s.contextWindow, '输出预留超过上下文容量');
+  .refine(
+    (s) => Math.max(s.maxOutput, s.auxiliaryMaxOutput || s.maxOutput) + 1024 < s.contextWindow,
+    '正文或辅助输出预留超过上下文容量',
+  );
 export type ModelSettings = z.infer<typeof settingsSchema>;
 
 export const apiWriteSchemas = {

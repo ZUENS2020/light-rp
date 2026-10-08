@@ -276,6 +276,19 @@ describe('public v3 write contracts', () => {
   it('keeps the model window/output relation validated by the shared settings contract', () => {
     expect(settingsSchema.safeParse({ contextWindow: 4096, maxOutput: 4096 }).success).toBe(false);
     expect(settingsSchema.parse({ contextWindow: 8192, maxOutput: 4096 }).maxOutput).toBe(4096);
+    expect(settingsSchema.parse({ maxOutput: 4096 }).auxiliaryMaxOutput).toBe(0);
+    expect(
+      settingsSchema.safeParse({ contextWindow: 32768, maxOutput: 4096, auxiliaryMaxOutput: 32768 })
+        .success,
+    ).toBe(false);
+    expect(
+      settingsSchema.safeParse({
+        contextWindow: 131072,
+        maxOutput: 16000,
+        auxiliaryMaxOutput: 32768,
+      }).success,
+    ).toBe(true);
+    expect(settingsSchema.safeParse({ auxiliaryMaxOutput: 1 }).success).toBe(false);
   });
 });
 

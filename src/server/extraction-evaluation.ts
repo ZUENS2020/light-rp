@@ -335,7 +335,7 @@ async function modelConfig(
     throw new ApiError(422, '质量评测只允许实际模型', 'EVALUATION_REAL_MODEL_REQUIRED');
   if (settings.maxOutput < 1024)
     throw new ApiError(422, '实际抽取至少需要1024输出预算', 'EVALUATION_BUDGET');
-  return { ...settings, maxOutput: Math.min(settings.maxOutput, 8192) };
+  return { ...settings, maxOutput: Math.min(settings.maxOutput, 8192), auxiliaryMaxOutput: 0 };
 }
 export function extractionQualityContext(
   fixture: ExtractionQualityCase,

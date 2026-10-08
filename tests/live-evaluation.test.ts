@@ -167,6 +167,9 @@ it('keeps actionable HTTP codes without copying secret-bearing error bodies', as
 it('gives summaries the configured output reserve and validates sourced, nonempty JSON', () => {
   const config = defaults('gateway');
   expect(evaluationCallConfig(config, 'summary').maxOutput).toBe(4096);
+  expect(
+    evaluationCallConfig({ ...config, auxiliaryMaxOutput: 32768 }, 'summary').auxiliaryMaxOutput,
+  ).toBe(0);
   expect(evaluationCallConfig(config, 'answer').maxOutput).toBe(2048);
   expect(() => evaluationCallConfig({ ...config, maxOutput: 512 }, 'summary')).toThrow('1024');
   const text = JSON.stringify({
