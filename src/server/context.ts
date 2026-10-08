@@ -200,10 +200,10 @@ export async function buildContext(
       'PINNED_BUDGET',
     );
   const free = budget - fixed - 256,
-    observationBudget = Math.floor(free * 0.2),
     loreBudget = Math.floor(free * 0.15);
   let recentBudget = Math.floor(free * 0.35),
-    recallBudget = Math.floor(free * 0.3);
+    recallBudget = Math.floor(free * 0.3),
+    observationBudget = Math.floor(free * 0.2);
   let vectors: { id: string; score: number }[] = [],
     warnings: string[] = [];
   if (settings.mode !== 'local-demo')
@@ -228,12 +228,26 @@ export async function buildContext(
   });
   const usedSources = new Set<string>();
   const selectedObservations: string[] = [];
-  let obsTokens = 0;
-  for (const observation of observations) {
+  let obsTokens = 0,
+    representedThrough = 0;
+  for (const observation of observations.filter((m) => m.subject === viewer)) {
     const text = `[观察 ${observation.id}] ${observation.text}`;
     const t = estimateAssetTokens(text);
+    if (
+      observation.predicate === 'rolling-observation:narrative' &&
+      obsTokens + t > observationBudget
+    ) {
+      const borrowed = Math.min(recentBudget, obsTokens + t - observationBudget);
+      observationBudget += borrowed;
+      recentBudget -= borrowed;
+    }
     if (obsTokens + t > observationBudget) continue;
     selectedObservations.push(text);
+    if (
+      observation.predicate === 'rolling-observation:narrative' &&
+      observation.data?.version === 'rolling-v1'
+    )
+      representedThrough = Number(observation.data.throughSeq ?? 0);
     observation.sourceIds.forEach((id) => usedSources.add(id));
     obsTokens += t;
   }
@@ -281,8 +295,12 @@ export async function buildContext(
   const recent: ChatMessage[] = [];
   for (const e of events.slice(-16).reverse()) {
     const t = estimateAssetTokens(e.text) + 8;
-    if (spent + t > recentBudget && recent.length) break;
+    if (spent + t > recentBudget && recent.length) {
+      if (e.seq <= representedThrough) continue;
+      break;
+    }
     if (t > recentBudget && !recent.length) {
+      if (t > recentBudget + recallBudget && e.seq <= representedThrough) continue;
       if (t > recentBudget + recallBudget)
         throw new ApiError(422, '最近回合无法放入上下文', 'RECENT_BUDGET');
       recallBudget -= t - recentBudget;
@@ -444,7 +462,10 @@ export async function buildContext(
   const tokens = messages.reduce((n, m) => n + estimateAssetTokens(m.content) + 8, 0);
   if (tokens > budget)
     throw new ApiError(422, '上下文总预算超限，请调整资料或模型窗口', 'CONTEXT_BUDGET');
-  const cursor = recall.cursor;
+  const cursor =
+    viewer === 'director'
+      ? Math.min(recall.cursor, await store.narrativeCursor(branchId))
+      : recall.cursor;
   const pending = events.filter((e) => e.seq > cursor);
   if (viewer === 'director' && pending.some((e) => !recent.some((r) => r.content === e.text))) {
     throw new ApiError(
@@ -468,12 +489,21 @@ export async function buildContext(
       : []),
   ]);
   const sourceFence: SourceFence[] = [];
+  // Rolling observations expose transitive source IDs. Fetch their fences in
+  // one query rather than issuing one D1 call for every past event.
+  const sourceRows = await store.all<{
+    id: string;
+    version: number;
+    generation: number;
+    status: string;
+  }>(
+    'SELECT id,version,generation,status FROM sources WHERE owner_id=? AND id IN (SELECT value FROM json_each(?))',
+    store.ownerId,
+    JSON.stringify([...ids]),
+  );
+  const sourceMap = new Map(sourceRows.map((source) => [source.id, source]));
   for (const id of ids) {
-    const source = await store.one<{ version: number; generation: number; status: string }>(
-      'SELECT version,generation,status FROM sources WHERE id=? AND owner_id=?',
-      id,
-      store.ownerId,
-    );
+    const source = sourceMap.get(id);
     if (!source || source.status !== 'active')
       throw new ApiError(409, '上下文来源已删除', 'CONTEXT_STALE');
     sourceFence.push({ sourceId: id, version: source.version, generation: source.generation });

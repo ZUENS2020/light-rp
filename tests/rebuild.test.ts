@@ -191,6 +191,35 @@ async function rebuildJob(target: string) {
 }
 
 describe('real D1 branch replay with durable step and R2 boundaries', () => {
+  it('applies an oversized imported opening before requiring the semantic compression model', async () => {
+    const text = '开篇。'.repeat(8000) + '信使终于抵达。';
+    const imported = await store.appendTurn({
+      branchId,
+      sessionId,
+      requestId: 'long-opening',
+      messages: [{ role: 'assistant', text }],
+    });
+    const job = await store.one<{ id: string }>(
+      "SELECT id FROM outbox WHERE branch_id=? AND kind='memory'",
+      branchId,
+    );
+    await expect(runMemory(job!.id)).rejects.toThrow('OBSERVATION_MODEL_REQUIRED');
+    expect((await store.getEvents(branchId))[0]!.text).toBe(text);
+    expect(
+      await store.one(
+        'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+        branchId,
+        'v3-facts',
+      ),
+    ).toEqual({ applied_seq: 1 });
+    expect(
+      await store.one(
+        'SELECT COUNT(*) AS n FROM memory_event_applications WHERE branch_id=? AND event_id=?',
+        branchId,
+        imported.events[0]!.id,
+      ),
+    ).toEqual({ n: 1 });
+  });
   it('reuses the original validated extraction without importing a future parent fact or knowledge grant', async () => {
     const prefix = '小明知道白钥匙在北门。',
       future = '未来秘密红钥匙在南门。',
@@ -444,7 +473,10 @@ describe('real D1 branch replay with durable step and R2 boundaries', () => {
       const child = await store.fork({ branchId, atSeq: 1002 }),
         jobId = await rebuildJob(child.id),
         spy = vi.spyOn(Store.prototype, 'getEvents'),
-        steps = await runMemory(jobId, child.id);
+        steps = durableStep();
+      // A demo without a language model cannot honestly compress arbitrary
+      // history. Replay still commits every valid source before this boundary.
+      await expect(runMemory(jobId, child.id, steps)).rejects.toThrow('OBSERVATION_MODEL_REQUIRED');
       expect(steps.names.filter((name) => name.startsWith('replay '))).toHaveLength(501);
       expect(
         spy.mock.calls.some(
@@ -467,6 +499,9 @@ describe('real D1 branch replay with durable step and R2 boundaries', () => {
         ),
       ).toEqual({ n: 501 });
       expect((await store.recall(child.id, '500 次')).cursor).toBe(1002);
+      expect(await store.one('SELECT status FROM outbox WHERE id=?', jobId)).toEqual({
+        status: 'failed',
+      });
       expect(
         JSON.stringify(await store.memories(child.id, { kinds: ['episode'], limit: 1000 })),
       ).toContain('第 500 次独立剧情结果。');

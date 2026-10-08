@@ -54,6 +54,7 @@ export interface Snapshot {
   experiences: Data[];
   capabilities: Data[];
   jobs: Data[];
+  compression?: Data[];
 }
 export type Settings = ModelSettings;
 export interface Bootstrap {

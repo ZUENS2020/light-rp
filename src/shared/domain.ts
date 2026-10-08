@@ -186,6 +186,14 @@ export interface ObservationInput {
   sourceFence?: SourceFence[];
   ownerEpoch?: number;
   extractorVersion?: string;
+  /** Immutable historical inputs may be superseded normally, but never corrected or forgotten. */
+  historicalMemoryIds?: string[];
+  expectedProjectionRevision?: number;
+  progress?: {
+    scope: string;
+    expectedRevision: number;
+    state: Record<string, Json>;
+  };
 }
 export type Outcome = 'success' | 'failure' | 'partial' | 'unknown' | 'unfinished';
 export type FailureCategory =
@@ -287,6 +295,7 @@ export interface ExportArchive {
   memoryCursors?: Record<string, unknown>[];
   memoryApplications?: Record<string, unknown>[];
   observationBatches?: Record<string, unknown>[];
+  observationProgress?: Record<string, unknown>[];
   entities?: Record<string, unknown>[];
   entityAliases?: Record<string, unknown>[];
   tombstones?: Record<string, unknown>[];

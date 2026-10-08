@@ -288,11 +288,95 @@ export class MemoryEngine {
     options: MemoryOptions = {},
     selectionKey?: string,
   ): Promise<Memory[]> {
+    const latest = await this.latestRows(branchId, options);
+    return this.authorizedRows(branchId, latest, options, selectionKey, latest);
+  }
+  /** Keyset pages include ordinary historical changes. Explicit correction and
+   * forgetting still block their immutable inputs, as do branch/source/ACL fences. */
+  async observationPage(
+    branchId: string,
+    options: { viewer: string; through: number; after: number; limit?: number },
+  ) {
+    const rows = await this.store.all<Row>(
+      `SELECT m.*,m.rowid AS version_order FROM memory_versions m
+       JOIN branch_lineage l ON l.ancestor_id=m.branch_id AND l.branch_id=?
+       WHERE m.owner_id=? AND m.recorded_seq<=? AND m.rowid>? AND m.kind<>'observation'
+       AND (l.max_seq IS NULL OR m.recorded_seq<=l.max_seq)
+       AND (l.max_memory_rowid IS NULL OR m.rowid<=l.max_memory_rowid)
+       ORDER BY m.rowid LIMIT ?`,
+      branchId,
+      this.store.ownerId,
+      options.through,
+      options.after,
+      options.limit ?? 24,
+    );
+    const authorized = new Map(
+      (
+        await this.authorizedRows(branchId, rows, {
+          viewer: options.viewer,
+          asOfSeq: options.through,
+          includeInactive: true,
+        })
+      )
+        .filter(
+          (m) =>
+            m.status === 'active' ||
+            (m.kind === 'procedure' && ['draft', 'suspended', 'retired'].includes(m.status)),
+        )
+        .map((m) => [m.id, m]),
+    );
+    return {
+      entries: rows.map((row) => ({
+        order: Number(row.version_order),
+        memory: authorized.get(String(row.id)) ?? null,
+      })),
+      after: rows.length ? Number(rows.at(-1)!.version_order) : options.after,
+      exhausted: rows.length < (options.limit ?? 24),
+    };
+  }
+  private async observationInputs(
+    branchId: string,
+    ids: string[],
+    through: number,
+    viewer = 'director',
+  ) {
+    if (!ids.length) return [];
+    const rows = await this.store.all<Row>(
+      `SELECT m.* FROM memory_versions m JOIN branch_lineage l ON l.ancestor_id=m.branch_id AND l.branch_id=?
+       WHERE m.owner_id=? AND m.id IN (SELECT value FROM json_each(?)) AND m.recorded_seq<=?
+       AND (l.max_seq IS NULL OR m.recorded_seq<=l.max_seq)
+       AND (l.max_memory_rowid IS NULL OR m.rowid<=l.max_memory_rowid)`,
+      branchId,
+      this.store.ownerId,
+      JSON.stringify(ids),
+      through,
+    );
+    // Preparation may target an older prefix, but a later correction/forgetting
+    // in this same branch must still reject its late activation or replay.
+    return (
+      await this.authorizedRows(branchId, rows, {
+        viewer,
+        asOfSeq: (await this.store.getBranch(branchId)).headSeq,
+        limit: ids.length,
+        includeInactive: true,
+      })
+    ).filter(
+      (m) =>
+        m.status === 'active' ||
+        (m.kind === 'procedure' && ['draft', 'suspended', 'retired'].includes(m.status)),
+    );
+  }
+  private async authorizedRows(
+    branchId: string,
+    latest: Row[],
+    options: MemoryOptions = {},
+    selectionKey?: string,
+    currentRows?: Row[],
+  ): Promise<Memory[]> {
     const branch = await this.store.getBranch(branchId),
       story = await this.store.getStory(branch.storyId),
       asof = Math.min(options.asOfSeq ?? branch.headSeq, branch.headSeq),
       viewer = options.viewer ?? 'director',
-      latest = await this.latestRows(branchId, options),
       result: Memory[] = [];
     if (!latest.length) return result;
     // A compressed observation can cite an older immutable observation. Only explicit
@@ -312,7 +396,14 @@ export class MemoryEngine {
     const hydrated = await this.hydrate(dependencyRows),
       byId = new Map(hydrated.map((m) => [m.id, m])),
       latestIds = new Set(latest.map((m) => String(m.id))),
-      latestByKey = new Map(latest.map((m) => [String(m.memory_key), m])),
+      latestByKey = new Map(
+        (
+          currentRows ??
+          (hydrated.some((m) => m.data?.recordType === 'capability')
+            ? await this.latestRows(branchId, options)
+            : [])
+        ).map((m) => [String(m.memory_key), m]),
+      ),
       blocked = new Set(dependencyRows.filter((r) => Number(r.blocked)).map((r) => String(r.id)));
     const deps = await this.store.all<{ memory_id: string; depends_on_id: string }>(
         'SELECT memory_id,depends_on_id FROM memory_dependencies WHERE memory_id IN (SELECT value FROM json_each(?))',
@@ -433,27 +524,49 @@ export class MemoryEngine {
       );
     };
     const recipients = [...new Set(grants.map((g) => String(g.character_id)))];
+    const aclCache = new Map<string, boolean>();
+    const authorized = (id: string, actor: string): boolean => {
+      if (actor === 'director') return true;
+      const key = `${actor}:${id}`;
+      if (aclCache.has(key)) return aclCache.get(key)!;
+      const m = byId.get(id);
+      // Mark before recursion: malformed cycles must fail closed.
+      aclCache.set(key, false);
+      const okay =
+        !!m &&
+        (m.kind !== 'belief' || m.observerId === actor) &&
+        m.evidence.every((e) => visibleSpan(e, actor)) &&
+        (dependencies.get(id) ?? []).every((dep) => authorized(dep, actor));
+      aclCache.set(key, okay);
+      return okay;
+    };
+    const allSourceIds = (id: string, seen = new Set<string>()): string[] => {
+      if (seen.has(id)) return [];
+      seen.add(id);
+      return [
+        ...new Set([
+          ...(byId.get(id)?.sourceIds ?? []),
+          ...(dependencies.get(id) ?? []).flatMap((dep) => allSourceIds(dep, seen)),
+        ]),
+      ];
+    };
     for (const r of latest) {
       const m = byId.get(String(r.id))!;
       if (!m) continue;
       if (selectionKey != null && m.memoryKey !== selectionKey) continue;
       if (!options.includeInactive && m.status !== 'active') continue;
       if (options.kinds && !options.kinds.includes(m.kind)) continue;
-      if (!isLive(m) || (dependencies.get(m.id) ?? []).some((id) => !dependencyValid(id))) continue;
       if (
-        viewer !== 'director' &&
-        ((m.kind === 'belief' && m.observerId !== viewer) ||
-          !m.evidence.every((e) => visibleSpan(e, viewer)))
+        blocked.has(m.id) ||
+        !isLive(m) ||
+        (dependencies.get(m.id) ?? []).some((id) => !dependencyValid(id))
       )
         continue;
-      m.knownBy = recipients.filter(
-        (actor) =>
-          (m.kind !== 'belief' || actor === m.observerId) &&
-          m.evidence.length > 0 &&
-          m.evidence.every((e) => visibleSpan(e, actor)),
-      );
+      if (!authorized(m.id, viewer)) continue;
+      m.knownBy = recipients.filter((actor) => m.evidence.length > 0 && authorized(m.id, actor));
+      m.sourceIds = allSourceIds(m.id);
       if (latestIds.has(m.id)) result.push(m);
-      if (result.length >= Math.min(options.limit ?? 1000, 5000)) break;
+      if (result.length >= (options.limit ?? 1000)) break;
     }
     return result;
   }
@@ -491,7 +604,11 @@ export class MemoryEngine {
       );
       if (e) eventRows.push({ ...e, sourceId });
     }
-    const origin = Math.max(0, ...eventRows.map((e) => Number(e.seq))),
+    const evidenceOrigin = Math.max(0, ...eventRows.map((e) => Number(e.seq))),
+      // Observations describe a verified prefix, including events with no facts.
+      // Their visible version must be dated at that prefix, not at an anchor quote.
+      origin =
+        p.kind === 'observation' ? Math.max(evidenceOrigin, p.originSeq ?? 0) : evidenceOrigin,
       kind = p.kind;
     if (origin > branch.headSeq)
       throw new StoreError('MEMORY_FUTURE', 'Memory origin is beyond branch head', 400);
@@ -593,8 +710,8 @@ export class MemoryEngine {
       ...p,
       id,
       memoryKey: key,
-      authority,
-      confidence,
+      authority: kind === 'observation' ? Math.min(authority, 20) : authority,
+      confidence: kind === 'observation' ? Math.min(confidence, 0.5) : confidence,
       validFrom,
       validTo,
       originSeq: origin,
@@ -620,8 +737,8 @@ export class MemoryEngine {
           searchTokens(`${p.subject} ${p.predicate} ${p.text}`).join(' '),
           JSON.stringify(knownBy),
           p.observerId ?? null,
-          authority,
-          confidence,
+          normalized.authority,
+          normalized.confidence,
           validFrom,
           validTo,
           origin,
@@ -860,6 +977,7 @@ export class MemoryEngine {
         cursor: input.cursor,
         version: input.extractorVersion ?? 'observations-v1',
         inputs: [...input.expectedMemoryIds].sort(),
+        progress: input.progress ?? null,
         proposals: input.proposals.map(
           ({ id: _id, ownerEpoch: _epoch, sourceFence: _fence, ...p }) => p,
         ),
@@ -872,7 +990,8 @@ export class MemoryEngine {
       );
     const branch = await this.store.getBranch(input.branchId),
       epoch = input.ownerEpoch ?? (await this.store.ownerEpoch()),
-      current = await this.memories(input.branchId),
+      historical = new Set(input.historicalMemoryIds ?? []),
+      current = await this.observationInputs(input.branchId, input.expectedMemoryIds, input.cursor),
       ids = new Set(current.map((m) => m.id));
     if (!Number.isInteger(input.cursor) || input.cursor < 0 || input.cursor > branch.headSeq)
       throw new StoreError('CURSOR_FUTURE', 'Observation cursor is outside branch history', 400);
@@ -881,6 +1000,17 @@ export class MemoryEngine {
         'OBSERVATION_STALE',
         'Observation inputs were corrected, forgotten or deleted',
       );
+    if (input.progress) {
+      const viewer = String(input.progress.state.viewer ?? 'director');
+      const authorized = await this.observationInputs(
+        input.branchId,
+        input.expectedMemoryIds,
+        input.cursor,
+        viewer,
+      );
+      if (authorized.length !== input.expectedMemoryIds.length)
+        throw new StoreError('OBSERVATION_STALE', 'Observation knowledge grants changed');
+    }
     if (existingBatch?.status === 'active') {
       const previous = json<{ accepted?: string[] }>(existingBatch.input_json, {});
       return { batchId, accepted: previous.accepted ?? [], cursor: input.cursor, replayed: true };
@@ -902,17 +1032,34 @@ export class MemoryEngine {
       if (!existing) prepared.push(q);
     }
     const dependencyFences: QuerySpec[] = input.expectedMemoryIds.map((id) =>
-      this.store.guard('EXISTS(SELECT 1 FROM memory_heads WHERE branch_id=? AND memory_id=?)', [
-        input.branchId,
-        id,
-      ]),
+      historical.has(id)
+        ? this.store.guard(
+            `EXISTS(SELECT 1 FROM memory_versions m JOIN branch_lineage l ON l.ancestor_id=m.branch_id AND l.branch_id=? WHERE m.id=? AND m.owner_id=? AND (m.status='active' OR (m.kind='procedure' AND m.status IN ('draft','suspended','retired'))) AND m.recorded_seq<=? AND (l.max_seq IS NULL OR m.recorded_seq<=l.max_seq) AND (l.max_memory_rowid IS NULL OR m.rowid<=l.max_memory_rowid))`,
+            [input.branchId, id, this.store.ownerId, input.cursor],
+          )
+        : this.store.guard('EXISTS(SELECT 1 FROM memory_heads WHERE branch_id=? AND memory_id=?)', [
+            input.branchId,
+            id,
+          ]),
     );
     await this.store.batch([
       this.store.epochGuard(epoch),
       this.store.guard(
         'EXISTS(SELECT 1 FROM branches WHERE id=? AND owner_id=? AND projection_revision=?)',
-        [input.branchId, this.store.ownerId, branch.projectionRevision],
+        [
+          input.branchId,
+          this.store.ownerId,
+          input.expectedProjectionRevision ?? branch.projectionRevision,
+        ],
       ),
+      ...(input.progress
+        ? [
+            this.store.guard(
+              'COALESCE((SELECT revision FROM observation_progress WHERE branch_id=? AND scope=?),0)=?',
+              [input.branchId, input.progress.scope, input.progress.expectedRevision],
+            ),
+          ]
+        : []),
       ...dependencyFences,
       ...this.store.sourceGuards([
         ...(input.sourceFence ?? []),
@@ -941,9 +1088,29 @@ export class MemoryEngine {
             params: [id, dep],
           })),
       ),
+      ...(input.progress
+        ? [
+            {
+              sql: 'INSERT INTO observation_progress(branch_id,scope,observation_id,revision,state_json,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(branch_id,scope) DO UPDATE SET observation_id=excluded.observation_id,revision=excluded.revision,state_json=excluded.state_json,updated_at=excluded.updated_at',
+              params: [
+                input.branchId,
+                input.progress.scope,
+                accepted.at(-1) ?? input.progress.state.observationId ?? null,
+                input.progress.expectedRevision + 1,
+                JSON.stringify(input.progress.state),
+                now(),
+              ],
+            },
+          ]
+        : []),
       {
-        sql: 'INSERT INTO memory_cursors(branch_id,extractor_version,applied_seq,updated_at) VALUES(?,?,?,?) ON CONFLICT(branch_id,extractor_version) DO UPDATE SET applied_seq=MAX(applied_seq,excluded.applied_seq),updated_at=excluded.updated_at',
-        params: [input.branchId, input.extractorVersion ?? 'observations-v1', input.cursor, now()],
+        sql: `INSERT INTO memory_cursors(branch_id,extractor_version,applied_seq,updated_at) VALUES(?,?,?,?) ON CONFLICT(branch_id,extractor_version) DO UPDATE SET applied_seq=${input.progress ? 'excluded.applied_seq' : 'MAX(applied_seq,excluded.applied_seq)'},updated_at=excluded.updated_at`,
+        params: [
+          input.branchId,
+          input.extractorVersion ?? 'observations-v1',
+          input.progress ? Number(input.progress.state.throughSeq ?? 0) : input.cursor,
+          now(),
+        ],
       },
       {
         sql: 'UPDATE branches SET projection_revision=projection_revision+1 WHERE id=? AND owner_id=?',
@@ -1558,12 +1725,13 @@ export class MemoryEngine {
   async readSourceSpan(
     branchId: string,
     sourceId: string,
-    options: { viewer?: string; start?: number; end?: number } = {},
+    options: { viewer?: string; start?: number; end?: number; asOfSeq?: number } = {},
   ) {
-    const s = await this.sourceInBranch(branchId, sourceId),
+    const s = await this.sourceInBranch(branchId, sourceId, options.asOfSeq),
       chars = Array.from(String(s.text ?? '')),
       viewer = options.viewer ?? 'director';
     let spans: Evidence[] = [];
+    const knowledge: { start: number; end: number; acquiredSeq: number; channel: string }[] = [];
     if (viewer === 'director') {
       const start = options.start ?? 0,
         end = options.end ?? chars.length;
@@ -1580,7 +1748,7 @@ export class MemoryEngine {
         },
       ];
     } else {
-      const grants = await this.grants(branchId, sourceId, viewer);
+      const grants = await this.grants(branchId, sourceId, viewer, options.asOfSeq);
       for (const g of grants) {
         if (g.status !== 'grant') continue;
         const start = options.start ?? Number(g.start_offset),
@@ -1597,9 +1765,16 @@ export class MemoryEngine {
         if (
           start >= Number(g.start_offset) &&
           end <= Number(g.end_offset) &&
-          (await this.spanVisible(branchId, e, viewer))
-        )
+          (await this.spanVisible(branchId, e, viewer, options.asOfSeq))
+        ) {
           spans.push(e);
+          knowledge.push({
+            start,
+            end,
+            acquiredSeq: Number(g.acquired_seq),
+            channel: String(g.channel),
+          });
+        }
       }
       if (!spans.length)
         throw new StoreError('KNOWLEDGE_SCOPE', 'Character has no grant for this source span', 403);
@@ -1610,6 +1785,7 @@ export class MemoryEngine {
       version: Number(s.version),
       generation: Number(s.generation),
       spans,
+      knowledge,
       text: spans.map((e) => e.quote).join('\n'),
     };
   }

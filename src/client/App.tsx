@@ -1772,12 +1772,42 @@ function Inspector({
           <section className="observations">
             <details>
               <summary>
-                长期观察 · {snapshot.memories.filter((m) => m.kind === 'observation').length}
+                自动整理与长期观察 ·{' '}
+                {snapshot.memories.filter((m) => m.kind === 'observation').length}
               </summary>
+              {snapshot.compression
+                ?.filter((s) => s.scope === 'director:narrative')
+                .map((state) => (
+                  <p className="quiet" key={state.scope}>
+                    {state.current
+                      ? `已整理至事件 ${state.throughSeq}`
+                      : '来源已变化，等待重新整理'}
+                    {state.pendingEvents > 0
+                      ? ` · 待整理 ${state.pendingEvents} 条`
+                      : ' · 已跟上剧情'}
+                    {` · 自动压缩 ${state.reflectionCount ?? 0} 次`}
+                  </p>
+                ))}
               {snapshot.memories
                 .filter((m) => m.kind === 'observation')
                 .map((item) => (
                   <article className="observation-record" key={item.id}>
+                    {item.data?.version === 'rolling-v1' && (
+                      <p className="quiet">
+                        {ownerName(item.subject)} ·{' '}
+                        {
+                          (
+                            {
+                              rules: '规则',
+                              facts: '事实历史',
+                              interpretations: '认知与经历',
+                              narrative: '剧情纪要',
+                            } as Data
+                          )[item.data.bucket]
+                        }
+                        {` · ${item.data.outputTokens} token · 已整理至事件 ${item.data.throughSeq}`}
+                      </p>
+                    )}
                     <p>{item.text}</p>
                     <button onClick={() => onEvidence(item)}>
                       <FileText size={12} />

@@ -201,6 +201,17 @@ test('多角色故事流式生成、续聊、作者版本、分支隔离和全�
   await expect(page.locator('.narration .prose')).toContainText('本地流程演示');
   const parentAfterTurn = await json(request, 'get', `/branches/${parent.id}`);
   expect(parentAfterTurn.events).toHaveLength(2);
+  await expect
+    .poll(
+      async () =>
+        (await json(request, 'get', `/branches/${parent.id}/compression`)).find(
+          (state: any) => state.scope === 'director:narrative',
+        )?.throughSeq,
+    )
+    .toBe(2);
+  await expect(page.locator('.observations summary')).toContainText('自动整理与长期观察');
+  await page.locator('.observations summary').click();
+  await expect(page.locator('.observations')).toContainText('已整理至事件 2');
   const completedTask = parentAfterTurn.jobs.find((job: any) => job.status === 'completed');
   expect(completedTask).toBeTruthy();
   await page.getByRole('button', { name: '上下文', exact: true }).click();

@@ -786,6 +786,40 @@ export class Store {
   memories(branchId: string, options: MemoryOptions = {}) {
     return this.memory.memories(branchId, options);
   }
+  observationPage(branchId: string, options: Parameters<MemoryEngine['observationPage']>[1]) {
+    return this.memory.observationPage(branchId, options);
+  }
+  async compressionStatus(branchId: string) {
+    const branch = await this.getBranch(branchId),
+      epoch = await this.ownerEpoch();
+    const rows = await this.all<{ scope: string; revision: number; state_json: string }>(
+      'SELECT scope,revision,state_json FROM observation_progress WHERE branch_id=? ORDER BY scope',
+      branchId,
+    );
+    return rows.map((row) => {
+      const state = json<Record<string, Json>>(row.state_json, {});
+      return {
+        scope: row.scope,
+        revision: row.revision,
+        ...state,
+        current: state.epoch === epoch,
+        pendingEvents: Math.max(
+          0,
+          branch.headSeq - (state.epoch === epoch ? Number(state.throughSeq ?? 0) : 0),
+        ),
+      };
+    });
+  }
+  async narrativeCursor(branchId: string) {
+    const epoch = await this.ownerEpoch();
+    const row = await this.one<{ state_json: string }>(
+      'SELECT state_json FROM observation_progress WHERE branch_id=? AND scope=?',
+      branchId,
+      'director:narrative',
+    );
+    const state = json<Record<string, Json>>(row?.state_json, {});
+    return state.epoch === epoch ? Number(state.throughSeq ?? 0) : 0;
+  }
   memoryVersions(branchId: string, memoryId: string) {
     return this.memory.versions(branchId, memoryId);
   }
@@ -847,7 +881,7 @@ export class Store {
   readSourceSpan(
     branchId: string,
     sourceId: string,
-    options: { viewer?: string; start?: number; end?: number } = {},
+    options: Parameters<MemoryEngine['readSourceSpan']>[2] = {},
   ) {
     return this.memory.readSourceSpan(branchId, sourceId, options);
   }
@@ -929,6 +963,7 @@ export class Store {
       memoryCursors,
       memoryApplications,
       observationBatches,
+      observationProgress,
       entities,
       entityAliases,
     ] = await Promise.all([
@@ -950,6 +985,7 @@ export class Store {
       branchRows('memory_cursors', false),
       branchRows('memory_event_applications', false),
       branchRows('observation_batches'),
+      branchRows('observation_progress', false),
       branchRows('entities'),
       branchRows('entity_aliases'),
     ]);
@@ -1052,6 +1088,7 @@ export class Store {
       memoryCursors,
       memoryApplications,
       observationBatches,
+      observationProgress,
       entities,
       entityAliases,
       tombstones,

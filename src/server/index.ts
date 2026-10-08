@@ -29,6 +29,7 @@ import { syncPersonaCapabilities } from './persona';
 import { setPlayerProfile } from './player';
 import { retryGeneration } from './task-retry';
 import { dispatchOutbox, type TaskRow, taskDto } from './workflows';
+import { queueObservationBackfill } from './observations';
 export { BranchRuntime } from './runtime';
 export { GenerationWorkflow, MemoryWorkflow } from './workflows';
 const app = new Hono<AppEnv>();
@@ -232,7 +233,7 @@ app.get('/api/v3/branches/:id', async (c) => {
     page.beforeSeq == null ? branch.headSeq : page.beforeSeq - 1,
   );
   const eventAfter = Math.max(-1, eventThrough - 2000);
-  const [sessions, events, memories, jobs, capabilities] = await Promise.all([
+  const [sessions, events, memories, jobs, capabilities, compression] = await Promise.all([
     s.listSessions(id),
     s.getEvents(id, { limit: 2000, afterSeq: eventAfter, asOfSeq: eventThrough }),
     s.memories(id, { includeInactive: true, limit: 1000 }),
@@ -242,6 +243,7 @@ app.get('/api/v3/branches/:id', async (c) => {
       id,
     ),
     s.listCapabilities(id),
+    s.compressionStatus(id),
   ]);
   return c.json({
     branch,
@@ -253,9 +255,13 @@ app.get('/api/v3/branches/:id', async (c) => {
     procedures: memories.filter((m) => m.kind === 'procedure'),
     experiences: memories.filter((m) => m.kind === 'experience'),
     capabilities,
+    compression,
     jobs: jobs.map(taskDto),
   });
 });
+app.get('/api/v3/branches/:id/compression', async (c) =>
+  c.json(await store(c).compressionStatus(c.req.param('id'))),
+);
 app.post('/api/v3/branches/:id/sessions', async (c) => {
   const body = titleSchema.parse(await c.req.json());
   return c.json(
@@ -593,7 +599,12 @@ app.notFound((c) =>
 export default {
   fetch: app.fetch,
   scheduled: async (_event: ScheduledController, env: Env, ctx: ExecutionContext) => {
-    ctx.waitUntil(dispatchOutbox(env));
+    ctx.waitUntil(
+      (async () => {
+        await queueObservationBackfill(env);
+        await dispatchOutbox(env);
+      })(),
+    );
   },
 } satisfies ExportedHandler<Env>;
 export { app };

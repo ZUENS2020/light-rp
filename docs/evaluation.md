@@ -22,6 +22,8 @@ npm run eval -- --output /absolute/path/to/evaluation-report.json
 
 另有真实 D1 回归测试 `tests/runtime-boundaries.test.ts` 与 `tests/vector-boundaries.test.ts`，核验取消、迟到流事件、删除后的旧快照、原子观察依赖、重复派发、旧任务重试、R2 写入后的来源校验，以及同一不可变记忆版本跨视角的 embedding 复用和 Vectorize 删除补偿。R2、Workflows 和 Vectorize 的网络行为使用可注入故障的边界替身；数据库部分使用完整迁移、SQLite 事务和真实来源状态。它们验证程序边界，不代表已执行托管服务的故障演练。
 
+`tests/observations.test.ts` 覆盖滚动压缩的旧摘要合并、超过旧上限的 80 条记忆、Unicode 长开篇、迟到抽取、失败续跑、纠正、来源删除、传递授权撤销、并发水位、技能前提与暂停历史，以及 500 条事件和嵌套分支。反思器使用明确的测试替身，只检验系统集成、覆盖、预算和事务边界，不能作为真实模型摘要保真率。超长开篇在 `tests/rebuild.test.ts` 中还通过真实 MemoryWorkflow 的源处理账本，不会卡在原子事实的 20,000 字符上限。真实预览记录另见 [滚动压缩上线记录](rolling-compression-live-report.json)，该记录仅保存进度及验证元数据。
+
 ## 真实模型对照
 
 ```sh

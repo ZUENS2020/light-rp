@@ -7,7 +7,7 @@ import {
 import { NonRetryableError } from 'cloudflare:workflows';
 import { Store, StoreError, now, uuid, digest } from './store';
 import type { Env } from './env';
-import { complete, parseJson } from './model';
+import { complete } from './model';
 import { buildContext, type ContextSnapshot, type TurnInput } from './context';
 import {
   analyze,
@@ -21,8 +21,8 @@ import {
 import { settingsSchema, defaults } from './settings';
 import { publish } from './runtime';
 import { ApiError, errorMessage } from './errors';
-import type { Event, MemoryProposal } from '../shared/domain';
-import { estimateAssetTokens } from '../shared/assets';
+import type { Event } from '../shared/domain';
+import { rollObservations } from './observations';
 import { indexMemories, cleanDeletedVectors, deleteMemoryVectors } from './vectors';
 import {
   listEntities,
@@ -437,7 +437,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env, JobParams> {
             task.branch_id,
           );
           const pending = await s.getEvents(task.branch_id, {
-            afterSeq: cursor?.seq ?? 0,
+            afterSeq: Math.min(cursor?.seq ?? 0, await s.narrativeCursor(task.branch_id)),
             limit: 18,
           });
           return pending.length <= 16;
@@ -797,6 +797,24 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           if ((await modelSettings(s, this.env.MODEL_MODE)).mode !== 'local-demo')
             await indexMemories(this.env, s, p.branchId!);
         });
+      } else if (payload.compressOnly) {
+        const through = await durable(step, 'load compression target', retry, async () =>
+          Number(payload.throughSeq ?? (await s.getBranch(p.branchId!)).headSeq),
+        );
+        await observe(
+          this.env,
+          s,
+          p.branchId!,
+          through,
+          typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
+          step,
+          'observe and reflect',
+          `jobs/${row.id}/observations/${String(p.retryId ?? 'initial')}`,
+        );
+        await durable(step, 'index compressed observations', retry, async () => {
+          if ((await modelSettings(s, this.env.MODEL_MODE)).mode !== 'local-demo')
+            await indexMemories(this.env, s, p.branchId!);
+        });
       } else if (payload.rebuild) {
         const target = await durable(step, 'load rebuild target', retry, async () => ({
           through: Number(payload.throughSeq ?? (await s.getBranch(p.branchId!)).headSeq),
@@ -853,17 +871,22 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
             // Imported/corrected events still pass the same controlled evidence path.
             extraction = extractionSchema.parse({
               scene: {},
-              facts: events.map((e) => ({
-                kind: 'episode',
-                subject: e.speakerId ?? 'narrator',
-                predicate: 'episode',
-                value: e.text,
-                text: e.text,
-                evidence: [
-                  { source: e.role === 'assistant' ? 'assistant' : 'user', quote: e.text },
-                ],
-                knownBy: e.knownBy,
-              })),
+              // Oversized imported sources are read in full by the paged raw
+              // observer. Do not squeeze them into the 20k atomic-fact schema
+              // or prevent the source application ledger from advancing.
+              facts: events
+                .filter((e) => e.text.length <= 20000)
+                .map((e) => ({
+                  kind: 'episode',
+                  subject: e.speakerId ?? 'narrator',
+                  predicate: 'episode',
+                  value: e.text,
+                  text: e.text,
+                  evidence: [
+                    { source: e.role === 'assistant' ? 'assistant' : 'user', quote: e.text },
+                  ],
+                  knownBy: e.knownBy,
+                })),
             });
             // Corrections are already handled by their explicit authoritative version API.
             extraction.facts = extraction.facts.filter((f) =>
@@ -978,16 +1001,21 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
               evidence: usage.evidence.map((e) => evidenceFor(e, data.events)),
             });
         });
-        await durable(step, 'observe and reflect', retry, async () => {
-          const data = await artifact<{ through: number; events: Event[] }>(this.env, preparedKey);
-          await observe(
-            this.env,
-            s,
-            p.branchId!,
-            data.through,
-            typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
-          );
-        });
+        await observe(
+          this.env,
+          s,
+          p.branchId!,
+          await durable(
+            step,
+            'load observation target',
+            retry,
+            async () => (await artifact<{ through: number }>(this.env, preparedKey)).through,
+          ),
+          typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : undefined,
+          step,
+          'observe and reflect',
+          `jobs/${row.id}/observations/${String(p.retryId ?? 'initial')}`,
+        );
         await durable(step, 'index projections', retry, async () => {
           const settings = await modelSettings(s, this.env.MODEL_MODE);
           if (settings.mode !== 'local-demo') await indexMemories(this.env, s, p.branchId!);
@@ -1219,8 +1247,15 @@ async function replayBranch(
       after = seq;
     }
   }
-  await durable(step, 'rebuild observations', retry, () =>
-    observe(env, s, branchId, through, epoch),
+  await observe(
+    env,
+    s,
+    branchId,
+    through,
+    epoch,
+    step,
+    'rebuild observations',
+    `jobs/${jobId}/observations`,
   );
   await durable(step, 'rebuild semantic index', retry, async () => {
     if (settings.mode !== 'local-demo') await indexMemories(env, s, branchId);
@@ -1233,107 +1268,35 @@ async function modelSettings(s: Store, mode: string) {
   );
   return row ? settingsSchema.parse(JSON.parse(row.data_json)) : defaults(mode);
 }
-async function observe(env: Env, s: Store, branchId: string, through: number, ownerEpoch?: number) {
-  const branch = await s.getBranch(branchId);
-  if (through > branch.headSeq) return;
-  const story = await s.getStory(branch.storyId);
-  const settings = await modelSettings(s, env.MODEL_MODE);
-  for (const viewer of ['director', ...story.characterIds]) {
-    const records = await s.memories(branchId, { viewer, asOfSeq: through, limit: 1000 });
-    for (const bucket of ['rules', 'facts', 'interpretations']) {
-      const atomic = records.filter(
-        (m) =>
-          !['observation', 'experience'].includes(m.kind) &&
-          m.status === 'active' &&
-          (m.authority! >= 85
-            ? 'rules'
-            : ['canon', 'relation'].includes(m.kind) && m.authority! >= 70
-              ? 'facts'
-              : 'interpretations') === bucket,
-      );
-      if (!atomic.length) continue;
-      const previous = records.filter(
-        (m) => m.kind === 'observation' && m.subject === viewer && m.status === 'active',
-      );
-      const references: typeof atomic = [];
-      const proofKeys = new Set<string>();
-      for (const m of atomic) {
-        const keys = m.evidence.map((e) => `${e.sourceId}:${e.start}:${e.end}`);
-        if (new Set([...proofKeys, ...keys]).size > 32) continue;
-        keys.forEach((k) => proofKeys.add(k));
-        references.push(m);
-        if (references.length >= 28) break;
-      }
-      if (!references.length) continue;
-      const critical = references
-        .filter((m) => m.kind === 'canon' || m.kind === 'procedure' || m.kind === 'relation')
-        .map((m) => m.id);
-      let text = references.map((m) => `[${m.id}] ${m.kind} · ${m.text}`).join('\n');
-      if (estimateAssetTokens(text) > 4000 && settings.mode !== 'local-demo') {
-        const result = parseJson(
-          await complete(
-            env,
-            settings,
-            [
-              {
-                role: 'system',
-                content:
-                  '你是观察压缩器。只返回JSON {text,retainedMemoryIds}。保留当前状态、承诺、未完成剧情、关系变化、关键限制和技能适用条件；不能把猜测改成事实。必须保留所有critical IDs，不得新增不存在ID，正文不能为空。',
-              },
-              {
-                role: 'user',
-                content: JSON.stringify({ observations: text, critical, tokenBudget: 4000 }),
-              },
-            ],
-            { json: true, auxiliary: true },
-          ),
-        ) as { text?: string; retainedMemoryIds?: string[] };
-        if (
-          !result.text?.trim() ||
-          critical.some((id) => !result.retainedMemoryIds?.includes(id)) ||
-          result.retainedMemoryIds?.some((id) => !references.some((m) => m.id === id))
-        )
-          throw new Error('反思覆盖校验失败，旧原文和观察保留');
-        if (estimateAssetTokens(result.text) > 4000) throw new Error('反思结果超预算');
-        text = result.text;
-      }
-      const evidence = [
-        ...new Map(
-          references
-            .flatMap((m) => m.evidence)
-            .map((e) => [`${e.sourceId}:${e.start}:${e.end}`, e]),
-        ).values(),
-      ];
-      const proposal: MemoryProposal = {
-        kind: 'observation',
-        subject: viewer,
-        predicate: `rolling-observation:${bucket}`,
-        value: text,
-        text,
-        evidence,
-        knownBy: viewer === 'director' ? [] : [viewer],
-        authority: 20,
-        confidence: 0.5,
-        originSeq: through,
-        memoryKey: `observation:${viewer}:${bucket}`,
-        idempotencyKey: `observation:${viewer}:${bucket}:${through}:${await digest(references.map((m) => m.id))}`,
-        data: {
-          bucket,
-          memoryIds: references.map((m) => m.id),
-          coverage: critical,
-          throughSeq: through,
-        },
-      };
-      await s.activateObservation({
-        branchId,
-        cursor: through,
-        ownerEpoch,
-        expectedMemoryIds: references.map((m) => m.id),
-        proposals: [proposal],
-        extractorVersion: `v3-observer:${viewer}:${bucket}`,
-      });
-    }
-  }
+async function observe(
+  env: Env,
+  s: Store,
+  branchId: string,
+  through: number,
+  ownerEpoch: number | undefined,
+  step: WorkflowStep,
+  label = 'observe and reflect',
+  storagePrefix?: string,
+) {
+  const config = JSON.parse(
+    await durable(step, label, retry, async () =>
+      JSON.stringify({
+        through: Math.min(through, (await s.getBranch(branchId)).headSeq),
+        epoch: ownerEpoch ?? (await s.ownerEpoch()),
+        settings: await modelSettings(s, env.MODEL_MODE),
+      }),
+    ),
+  ) as { through: number; epoch: number; settings: ContextSnapshot['settings'] };
+  await rollObservations(
+    env,
+    s,
+    branchId,
+    config.through,
+    config.epoch,
+    config.settings,
+    (name, callback) => durable(step, name, retry, callback),
+    storagePrefix,
+  );
 }
 async function cleanup(env: Env, s: Store, branchId: string, p: JobParams) {
   await cleanDeletedVectors(env, s);
@@ -1381,6 +1344,16 @@ async function cleanup(env: Env, s: Store, branchId: string, p: JobParams) {
       s.ownerId,
       deletedBefore,
     );
-    for (const job of jobs) await env.BUCKET.delete(`jobs/${job.id}/prepared.json`);
+    for (const job of jobs) {
+      let cursor: string | undefined;
+      do {
+        const objects = await env.BUCKET.list({ prefix: `jobs/${job.id}/`, cursor });
+        for (let offset = 0; offset < objects.objects.length; offset += 100)
+          await env.BUCKET.delete(
+            objects.objects.slice(offset, offset + 100).map((object) => object.key),
+          );
+        cursor = objects.truncated ? objects.cursor : undefined;
+      } while (cursor);
+    }
   }
 }
