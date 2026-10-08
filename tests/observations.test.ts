@@ -8,7 +8,7 @@ import {
 } from '../src/server/observations';
 import { defaults } from '../src/server/settings';
 import type { Env } from '../src/server/env';
-import type { Event, Memory } from '../src/shared/domain';
+import type { Event, Memory, QuerySpec } from '../src/shared/domain';
 import { estimateAssetTokens } from '../src/shared/assets';
 import { buildContext } from '../src/server/context';
 vi.mock('../src/server/model', async (original) => ({
@@ -427,6 +427,91 @@ describe('durable rolling observer and reflector', () => {
     expect((await root())!.text).toContain('第三页');
     await roll(branchId, 1);
     expect((await progress()).state.throughSeq).toBe(3);
+  });
+  it('reprepares fact writes after two observation projection conflicts with one atomic result', async () => {
+    const e = await event('【事实：信物在北门】'),
+      batch = store.batch.bind(store);
+    let attempts = 0;
+    store.batch = async (specs: QuerySpec[]) => {
+      if (
+        specs.some((q) => q.sql.includes('INSERT OR IGNORE INTO memory_event_applications')) &&
+        ++attempts <= 2
+      )
+        await store.run(
+          'UPDATE branches SET projection_revision=projection_revision+1 WHERE id=?',
+          branchId,
+        );
+      return batch(specs);
+    };
+    await store.extract(branchId, {
+      eventIds: [e.id],
+      cursor: 1,
+      extractorVersion: 'v3-facts',
+      proposals: [
+        {
+          kind: 'canon',
+          subject: '信物',
+          predicate: '位置',
+          value: '北门',
+          text: e.text,
+          evidence: [
+            { sourceId: e.sourceId, start: 0, end: Array.from(e.text).length, quote: e.text },
+          ],
+        },
+      ],
+    });
+    expect(attempts).toBe(3);
+    expect(await store.memories(branchId, { kinds: ['canon'] })).toHaveLength(1);
+    expect(
+      await store.one(
+        'SELECT COUNT(*) AS n FROM memory_event_applications WHERE branch_id=?',
+        branchId,
+      ),
+    ).toEqual({ n: 1 });
+    expect(
+      await store.one(
+        'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+        branchId,
+        'v3-facts',
+      ),
+    ).toEqual({ applied_seq: 1 });
+  });
+  it('leaves facts and their watermark untouched after persistent projection contention', async () => {
+    const e = await event('【待整理事实】'),
+      batch = store.batch.bind(store);
+    let attempts = 0;
+    store.batch = async (specs: QuerySpec[]) => {
+      if (specs.some((q) => q.sql.includes('INSERT OR IGNORE INTO memory_event_applications'))) {
+        attempts++;
+        await store.run(
+          'UPDATE branches SET projection_revision=projection_revision+1 WHERE id=?',
+          branchId,
+        );
+      }
+      return batch(specs);
+    };
+    await expect(
+      store.extract(branchId, {
+        eventIds: [e.id],
+        cursor: 1,
+        extractorVersion: 'v3-facts',
+        proposals: [],
+      }),
+    ).rejects.toMatchObject({ code: 'STALE_WRITE' });
+    expect(attempts).toBe(3);
+    expect(
+      await store.one(
+        'SELECT COUNT(*) AS n FROM memory_event_applications WHERE branch_id=?',
+        branchId,
+      ),
+    ).toEqual({ n: 0 });
+    expect(
+      await store.one(
+        'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+        branchId,
+        'v3-facts',
+      ),
+    ).toBeNull();
   });
   it('discovers late atomic inputs at an unchanged event watermark', async () => {
     const e = await event('【约定：赴会】');

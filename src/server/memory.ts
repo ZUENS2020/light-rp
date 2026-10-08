@@ -185,12 +185,18 @@ export class MemoryEngine {
       source: s,
     };
   }
-  private async latestRows(branchId: string, options: MemoryOptions = {}): Promise<Row[]> {
+  private async latestRows(
+    branchId: string,
+    options: MemoryOptions = {},
+    keys?: string[],
+  ): Promise<Row[]> {
     const branch = await this.store.getBranch(branchId),
       asof = Math.min(options.asOfSeq ?? branch.headSeq, branch.headSeq),
       time = options.sceneTime;
     const clauses: string[] = [],
       params: unknown[] = [branchId, this.store.ownerId, asof];
+    const selected = keys ? 'AND m.memory_key IN (SELECT value FROM json_each(?))' : '';
+    if (keys) params.push(JSON.stringify(keys));
     if (time != null) {
       clauses.push(
         '(m.valid_from IS NULL OR m.valid_from<=?) AND (m.valid_to IS NULL OR m.valid_to>?)',
@@ -200,7 +206,7 @@ export class MemoryEngine {
     const temporal = clauses.length ? `AND ${clauses.join(' AND ')}` : '';
     return this.store.all(
       `WITH visible AS (
-      SELECT m.*,m.rowid AS version_order,l.depth FROM memory_versions m JOIN branch_lineage l ON l.ancestor_id=m.branch_id AND l.branch_id=? WHERE m.owner_id=? AND m.recorded_seq<=? AND (l.max_seq IS NULL OR m.recorded_seq<=l.max_seq) AND (l.max_memory_rowid IS NULL OR m.rowid<=l.max_memory_rowid)
+      SELECT m.*,m.rowid AS version_order,l.depth FROM memory_versions m JOIN branch_lineage l ON l.ancestor_id=m.branch_id AND l.branch_id=? WHERE m.owner_id=? AND m.recorded_seq<=? ${selected} AND (l.max_seq IS NULL OR m.recorded_seq<=l.max_seq) AND (l.max_memory_rowid IS NULL OR m.rowid<=l.max_memory_rowid)
     ), eligible AS (SELECT m.* FROM visible m WHERE 1=1 ${temporal}), unsuperseded AS (
       SELECT m.* FROM eligible m WHERE NOT EXISTS(SELECT 1 FROM eligible n WHERE n.supersedes_id=m.id OR (n.memory_key=m.memory_key AND n.id<>m.id AND n.recorded_seq>=m.recorded_seq AND json_extract(n.data_json,'$.correction')=1 AND COALESCE(n.valid_from,-1e99)<=COALESCE(m.valid_from,1e99)))
     ), ranked AS (SELECT m.*,ROW_NUMBER() OVER(PARTITION BY memory_key ORDER BY CASE WHEN status IN ('forgotten','invalidated') THEN 1 ELSE 0 END DESC,COALESCE(valid_from,-1e99) DESC,recorded_seq DESC,version_order DESC,depth ASC) AS rank FROM unsuperseded m)
@@ -288,19 +294,31 @@ export class MemoryEngine {
     options: MemoryOptions = {},
     selectionKey?: string,
   ): Promise<Memory[]> {
-    const latest = await this.latestRows(branchId, options);
+    const latest = await this.latestRows(
+      branchId,
+      options,
+      selectionKey != null ? [selectionKey] : undefined,
+    );
     return this.authorizedRows(branchId, latest, options, selectionKey, latest);
   }
   /** Keyset pages include ordinary historical changes. Explicit correction and
    * forgetting still block their immutable inputs, as do branch/source/ACL fences. */
   async observationPage(
     branchId: string,
-    options: { viewer: string; through: number; after: number; limit?: number },
+    options: {
+      viewer: string;
+      through: number;
+      after: number;
+      limit?: number;
+      bucket?: 'rules' | 'facts' | 'interpretations';
+    },
   ) {
     const rows = await this.store.all<Row>(
       `SELECT m.*,m.rowid AS version_order FROM memory_versions m
        JOIN branch_lineage l ON l.ancestor_id=m.branch_id AND l.branch_id=?
        WHERE m.owner_id=? AND m.recorded_seq<=? AND m.rowid>? AND m.kind<>'observation'
+       AND (m.status='active' OR (m.kind='procedure' AND m.status IN ('draft','suspended','retired')))
+       ${options.bucket ? `AND CASE WHEN m.authority>=85 THEN 'rules' WHEN m.kind IN ('canon','relation') AND m.authority>=70 THEN 'facts' ELSE 'interpretations' END = ?` : ''}
        AND (l.max_seq IS NULL OR m.recorded_seq<=l.max_seq)
        AND (l.max_memory_rowid IS NULL OR m.rowid<=l.max_memory_rowid)
        ORDER BY m.rowid LIMIT ?`,
@@ -308,6 +326,7 @@ export class MemoryEngine {
       this.store.ownerId,
       options.through,
       options.after,
+      ...(options.bucket ? [options.bucket] : []),
       options.limit ?? 24,
     );
     const authorized = new Map(
@@ -396,15 +415,18 @@ export class MemoryEngine {
     const hydrated = await this.hydrate(dependencyRows),
       byId = new Map(hydrated.map((m) => [m.id, m])),
       latestIds = new Set(latest.map((m) => String(m.id))),
-      latestByKey = new Map(
-        (
-          currentRows ??
-          (hydrated.some((m) => m.data?.recordType === 'capability')
-            ? await this.latestRows(branchId, options)
-            : [])
-        ).map((m) => [String(m.memory_key), m]),
-      ),
       blocked = new Set(dependencyRows.filter((r) => Number(r.blocked)).map((r) => String(r.id)));
+    const capabilityKeys = [
+      ...new Set(
+        hydrated.filter((m) => m.data?.recordType === 'capability').map((m) => m.memoryKey),
+      ),
+    ].filter((key) => !currentRows?.some((row) => row.memory_key === key));
+    const latestByKey = new Map(
+      [
+        ...(currentRows ?? []),
+        ...(capabilityKeys.length ? await this.latestRows(branchId, options, capabilityKeys) : []),
+      ].map((m) => [String(m.memory_key), m]),
+    );
     const deps = await this.store.all<{ memory_id: string; depends_on_id: string }>(
         'SELECT memory_id,depends_on_id FROM memory_dependencies WHERE memory_id IN (SELECT value FROM json_each(?))',
         JSON.stringify([...byId.keys()]),
@@ -886,7 +908,8 @@ export class MemoryEngine {
       ownerEpoch?: number;
       extractorVersion?: string;
     },
-  ) {
+    projectionAttempt = 0,
+  ): Promise<{ accepted: string[]; cursor: number }> {
     const branch = await this.store.getBranch(branchId),
       epoch = input.ownerEpoch ?? (await this.store.ownerEpoch()),
       cursor = input.cursor ?? branch.headSeq;
@@ -931,38 +954,58 @@ export class MemoryEngine {
             params: [branchId, version, now(), f.sourceId, this.store.ownerId, cursor],
           });
     }
-    await this.store.batch([
-      this.store.epochGuard(epoch),
-      ...this.store.sourceGuards([
-        ...(input.sourceFence ?? []),
-        ...prepared.flatMap((p) => p.fences),
-      ]),
-      this.store.guard(
-        'EXISTS(SELECT 1 FROM branches WHERE id=? AND owner_id=? AND projection_revision=?)',
-        [branchId, this.store.ownerId, branch.projectionRevision],
-      ),
-      ...prepared.flatMap((p) => p.specs),
-      ...applications,
-      {
-        sql: `INSERT INTO memory_cursors(branch_id,extractor_version,applied_seq,updated_at) SELECT ?,?,COALESCE((SELECT MIN(e.seq)-1 FROM events e JOIN sources s ON s.id=e.source_id JOIN branch_lineage l ON l.ancestor_id=e.branch_id AND l.branch_id=? WHERE e.owner_id=? AND e.seq<=? AND s.status='active' AND (l.max_seq IS NULL OR e.seq<=l.max_seq) AND NOT EXISTS(SELECT 1 FROM memory_event_applications a WHERE a.branch_id=? AND a.event_id=e.id AND a.extractor_version=?)),?),? ON CONFLICT(branch_id,extractor_version) DO UPDATE SET applied_seq=MAX(applied_seq,excluded.applied_seq),updated_at=excluded.updated_at`,
-        params: [
+    try {
+      await this.store.batch([
+        this.store.epochGuard(epoch),
+        ...this.store.sourceGuards([
+          ...(input.sourceFence ?? []),
+          ...prepared.flatMap((p) => p.fences),
+        ]),
+        this.store.guard(
+          'EXISTS(SELECT 1 FROM branches WHERE id=? AND owner_id=? AND projection_revision=?)',
+          [branchId, this.store.ownerId, branch.projectionRevision],
+        ),
+        ...prepared.flatMap((p) => p.specs),
+        ...applications,
+        {
+          sql: `INSERT INTO memory_cursors(branch_id,extractor_version,applied_seq,updated_at) SELECT ?,?,COALESCE((SELECT MIN(e.seq)-1 FROM events e JOIN sources s ON s.id=e.source_id JOIN branch_lineage l ON l.ancestor_id=e.branch_id AND l.branch_id=? WHERE e.owner_id=? AND e.seq<=? AND s.status='active' AND (l.max_seq IS NULL OR e.seq<=l.max_seq) AND NOT EXISTS(SELECT 1 FROM memory_event_applications a WHERE a.branch_id=? AND a.event_id=e.id AND a.extractor_version=?)),?),? ON CONFLICT(branch_id,extractor_version) DO UPDATE SET applied_seq=MAX(applied_seq,excluded.applied_seq),updated_at=excluded.updated_at`,
+          params: [
+            branchId,
+            version,
+            branchId,
+            this.store.ownerId,
+            cursor,
+            branchId,
+            version,
+            cursor,
+            now(),
+          ],
+        },
+        {
+          sql: 'UPDATE branches SET projection_revision=projection_revision+1 WHERE id=? AND owner_id=?',
+          params: [branchId, this.store.ownerId],
+        },
+        this.store.cleanupGuards(),
+      ]);
+    } catch (error) {
+      // All failed batch writes have rolled back. Reprepare only when an
+      // independent projection moved; the fixed epoch and original source
+      // fences remain required on every attempt. Deleted/corrected evidence
+      // still fails its source checks rather than acquiring a new fence.
+      if (
+        error instanceof StoreError &&
+        error.code === 'STALE_WRITE' &&
+        projectionAttempt < 2 &&
+        (await this.store.ownerEpoch()) === epoch &&
+        (await this.store.getBranch(branchId)).projectionRevision !== branch.projectionRevision
+      )
+        return this.extract(
           branchId,
-          version,
-          branchId,
-          this.store.ownerId,
-          cursor,
-          branchId,
-          version,
-          cursor,
-          now(),
-        ],
-      },
-      {
-        sql: 'UPDATE branches SET projection_revision=projection_revision+1 WHERE id=? AND owner_id=?',
-        params: [branchId, this.store.ownerId],
-      },
-      this.store.cleanupGuards(),
-    ]);
+          { ...input, ownerEpoch: epoch, cursor },
+          projectionAttempt + 1,
+        );
+      throw error;
+    }
     const result = await this.store.one<{ applied_seq: number }>(
       'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
       branchId,

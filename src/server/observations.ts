@@ -22,7 +22,9 @@ export async function queueObservationBackfill(env: Env) {
     AND NOT EXISTS(SELECT 1 FROM outbox j WHERE j.branch_id=b.id AND j.kind='memory' AND j.status IN ('pending','dispatching','dispatched'))`,
   ).run();
 }
-export const OBSERVATION_BUCKETS = ['rules', 'facts', 'interpretations', 'narrative'] as const;
+// Publish the raw-story prefix first so ongoing play need not wait for every
+// historical interpretation and character view to be reorganized.
+export const OBSERVATION_BUCKETS = ['narrative', 'rules', 'facts', 'interpretations'] as const;
 type Bucket = (typeof OBSERVATION_BUCKETS)[number];
 // Each durable page is bounded; the limit bounds a page, never total history.
 const PAGE_TOKENS = 1800;
@@ -244,6 +246,7 @@ async function planPage(
       through,
       after: state.memoryRowid,
       limit: 24,
+      bucket,
     });
     exhausted = page.exhausted;
     for (const entry of page.entries) {
