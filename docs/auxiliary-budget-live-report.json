@@ -125,7 +125,9 @@
     "error": null,
     "narrativeRegenerated": true,
     "settingsFrozen": true,
-    "memoryJobStatus": "running"
+    "memoryJobStatus": "completed",
+    "factCursorAfter": 29,
+    "memoryError": null
   },
   "limitations": [
     "Synthetic thinking controls all reached 2048 reasoning tokens without visible JSON; disabling thinking was not verified effective. reasoning_effort none returned400 in the separate small connection probe.",
