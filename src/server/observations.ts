@@ -323,7 +323,7 @@ const REFLECTOR_PROMPT = `你是长期叙事记忆的反思压缩器。输入中
 世界规则、已证实事实、角色发言/误信/计划、原文纪要分别处理；角色自称成功不等于成功。旧状态变化可以浓缩成历史，但不能丢掉仍有效的约束和未履行承诺。不编造没有可靠日期的信息。
 方法的 draft 是候选、suspended 是暂停、retired 是退出使用；保留变更顺序和最新状态，不能把历史成功或召回方法写成当前可用能力。区分剧情发生序号与角色获知序号。
 retainedIds 必须覆盖 requiredIds 的每个ID，不得新增ID。每个新增片段必须经过整理。previous 存在时必须保留它所表达的连续性，不能只概括新增片段。
-正文不超过 tokenBudget。正文用清晰中文，保留可核对的输入ID引用；原文纪要不得升级为世界真相。`;
+正文尽量接近 tokenBudget；保留重要约束时可以超过目标，但不得超过 hardTokenLimit。正文用清晰中文，保留可核对的输入ID引用；原文纪要不得升级为世界真相。`;
 
 export async function prepareObservation(env: Env, s: Store, settings: ModelSettings, plan: Plan) {
   const required = [
@@ -349,6 +349,7 @@ export async function prepareObservation(env: Env, s: Store, settings: ModelSett
       additions: plan.additions.map(({ id, text }) => ({ text, id })),
       requiredIds: required,
       tokenBudget: REFLECTION_TARGET,
+      hardTokenLimit: OBSERVATION_TOKENS,
     });
     if (
       estimateAssetTokens(REFLECTOR_PROMPT + input) +
@@ -388,8 +389,8 @@ export async function prepareObservation(env: Env, s: Store, settings: ModelSett
           retained.some((id) => !required.includes(id))
         )
           throw new Error('来源覆盖ID不完整或出现未知ID');
-        if (estimateAssetTokens(result.text) > REFLECTION_TARGET)
-          throw new Error('摘要超过目标预算');
+        if (estimateAssetTokens(result.text) > OBSERVATION_TOKENS)
+          throw new Error('摘要超过安全上限');
         text = result.text.trim();
         reflected = true;
         break;
@@ -397,7 +398,12 @@ export async function prepareObservation(env: Env, s: Store, settings: ModelSett
         problem = (error as Error).message;
       }
     }
-    if (!reflected) throw new Error(`反思覆盖校验失败：${problem}；原文与已有摘要已保留`);
+    if (!reflected)
+      throw new StoreError(
+        'OBSERVATION_INVALID_OUTPUT',
+        `反思覆盖校验失败：${problem}；原文与已有摘要已保留`,
+        422,
+      );
   }
   plan.state.inputTokens = inputTokens;
   plan.state.outputTokens = estimateAssetTokens(text);

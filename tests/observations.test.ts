@@ -265,6 +265,26 @@ describe('durable rolling observer and reflector', () => {
     await roll();
     expect((await progress()).state.throughSeq).toBe(10);
   });
+  it('accepts a valid reflection above the target within the hard budget without repeated repair calls', async () => {
+    await event('【约定：归还信物】' + '风'.repeat(1100));
+    await roll();
+    await event('【结果：发现信物】' + '路'.repeat(900));
+    vi.mocked(complete).mockImplementation(async (_env, _settings, messages) => {
+      const input = JSON.parse(messages[1]!.content);
+      return JSON.stringify({
+        text: '【约定：归还信物】【结果：发现信物】' + '约定仍有效。'.repeat(200),
+        retainedIds: input.requiredIds,
+      });
+    });
+    await roll();
+    const current = await root();
+    expect(estimateAssetTokens(current!.text)).toBeGreaterThan(1000);
+    expect(estimateAssetTokens(current!.text)).toBeLessThanOrEqual(OBSERVATION_TOKENS);
+    expect(current!.text).toContain('归还信物');
+    expect(current!.text).toContain('发现信物');
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect((await progress()).state.throughSeq).toBe(2);
+  });
   it('rejects a source deletion between preparation and activation, including inherited summaries', async () => {
     const first = await event('【密令：星河】');
     await roll();
