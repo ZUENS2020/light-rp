@@ -1,0 +1,84 @@
+{
+  "format": "lightrp-unified-preview-recovery-v1",
+  "capturedAt": "2026-10-08T11:48:04.033Z",
+  "privateNarrativeIncluded": false,
+  "validatedDeploymentVersion": "9a496064-f2f9-4822-9cad-10e39263fb02",
+  "head": {
+    "headSeq": 55,
+    "projectionRevision": 281
+  },
+  "policy": {
+    "strategy": "unified-v1",
+    "status": "active",
+    "targetSeq": 55,
+    "revision": 1
+  },
+  "progress": [
+    {
+      "viewer": "director",
+      "revision": 12,
+      "throughSeq": 55
+    },
+    {
+      "viewer": "role-1",
+      "revision": 3,
+      "throughSeq": 55
+    }
+  ],
+  "archiveDirectory": [
+    {
+      "level": "scene",
+      "n": 3
+    },
+    {
+      "level": "segment",
+      "n": 12
+    }
+  ],
+  "continuations": [
+    {
+      "kind": "index",
+      "status": "completed",
+      "n": 5
+    },
+    {
+      "kind": "memory",
+      "status": "completed",
+      "n": 2
+    }
+  ],
+  "vectorManifest": [
+    {
+      "viewer": "director",
+      "versions": 291
+    }
+  ],
+  "finalIndexWorkflow": {
+    "status": "complete",
+    "error": null,
+    "endedAt": "2026-10-08T11:42:45.000Z",
+    "scheduledFurtherWork": false
+  },
+  "recovery": {
+    "originalFailure": "Cloudflare single Workflow API request budget",
+    "resumedFromArchiveRevision": 11,
+    "boundedArchiveUnits": 3,
+    "boundedIndexPages": 2,
+    "boundedPrefixReplayTurns": 3,
+    "newStoryTurns": 0
+  },
+  "checks": {
+    "typecheck": true,
+    "testsPassed": 363,
+    "browserTestsPassed": 12,
+    "browserElapsedSeconds": 54.1,
+    "syntheticReplayTurns": 5000,
+    "syntheticGoldQuestions": 160
+  },
+  "limitations": [
+    "Only this existing active branch was backfilled; other stories remain on-demand.",
+    "The role archive cursor is permission-filtered and does not imply granting all director content to that role.",
+    "Natural-model fact precision, long-form semantic quality and healthy-turn model cache rate remain unmeasured.",
+    "The 20-question embedding pilot does not establish large RP retrieval quality."
+  ]
+}

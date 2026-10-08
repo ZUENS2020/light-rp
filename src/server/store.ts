@@ -459,6 +459,17 @@ export class Store {
         params: [id, at, parent.id, input.atSeq],
       },
       {
+        // A fork cannot inherit future consumer writes. Its own prefix replay
+        // must finish any snapshot that was still pending at the fork point.
+        sql: `INSERT INTO narrative_extractions(branch_id,source_id,stage)
+          SELECT ?,x.source_id,'claimed' FROM narrative_extractions x
+          JOIN events e ON e.source_id=x.source_id
+          JOIN branch_lineage l ON l.branch_id=? AND l.ancestor_id=e.branch_id
+          WHERE x.branch_id=? AND x.stage='claimed'
+          AND (l.max_seq IS NULL OR e.seq<=l.max_seq)`,
+        params: [id, id, parent.id],
+      },
+      {
         sql: 'INSERT INTO memory_cursors(branch_id,extractor_version,applied_seq,updated_at) SELECT ?,extractor_version,MIN(applied_seq,?),? FROM memory_cursors WHERE branch_id=?',
         params: [id, input.atSeq, at, parent.id],
       },
@@ -605,7 +616,7 @@ export class Store {
       // in the same guarded commit, before asynchronous archive jobs can see it.
       if (input.taskFence)
         statements.push({
-          sql: 'INSERT OR IGNORE INTO narrative_extractions(branch_id,source_id) VALUES(?,?)',
+          sql: "INSERT OR IGNORE INTO narrative_extractions(branch_id,source_id,stage) VALUES(?,?,'claimed')",
           params: [branch.id, sourceId],
         });
     }

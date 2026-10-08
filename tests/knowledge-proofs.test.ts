@@ -425,6 +425,12 @@ describe('automatic knowledge acquisition is evidence, not a knownBy assertion',
         characterId: 'actor-a',
         channel: 'author',
       });
+      // This fixture exercises the old channel schema with today's Store.
+      // Provide only the later source-claim table needed by Store.fork; keep
+      // knowledge_grants unchanged until the migration under test runs.
+      db.sqlite.exec(
+        "CREATE TABLE narrative_extractions(branch_id TEXT,source_id TEXT,stage TEXT DEFAULT 'applied',PRIMARY KEY(branch_id,source_id))",
+      );
       const fork = await s.fork({ branchId: story.branchId, atSeq: 1 });
       await s.grantKnowledge({
         branchId: story.branchId,

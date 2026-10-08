@@ -191,6 +191,60 @@ async function rebuildJob(target: string) {
 }
 
 describe('real D1 branch replay with durable step and R2 boundaries', () => {
+  it('retries unfinished consumers even after factual extraction advanced its cursor', async () => {
+    const text = '小明尝试开锁，结果仍未知。';
+    await cachedTurn(
+      'pending-consumer',
+      text,
+      extraction(text, {
+        experiences: [
+          {
+            actorId: characterId,
+            capability: '解锁',
+            conditions: { tool: '铁丝' },
+            steps: ['尝试开锁'],
+            outcome: 'unknown',
+            evidence: [{ source: 'assistant', quote: text }],
+            knowledge: [],
+          },
+        ],
+      }),
+    );
+    const child = await store.fork({ branchId, atSeq: 2 }),
+      jobId = await rebuildJob(child.id),
+      write = vi.spyOn(Store.prototype, 'addExperience');
+    write.mockRejectedValueOnce(new Error('temporary experience outage'));
+    await expect(runMemory(jobId, child.id)).rejects.toThrow('temporary experience outage');
+    expect(
+      await store.one(
+        'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+        child.id,
+        `v3-rebuild:${jobId}`,
+      ),
+    ).toEqual({ applied_seq: 2 });
+    expect(
+      await store.one(
+        'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+        child.id,
+        `v3-rebuild-complete:${jobId}`,
+      ),
+    ).toBeNull();
+    await runMemory(jobId, child.id);
+    expect(await store.memories(child.id, { kinds: ['experience'] })).toHaveLength(1);
+    expect(
+      await store.one(
+        'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+        child.id,
+        `v3-rebuild-complete:${jobId}`,
+      ),
+    ).toEqual({ applied_seq: 2 });
+    expect(
+      await store.all(
+        "SELECT source_id FROM narrative_extractions WHERE branch_id=? AND stage='claimed'",
+        child.id,
+      ),
+    ).toHaveLength(0);
+  });
   it('compression-only backfill refreshes a closed factual gap without reextracting or appending plot', async () => {
     const original = await cachedTurn('compression-only', '北门已开放。');
     await runMemory(original.outboxId);
@@ -495,7 +549,7 @@ describe('real D1 branch replay with durable step and R2 boundaries', () => {
     expect(later.events[1].seq).toBe(4);
   });
   it(
-    'replays both event pages past 1000 sources and advances only the contiguous extraction cursor',
+    'replays over 1000 sources through bounded durable continuations without repeating applications',
     async () => {
       for (let round = 0; round < 501; round++)
         await store.appendTurn({
@@ -511,14 +565,29 @@ describe('real D1 branch replay with durable step and R2 boundaries', () => {
         jobId = await rebuildJob(child.id),
         spy = vi.spyOn(Store.prototype, 'getEvents'),
         steps = durableStep();
-      // A demo without a language model cannot honestly compress arbitrary
-      // history. Replay still commits every valid source before this boundary.
-      await expect(runMemory(jobId, child.id, steps)).rejects.toThrow('OBSERVATION_MODEL_REQUIRED');
-      expect(steps.names.filter((name) => name.startsWith('replay '))).toHaveLength(501);
+      await runMemory(jobId, child.id, steps);
+      let replayed = steps.names.filter((name) => name.startsWith('replay ')).length,
+        batches = 1;
+      expect(replayed).toBe(3);
+      for (;;) {
+        const next = await store.one<{ id: string }>(
+          "SELECT id FROM outbox WHERE branch_id=? AND status='pending' AND json_extract(payload_json,'$.rebuildId')=?",
+          child.id,
+          jobId,
+        );
+        if (!next) break;
+        const batch = await runMemory(next.id, child.id);
+        const count = batch.names.filter((name) => name.startsWith('replay ')).length;
+        expect(count).toBeLessThanOrEqual(3);
+        replayed += count;
+        if (++batches > 200) throw new Error('prefix replay did not advance');
+      }
+      expect(batches).toBe(167);
+      expect(replayed).toBe(501);
       expect(
-        spy.mock.calls.some(
+        spy.mock.calls.every(
           ([target, options]) =>
-            target === child.id && options?.limit === 1000 && options.afterSeq === 1000,
+            target !== child.id || Number(options?.limit) <= 20,
         ),
       ).toBe(true);
       expect(
@@ -537,8 +606,22 @@ describe('real D1 branch replay with durable step and R2 boundaries', () => {
       ).toEqual({ n: 501 });
       expect((await store.recall(child.id, '500 次')).cursor).toBe(1002);
       expect(await store.one('SELECT status FROM outbox WHERE id=?', jobId)).toEqual({
-        status: 'failed',
+        status: 'completed',
       });
+      expect(
+        await store.one(
+          'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+          child.id,
+          `v3-rebuild-complete:${jobId}`,
+        ),
+      ).toEqual({ applied_seq: 1002 });
+      const archive = await store.one<{ id: string }>(
+        "SELECT id FROM outbox WHERE branch_id=? AND status='pending' AND json_extract(payload_json,'$.compressOnly')=1",
+        child.id,
+      );
+      // A demo cannot honestly compress arbitrary history. Replay completion
+      // is preserved even when its independently queued archive job fails.
+      await expect(runMemory(archive!.id, child.id)).rejects.toThrow('OBSERVATION_MODEL_REQUIRED');
       expect(
         JSON.stringify(await store.memories(child.id, { kinds: ['episode'], limit: 1000 })),
       ).toContain('第 500 次独立剧情结果。');

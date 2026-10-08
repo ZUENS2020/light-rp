@@ -108,7 +108,8 @@ export async function embed(env: Env, texts: string[]): Promise<number[][]> {
   return result.data;
 }
 /** Immutable revision IDs prevent an old task from overwriting a newer vector. */
-export async function indexMemories(env: Env, s: Store, branchId: string) {
+export async function indexMemories(env: Env, s: Store, branchId: string, maxPages = Infinity) {
+  let remaining = maxPages;
   const branch = await s.getBranch(branchId),
     story = await s.getStory(branch.storyId),
     namespace = await branchNamespace(s.ownerId, branchId);
@@ -123,11 +124,11 @@ export async function indexMemories(env: Env, s: Store, branchId: string) {
         s.ownerId,
       ),
     });
-    const progress = await s.one<{ after_version: number; fingerprint: string }>(
-      'SELECT * FROM vector_index_progress WHERE branch_id=? AND viewer=?',
-      branchId,
-      viewer,
-    );
+    const progress = await s.one<{
+      after_version: number;
+      fingerprint: string;
+      cleanup_after: string;
+    }>('SELECT * FROM vector_index_progress WHERE branch_id=? AND viewer=?', branchId, viewer);
     let after = progress?.fingerprint === fingerprint ? progress.after_version : 0;
     const recorded = await s.all<{ vector_id: string; memory_id: string }>(
       'SELECT vector_id,memory_id FROM vector_manifest WHERE owner_id=? AND branch_id=? AND viewer=?',
@@ -144,6 +145,7 @@ export async function indexMemories(env: Env, s: Store, branchId: string) {
       (await s.one<{ n: number }>('SELECT COALESCE(MAX(rowid),0) AS n FROM memory_versions'))!.n,
     );
     for (;;) {
+      if (remaining <= 0) return false;
       const page = await s.memory.page(branchId, {
         viewer,
         afterVersion: after,
@@ -273,18 +275,29 @@ export async function indexMemories(env: Env, s: Store, branchId: string) {
       await s.batch([
         s.epochGuard(await s.ownerEpoch()),
         {
-          sql: 'INSERT INTO vector_index_progress(branch_id,viewer,after_version,fingerprint) VALUES(?,?,?,?) ON CONFLICT(branch_id,viewer) DO UPDATE SET after_version=excluded.after_version,fingerprint=excluded.fingerprint',
-          params: [branchId, viewer, page.after, fingerprint],
+          sql: `INSERT INTO vector_index_progress(branch_id,viewer,after_version,fingerprint,cleanup_after) VALUES(?,?,?,?,'') ON CONFLICT(branch_id,viewer) DO UPDATE SET after_version=excluded.after_version,cleanup_after=CASE WHEN vector_index_progress.fingerprint<>excluded.fingerprint OR ? THEN '' ELSE cleanup_after END,fingerprint=excluded.fingerprint`,
+          params: [branchId, viewer, page.after, fingerprint, records.length > 0 ? 1 : 0],
         },
         s.cleanupGuards(),
       ]);
+      if (records.length) remaining--;
       if (page.exhausted) break;
       if (page.after <= after) throw new Error('vector index page did not advance');
       after = page.after;
     }
     // Absence from a page never means deletion. Check each manifest revision explicitly.
-    let last = '';
+    const cleanupProgress = await s.one<{ cleanup_after: string }>(
+      'SELECT cleanup_after FROM vector_index_progress WHERE branch_id=? AND viewer=?',
+      branchId,
+      viewer,
+    );
+    const savedCleanup = cleanupProgress?.cleanup_after ?? '';
+    const cleanup = savedCleanup.startsWith('{')
+      ? (JSON.parse(savedCleanup) as { after: string; watermark: number })
+      : { after: '', watermark: -1 };
+    let last = cleanup.watermark === watermark ? cleanup.after : '';
     for (;;) {
+      if (remaining <= 0) return false;
       const page = await s.all<{ vector_id: string; memory_id: string; scope: string }>(
         'SELECT vector_id,memory_id,scope FROM vector_manifest WHERE owner_id=? AND branch_id=? AND viewer=? AND vector_id>? ORDER BY vector_id LIMIT 80',
         s.ownerId,
@@ -321,8 +334,16 @@ export async function indexMemories(env: Env, s: Store, branchId: string) {
         );
       }
       last = page.at(-1)!.vector_id;
+      await s.run(
+        'UPDATE vector_index_progress SET cleanup_after=? WHERE branch_id=? AND viewer=?',
+        JSON.stringify({ after: last, watermark }),
+        branchId,
+        viewer,
+      );
+      remaining--;
     }
   }
+  return true;
 }
 export async function cleanDeletedVectors(env: Env, s: Store) {
   const rows = await s.all<{ vector_id: string; memory_id: string }>(

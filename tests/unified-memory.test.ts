@@ -93,6 +93,62 @@ const change = {
   knowledge: [],
 };
 describe('one source, one state owner', () => {
+  it('resumes bounded archive batches without repeating sources or cutting over early', async () => {
+    for (let i = 0; i < 3; i++) await event(`第${i}段。` + '送钥匙的承诺仍未完成。'.repeat(100));
+    const run = () =>
+      rollUnified(
+        env,
+        s,
+        branchId,
+        3,
+        0,
+        defaults('openai'),
+        async (_n, fn) => fn(),
+        'bounded-test',
+        1,
+      );
+    expect(await run()).toBe(false);
+    expect((await memoryPolicy(s, branchId)).status).toBe('building');
+    let batches = 0;
+    while (!(await run())) if (++batches > 30) throw new Error('archive batch failed to advance');
+    expect((await memoryPolicy(s, branchId)).status).toBe('active');
+    const units = await recordPage(s, branchId, 'archive');
+    expect(new Set(units.items.map((m) => m.memoryKey)).size).toBe(units.items.length);
+    expect(await s.getEvents(branchId)).toHaveLength(3);
+    expect(await s.memories(branchId, { kinds: ['experience', 'procedure'] })).toHaveLength(0);
+  });
+  it('retains raw online sources until every snapshot consumer has finished', async () => {
+    const e = await event('甲承诺把蓝钥匙交给乙。');
+    await s.run("INSERT INTO narrative_extractions VALUES(?,?,'claimed')", branchId, e.sourceId);
+    const calls = vi.mocked(complete).mock.calls.length;
+    await expect(roll()).rejects.toMatchObject({ code: 'ARCHIVE_EXTRACTION_PENDING', status: 503 });
+    expect(vi.mocked(complete).mock.calls.length).toBe(calls);
+    expect(await s.all('SELECT * FROM narrative_units')).toHaveLength(0);
+    expect((await memoryPolicy(s, branchId)).status).toBe('building');
+    const child = await s.fork({ branchId, atSeq: e.seq });
+    expect(
+      await s.one(
+        'SELECT stage FROM narrative_extractions WHERE branch_id=? AND source_id=?',
+        child.id,
+        e.sourceId,
+      ),
+    ).toEqual({ stage: 'claimed' });
+    await s.run(
+      "UPDATE narrative_extractions SET stage='applied' WHERE branch_id=? AND source_id=?",
+      branchId,
+      e.sourceId,
+    );
+    await roll();
+    expect(
+      await s.one(
+        'SELECT stage FROM narrative_extractions WHERE branch_id=? AND source_id=?',
+        child.id,
+        e.sourceId,
+      ),
+    ).toEqual({ stage: 'claimed' });
+    expect((await memoryPolicy(s, branchId)).status).toBe('active');
+    expect(await s.all("SELECT * FROM narrative_units WHERE level='segment'")).toHaveLength(1);
+  });
   it('backfills threads from old online turns without relearning their facts, while fully extracting imports', async () => {
     const old = await event(change.evidence[0]!.quote);
     await s.run(

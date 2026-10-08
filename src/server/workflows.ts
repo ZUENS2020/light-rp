@@ -728,8 +728,11 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
         );
       } else if (row.kind.includes('index')) {
         await durable(step, 'index projections', retry, async () => {
-          if ((await modelSettings(s, this.env.MODEL_MODE)).mode !== 'local-demo')
-            await indexMemories(this.env, s, p.branchId!);
+          if (
+            (await modelSettings(s, this.env.MODEL_MODE)).mode !== 'local-demo' &&
+            !(await indexMemories(this.env, s, p.branchId!, 2))
+          )
+            await queueMemoryContinuation(s, p.branchId!, 'index', undefined, await s.ownerEpoch());
         });
       } else if (payload.compressOnly) {
         const through = await durable(step, 'load compression target', retry, async () =>
@@ -754,10 +757,6 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           'observe and reflect',
           `jobs/${row.id}/observations/${String(p.retryId ?? 'initial')}`,
         );
-        await durable(step, 'index compressed observations', retry, async () => {
-          if ((await modelSettings(s, this.env.MODEL_MODE)).mode !== 'local-demo')
-            await indexMemories(this.env, s, p.branchId!);
-        });
       } else if (payload.rebuildUnit) {
         await durable(step, 'rebuild local archive', retry, async () => {
           await rebuildNarrativeUnit(
@@ -769,12 +768,24 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
             typeof payload.ownerEpoch === 'number' ? payload.ownerEpoch : await s.ownerEpoch(),
           );
         });
+        await durable(step, 'index rebuilt archive', retry, async () => {
+          if ((await modelSettings(s, this.env.MODEL_MODE)).mode !== 'local-demo')
+            await queueMemoryContinuation(s, p.branchId!, 'index', undefined, await s.ownerEpoch());
+        });
       } else if (payload.rebuild) {
         const target = await durable(step, 'load rebuild target', retry, async () => ({
           through: Number(payload.throughSeq ?? (await s.getBranch(p.branchId!)).headSeq),
           epoch: Number(payload.ownerEpoch ?? (await s.ownerEpoch())),
         }));
-        await replayBranch(this.env, s, p.branchId!, target.through, target.epoch, step, row.id);
+        await replayBranch(
+          this.env,
+          s,
+          p.branchId!,
+          target.through,
+          target.epoch,
+          step,
+          String(payload.rebuildId ?? row.id),
+        );
       } else {
         const preparedKey = await durable(step, 'prepare extraction', retry, async () => {
           const through = Number(
@@ -984,7 +995,7 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
             if (payload.taskId)
               for (const event of data.events)
                 await s.run(
-                  'INSERT OR IGNORE INTO narrative_extractions(branch_id,source_id) VALUES(?,?)',
+                  "INSERT INTO narrative_extractions(branch_id,source_id,stage) VALUES(?,?,'applied') ON CONFLICT(branch_id,source_id) DO UPDATE SET stage='applied'",
                   p.branchId!,
                   event.sourceId,
                 );
@@ -1005,10 +1016,6 @@ export class MemoryWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           'observe and reflect',
           `jobs/${row.id}/observations/${String(p.retryId ?? 'initial')}`,
         );
-        await durable(step, 'index projections', retry, async () => {
-          const settings = await modelSettings(s, this.env.MODEL_MODE);
-          if (settings.mode !== 'local-demo') await indexMemories(this.env, s, p.branchId!);
-        });
       }
       await durable(step, 'complete memory job', retry, () =>
         finishOutbox(s, p, 'completed', null),
@@ -1032,26 +1039,38 @@ async function replayBranch(
   jobId: string,
 ) {
   const extractorVersion = `v3-rebuild:${jobId}`;
-  const { branch, settings } = JSON.parse(
+  // Extraction can commit before capabilities/experiences/threads finish. Only
+  // this separate consumer-completion cursor can skip work on a fresh instance.
+  const progressVersion = `v3-rebuild-complete:${jobId}`;
+  const { branch, settings, completedThrough } = JSON.parse(
     await durable(step, 'load rebuild configuration', retry, async () =>
       JSON.stringify({
         branch: await s.getBranch(branchId),
         settings: await modelSettings(s, env.MODEL_MODE),
+        completedThrough: Number(
+          (
+            await s.one<{ applied_seq: number }>(
+              'SELECT applied_seq FROM memory_cursors WHERE branch_id=? AND extractor_version=?',
+              branchId,
+              progressVersion,
+            )
+          )?.applied_seq ?? 0,
+        ),
       }),
     ),
-  ) as { branch: ContextSnapshot['branch']; settings: ContextSnapshot['settings'] };
-  await durable(step, 'rebuild initial persona', retry, async () => {
-    await syncPersonaCapabilities(s, branchId, 0, epoch);
-  });
-  let after = 0;
+  ) as {
+    branch: ContextSnapshot['branch'];
+    settings: ContextSnapshot['settings'];
+    completedThrough: number;
+  };
+  if (!completedThrough)
+    await durable(step, 'rebuild initial persona', retry, async () => {
+      await syncPersonaCapabilities(s, branchId, 0, epoch);
+    });
+  let after = completedThrough,
+    remaining = 3;
   while (after < through) {
     const page = await durable(step, `load rebuild page ${after}`, retry, async () => {
-      const events = await s.getEvents(branchId, {
-        afterSeq: after,
-        asOfSeq: through,
-        limit: 1000,
-      });
-      if (!events.length) return [];
       return s.all<{
         request_id: string;
         branch_id: string;
@@ -1061,16 +1080,42 @@ async function replayBranch(
         task_id: string | null;
         task_attempt: number | null;
       }>(
-        `SELECT t.request_id,t.branch_id,t.first_seq,t.last_seq,l.max_seq,t.task_id,t.task_attempt FROM turns t JOIN branch_lineage l ON l.ancestor_id=t.branch_id AND l.branch_id=? WHERE t.owner_id=? AND t.first_seq>? AND t.first_seq<=? AND (l.max_seq IS NULL OR t.first_seq<=l.max_seq) ORDER BY t.first_seq`,
+        `SELECT t.request_id,t.branch_id,t.first_seq,t.last_seq,l.max_seq,t.task_id,t.task_attempt FROM turns t JOIN branch_lineage l ON l.ancestor_id=t.branch_id AND l.branch_id=? WHERE t.owner_id=? AND t.first_seq>? AND t.first_seq<=? AND (l.max_seq IS NULL OR t.first_seq<=l.max_seq) ORDER BY t.first_seq LIMIT 4`,
         branchId,
         s.ownerId,
         after,
-        events.at(-1)!.seq,
+        through,
       );
     });
     const rows = page;
     if (!rows.length) break;
     for (const turn of rows) {
+      if (!remaining) {
+        await durable(step, 'schedule prefix replay continuation', retry, async () => {
+          const id = `replay-continue:${await digest({ jobId, branchId, through, epoch, after })}`;
+          await s.batch([
+            s.epochGuard(epoch),
+            {
+              sql: "INSERT OR IGNORE INTO outbox(id,owner_id,branch_id,kind,payload_json,created_at,updated_at) VALUES(?,?,?,'memory',?,?,?)",
+              params: [
+                id,
+                s.ownerId,
+                branchId,
+                JSON.stringify({
+                  rebuild: true,
+                  rebuildId: jobId,
+                  throughSeq: through,
+                  ownerEpoch: epoch,
+                }),
+                now(),
+                now(),
+              ],
+            },
+            s.cleanupGuards(),
+          ]);
+        });
+        return;
+      }
       const seq = Math.min(through, turn.last_seq, turn.max_seq ?? Infinity);
       await durable(step, `replay ${turn.first_seq}-${seq}`, retry, async () => {
         if ((await s.ownerEpoch()) !== epoch)
@@ -1234,28 +1279,30 @@ async function replayBranch(
         await applyThreadChanges(s, branchId, extraction, events, epoch);
         for (const event of events)
           await s.run(
-            'INSERT OR IGNORE INTO narrative_extractions(branch_id,source_id) VALUES(?,?)',
+            "INSERT INTO narrative_extractions(branch_id,source_id,stage) VALUES(?,?,'applied') ON CONFLICT(branch_id,source_id) DO UPDATE SET stage='applied'",
             branchId,
             event.sourceId,
           );
         return { through: seq };
       });
+      await durable(step, `complete replay ${seq}`, retry, async () => {
+        await s.batch([
+          s.epochGuard(epoch),
+          {
+            sql: 'INSERT INTO memory_cursors(branch_id,extractor_version,applied_seq,updated_at) VALUES(?,?,?,?) ON CONFLICT(branch_id,extractor_version) DO UPDATE SET applied_seq=MAX(applied_seq,excluded.applied_seq),updated_at=excluded.updated_at',
+            params: [branchId, progressVersion, seq, now()],
+          },
+          s.cleanupGuards(),
+        ]);
+      });
       after = seq;
+      remaining--;
     }
   }
-  await observe(
-    env,
-    s,
-    branchId,
-    through,
-    epoch,
-    step,
-    'rebuild observations',
-    `jobs/${jobId}/observations`,
+  // Start archiving in its own budgeted instance after the complete prefix.
+  await durable(step, 'schedule rebuilt prefix archive', retry, () =>
+    queueMemoryContinuation(s, branchId, 'memory', through, epoch),
   );
-  await durable(step, 'rebuild semantic index', retry, async () => {
-    if (settings.mode !== 'local-demo') await indexMemories(env, s, branchId);
-  });
 }
 async function modelSettings(s: Store, mode: string) {
   const row = await s.one<{ data_json: string }>(
@@ -1283,7 +1330,7 @@ async function observe(
       }),
     ),
   ) as { through: number; epoch: number; settings: ContextSnapshot['settings'] };
-  await rollUnified(
+  const done = await rollUnified(
     env,
     s,
     branchId,
@@ -1292,7 +1339,63 @@ async function observe(
     config.settings,
     (name, callback) => durable(step, name, retry, callback),
     storagePrefix ?? `jobs/unified-${branchId}`,
+    3,
   );
+  await durable(step, 'schedule memory continuation', retry, async () => {
+    if (!done) await queueMemoryContinuation(s, branchId, 'memory', config.through, config.epoch);
+    else if (config.settings.mode !== 'local-demo')
+      await queueMemoryContinuation(s, branchId, 'index', undefined, config.epoch);
+  });
+}
+
+/** Keep each Workflow below platform request/step budgets; outbox owns the next
+ * bounded batch. Progress is part of the key, including parent and cleanup work. */
+export async function queueMemoryContinuation(
+  s: Store,
+  branchId: string,
+  kind: 'memory' | 'index',
+  through: number | undefined,
+  epoch: number,
+) {
+  const branch = await s.getBranch(branchId);
+  const progress =
+    kind === 'index'
+      ? await s.all(
+          'SELECT viewer,after_version,fingerprint,cleanup_after FROM vector_index_progress WHERE branch_id=? ORDER BY viewer',
+          branchId,
+        )
+      : {
+          archives: await s.all(
+            "SELECT scope,revision FROM observation_progress WHERE branch_id=? AND scope LIKE '%:archive' ORDER BY scope",
+            branchId,
+          ),
+          boundaries: await s.all(
+            'SELECT viewer,level,input_hash,closed FROM narrative_boundary_checks WHERE branch_id=? ORDER BY viewer,level,input_hash',
+            branchId,
+          ),
+        };
+  const id = `${kind}-continue:${await digest({ branchId, through, epoch, progress, projection: branch.projectionRevision })}`;
+  await s.batch([
+    s.epochGuard(epoch),
+    {
+      sql: 'INSERT OR IGNORE INTO outbox(id,owner_id,branch_id,kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+      params: [
+        id,
+        s.ownerId,
+        branchId,
+        kind,
+        JSON.stringify({
+          ownerId: s.ownerId,
+          branchId,
+          ownerEpoch: epoch,
+          ...(kind === 'memory' ? { compressOnly: true, throughSeq: through } : {}),
+        }),
+        now(),
+        now(),
+      ],
+    },
+    s.cleanupGuards(),
+  ]);
 }
 async function cleanup(env: Env, s: Store, branchId: string, p: JobParams) {
   await cleanDeletedVectors(env, s);

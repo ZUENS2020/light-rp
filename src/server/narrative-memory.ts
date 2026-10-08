@@ -356,11 +356,17 @@ async function preparePage(
   const corrections = await correctionMemories(s, plan.branchId, plan.state.viewer);
   const threadList = await plotThreads(s, plan.branchId, plan.state.viewer);
   // Online turns already share their generation extraction. Only raw imports/backfills need extraction here.
-  const extracted = await s.all<{ source_id: string }>(
-    'SELECT source_id FROM narrative_extractions WHERE branch_id=? AND source_id IN (SELECT value FROM json_each(?))',
+  const extracted = await s.all<{ source_id: string; stage: string }>(
+    'SELECT source_id,stage FROM narrative_extractions WHERE branch_id=? AND source_id IN (SELECT value FROM json_each(?))',
     plan.branchId,
     JSON.stringify(spans.map((e) => e.sourceId)),
   );
+  if (extracted.some((e) => e.stage === 'claimed'))
+    throw new StoreError(
+      'ARCHIVE_EXTRACTION_PENDING',
+      '在线快照尚未消费完成，保留原文并稍后整理',
+      503,
+    );
   const extractThreads =
     plan.state.viewer === 'director' &&
     spans.some((e) => !extracted.some((r) => r.source_id === e.sourceId));
@@ -591,6 +597,7 @@ async function aggregate(
   policy: MemoryPolicy,
   epoch: number,
   run: ObservationStep,
+  budget: { remaining: number },
 ) {
   for (const [level, childLevel, minimum, limit] of [
     ['scene', 'segment', 1, 1200],
@@ -630,6 +637,7 @@ async function aggregate(
           inputHash,
         );
         if (checked?.closed === 0 && children.length < 8) return 'stop';
+        if (budget.remaining <= 0) return 'budget';
         const result = await summarize(
           env,
           settings,
@@ -657,7 +665,7 @@ async function aggregate(
             },
             s.cleanupGuards(),
           ]);
-          return 'stop';
+          return 'checked';
         }
         const unitId = `${level}:${children[0]!.data?.unitId}:${children.at(-1)!.data?.unitId}`;
         const spans = uniqueEvidence(children.flatMap((m) => m.evidence));
@@ -706,9 +714,13 @@ async function aggregate(
         });
         return 'advanced';
       });
+      if (advanced === 'budget') return false;
       if (advanced === 'stop') break;
+      budget.remaining--;
+      if (advanced === 'checked') break;
     }
   }
+  return true;
 }
 export async function rollUnified(
   env: Env,
@@ -719,7 +731,9 @@ export async function rollUnified(
   settings: ModelSettings,
   run: ObservationStep,
   storagePrefix: string,
+  maxUnits = Infinity,
 ) {
+  const budget = { remaining: maxUnits };
   const config = JSON.parse(
     await run('load unified policy', async () =>
       JSON.stringify({
@@ -751,7 +765,8 @@ export async function rollUnified(
     for (let page = 0; ; page++) {
       const base = `${storagePrefix}/unified/${encodeURIComponent(viewer)}/${page}`;
       let accepted = false,
-        done = false;
+        done = false,
+        worked = false;
       for (let conflict = 0; conflict < 3; conflict++) {
         const label = `archive ${viewer} ${page}.${conflict}`;
         const pk = await run(`${label} load`, async () => {
@@ -771,6 +786,8 @@ export async function rollUnified(
           accepted = true;
           break;
         }
+        if (budget.remaining <= 0) return false;
+        worked = true;
         const prepared = await run(`${label} prepare`, async () =>
           save(
             `${base}.${conflict}.prepared`,
@@ -880,9 +897,11 @@ export async function rollUnified(
       }
       if (!accepted)
         throw new StoreError('OBSERVATION_STALE', 'Observation invalidated：整理冲突，请重试');
+      if (worked) budget.remaining--;
       if (done) break;
     }
-    await aggregate(env, s, branchId, viewer, settings, policy, epoch, run);
+    if (!(await aggregate(env, s, branchId, viewer, settings, policy, epoch, run, budget)))
+      return false;
   }
   await run('activate unified strategy', async () => {
     const branch = await s.getBranch(branchId);
@@ -915,6 +934,7 @@ export async function rollUnified(
     ]);
     return '';
   });
+  return true;
 }
 
 /** Opening an existing branch opts it into on-demand work; Cron never scans untouched legacy stories. */

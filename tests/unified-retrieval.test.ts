@@ -61,7 +61,11 @@ describe('candidate-first Chinese retrieval', () => {
           deleteByIds: async (ids: string[]) => ids.forEach((id) => vectors.delete(id)),
         },
       } as unknown as Env;
-      await indexMemories(env, s, branchId);
+      let indexBatches = 0;
+      while (!(await indexMemories(env, s, branchId, 2))) {
+        if (++indexBatches > 150) throw new Error('bounded indexing failed to advance');
+      }
+      expect(indexBatches).toBeGreaterThan(1);
       expect(vectors.size).toBe(5101);
       const before = calls;
       await indexMemories(env, s, branchId);

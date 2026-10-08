@@ -27,12 +27,45 @@ vi.mock('cloudflare:workflows', () => ({
   NonRetryableError: class NonRetryableError extends Error {},
 }));
 import { BranchRuntime } from '../src/server/runtime';
-import { dispatchOutbox, GenerationWorkflow, MemoryWorkflow } from '../src/server/workflows';
+import {
+  dispatchOutbox,
+  GenerationWorkflow,
+  MemoryWorkflow,
+  queueMemoryContinuation,
+} from '../src/server/workflows';
 
 const close: Array<() => void> = [];
 afterEach(() => {
   vi.restoreAllMocks();
   for (const dispose of close.splice(0)) dispose();
+});
+it('continues after a negative hierarchy boundary without requiring a projection write', async () => {
+  const { store, story } = await storyFixture();
+  const epoch = await store.ownerEpoch();
+  const before = (await store.getBranch(story.branchId)).projectionRevision;
+  await queueMemoryContinuation(store, story.branchId, 'memory', 1, epoch);
+  await queueMemoryContinuation(store, story.branchId, 'memory', 1, epoch);
+  const first = await store.all<{ id: string }>(
+    "SELECT id FROM outbox WHERE id LIKE 'memory-continue:%'",
+  );
+  expect(first).toHaveLength(1);
+  await store.run("UPDATE outbox SET status='completed' WHERE id=?", first[0]!.id);
+  await store.run(
+    'INSERT INTO narrative_boundary_checks VALUES(?,?,?,?,0)',
+    story.branchId,
+    'director',
+    'arc',
+    'fixed-children',
+  );
+  expect((await store.getBranch(story.branchId)).projectionRevision).toBe(before);
+  await queueMemoryContinuation(store, story.branchId, 'memory', 1, epoch);
+  expect(
+    await store.all("SELECT id FROM outbox WHERE id LIKE 'memory-continue:%' AND status='pending'"),
+  ).toHaveLength(1);
+  await store.deleteSource((await store.getEvents(story.branchId))[0]!.sourceId);
+  await expect(
+    queueMemoryContinuation(store, story.branchId, 'memory', 1, epoch),
+  ).rejects.toMatchObject({ code: 'STALE_WRITE' });
 });
 async function storyFixture() {
   const database = createTestD1();
