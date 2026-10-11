@@ -10,6 +10,8 @@ export interface World {
   description: string;
   createdAt: string;
   updatedAt: string;
+  narrativeMode?: 'guided' | 'freeform';
+  policyRevision?: number;
 }
 export interface Story {
   id: string;
@@ -94,6 +96,7 @@ export interface AppendTurnInput {
   taskFence?: TaskFence;
   ownerEpoch?: number;
   sourceFence?: SourceFence[];
+  worldPolicyFence?: { worldId: string; revision: number };
   resourceUpdates?: ResourceBinding[];
 }
 export interface AppendTurnResult {

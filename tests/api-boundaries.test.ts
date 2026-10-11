@@ -265,6 +265,7 @@ describe('public v3 write contracts', () => {
       'story',
       'thread',
       'turn',
+      'worldPolicy',
     ]);
     expect(Object.keys(apiWriteSchemas).sort()).toEqual(Object.keys(schemas).sort());
     for (const schema of Object.values(schemas)) expect(schema.type).toBe('object');

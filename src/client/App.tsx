@@ -621,6 +621,37 @@ export default function App() {
               <div className="world-label">
                 <Layers3 size={12} />
                 <span>{world.name}</span>
+                <button
+                  className="icon-button"
+                  aria-label={`${world.name}叙事模式`}
+                  aria-pressed={world.narrativeMode === 'freeform'}
+                  title={
+                    world.narrativeMode === 'freeform'
+                      ? '自由叙事：点击恢复规则约束'
+                      : '规则约束：点击启用自由叙事'
+                  }
+                  disabled={actionBusy || isRunning}
+                  onClick={() =>
+                    void run(async () => {
+                      await api(`/worlds/${world.id}/narrative-policy`, {
+                        method: 'PUT',
+                        body: JSON.stringify({
+                          commandId: crypto.randomUUID(),
+                          expectedRevision: world.policyRevision ?? 0,
+                          mode: world.narrativeMode === 'freeform' ? 'guided' : 'freeform',
+                        }),
+                      });
+                      await refreshBootstrap();
+                      notify(
+                        world.narrativeMode === 'freeform'
+                          ? '已恢复工作区规则约束'
+                          : '工作区已启用自由叙事',
+                      );
+                    })
+                  }
+                >
+                  {world.narrativeMode === 'freeform' ? <span>自由</span> : <Settings2 size={12} />}
+                </button>
               </div>
               {bootstrap.stories
                 .filter((s) => s.worldId === world.id)

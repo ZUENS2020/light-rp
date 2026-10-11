@@ -413,7 +413,14 @@ export function extractionMessages(
   narration: string,
   repair?: { raw: string; error: unknown },
 ): ChatMessage[] {
-  const system: ChatMessage = { role: 'system', content: extractionInstructions() };
+  const system: ChatMessage = {
+    role: 'system',
+    content:
+      extractionInstructions() +
+      (context.narrativePolicy?.mode === 'freeform'
+        ? '\n本工作区由作者启用自由叙事：不检查内容题材、角色行为、玩家代写或参考资料的叙事禁令，boundHardRules为空，violations保持空数组。仍逐字验证来源与实体，不能伪造事实、经历结果或知情依据。'
+        : ''),
+  };
   const payload = {
     // Preserve a stable serialized prefix before the changing entity registry,
     // scene, retrieval results and texts. Repairs reuse this exact input too.
@@ -541,7 +548,7 @@ export function validateExtraction(
   narration: string,
   context: ContextSnapshot,
 ) {
-  if (extraction.violations.length)
+  if (extraction.violations.length && context.narrativePolicy?.mode !== 'freeform')
     throw new ApiError(
       422,
       `剧情与固定规则冲突：${extraction.violations.join('；')}`,

@@ -11,6 +11,31 @@ import {
 
 const prefix = '/api/v3';
 const unique = () => `验收${Date.now()}${Math.floor(Math.random() * 1000)}`;
+test('工作区自由叙事切换持久保存，当前提示和硬规则一起切换', async ({ page, request }) => {
+  const name = unique();
+  const world = await json(request, 'post', '/worlds', { name });
+  const story = await json(request, 'post', '/stories', {
+    worldId: world.id,
+    title: `${name}故事`,
+  });
+  await page.goto('/');
+  const toggle = page.getByRole('button', { name: `${name}叙事模式`, exact: true });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  const free = await json(request, 'get', `/branches/${story.branchId}/context`);
+  expect(free.narrativePolicy.mode).toBe('freeform');
+  expect(free.hardRules).toEqual([]);
+  expect(free.messages.at(-1).content).toContain('取消应用内的内容、题材');
+  await page.reload();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  const guided = await json(request, 'get', `/branches/${story.branchId}/context`);
+  expect(guided.narrativePolicy.mode).toBe('guided');
+  expect(guided.hardRules.length).toBeGreaterThan(0);
+  expect((await json(request, 'get', `/branches/${story.branchId}`)).branch.headSeq).toBe(0);
+});
 async function json(
   request: APIRequestContext,
   method: 'get' | 'post' | 'put' | 'patch' | 'delete',

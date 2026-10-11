@@ -75,6 +75,8 @@ export function worldRow(r: Row): World {
     ownerId: string(r, 'owner_id'),
     name: string(r, 'name'),
     description: string(r, 'description'),
+    narrativeMode: r.narrative_mode === 'freeform' ? 'freeform' : 'guided',
+    policyRevision: Number(r.policy_revision ?? 0),
     createdAt: string(r, 'created_at'),
     updatedAt: string(r, 'updated_at'),
   };
@@ -537,6 +539,19 @@ export class Store {
     const statements: QuerySpec[] = [
       this.epochGuard(epoch),
       ...this.sourceGuards(input.sourceFence ?? []),
+      ...(input.worldPolicyFence
+        ? [
+            this.guard(
+              'EXISTS(SELECT 1 FROM worlds WHERE id=? AND owner_id=? AND id=? AND policy_revision=?)',
+              [
+                story.worldId,
+                this.ownerId,
+                input.worldPolicyFence.worldId,
+                input.worldPolicyFence.revision,
+              ],
+            ),
+          ]
+        : []),
       {
         sql: `UPDATE branches SET head_seq=?,revision=revision+1,projection_revision=projection_revision+1,scene_json=? WHERE id=? AND owner_id=? AND head_seq=? ${input.expectedProjectionRevision == null ? '' : 'AND projection_revision=?'}`,
         params: [

@@ -616,6 +616,12 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           ownerEpoch: context.ownerEpoch,
           sourceFence: context.sourceFence,
           taskFence: { taskId: task.id, attempt: task.attempt, cancelEpoch: task.cancel_epoch },
+          worldPolicyFence: context.narrativePolicy
+            ? {
+                worldId: context.narrativePolicy.worldId,
+                revision: context.narrativePolicy.revision,
+              }
+            : undefined,
           scene: { ...context.branch.scene, ...data.extraction.scene },
           messages: [
             {

@@ -29,6 +29,8 @@ import {
 import { seedDemo } from './demo';
 import { syncPersonaCapabilities } from './persona';
 import { setPlayerProfile } from './player';
+import { setWorldPolicy } from './world-policy';
+import { worldPolicyWriteSchema } from '../shared/world-policy';
 import { retryGeneration } from './task-retry';
 import { dispatchOutbox, type TaskRow, taskDto } from './workflows';
 import {
@@ -206,6 +208,18 @@ app.post('/api/v3/worlds', async (c) => {
   const body = titleSchema.parse(await c.req.json());
   return c.json(await store(c).createWorld({ name: body.name ?? body.title }), 201);
 });
+app.get('/api/v3/worlds/:id/narrative-policy', async (c) =>
+  c.json(await store(c).getWorld(c.req.param('id'))),
+);
+app.put('/api/v3/worlds/:id/narrative-policy', async (c) =>
+  c.json(
+    await setWorldPolicy(
+      store(c),
+      c.req.param('id'),
+      worldPolicyWriteSchema.parse(await c.req.json()),
+    ),
+  ),
+);
 app.post('/api/v3/stories', async (c) => {
   const body = storySchema.parse(await c.req.json());
   const s = store(c);

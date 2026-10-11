@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { playerProfileSchema } from './player';
+import { worldPolicyWriteSchema } from './world-policy';
 /** Public v3 write contracts. Identity and transactional fences remain server enforced. */
 export const storySchema = z.object({
   worldId: z.string(),
@@ -90,6 +91,7 @@ export const settingsSchema = z
 export type ModelSettings = z.infer<typeof settingsSchema>;
 
 export const apiWriteSchemas = {
+  worldPolicy: worldPolicyWriteSchema,
   story: storySchema,
   playerProfile: playerProfileWriteSchema,
   fork: forkSchema,

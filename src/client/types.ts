@@ -10,6 +10,8 @@ export interface Asset {
 export interface World {
   id: string;
   name: string;
+  narrativeMode?: 'guided' | 'freeform';
+  policyRevision?: number;
 }
 export interface Story {
   id: string;
