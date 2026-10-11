@@ -8,6 +8,7 @@ import {
 } from '../src/server/model';
 import { defaults } from '../src/server/settings';
 import type { Env } from '../src/server/env';
+import { assertNarration } from '../src/server/narration';
 afterEach(() => vi.restoreAllMocks());
 function stream(text: string, split = 3) {
   const encoded = new TextEncoder().encode(text);
@@ -22,6 +23,64 @@ function stream(text: string, split = 3) {
   );
 }
 describe('model responses and durable draft boundaries', () => {
+  it.each([
+    { message: { content: null, refusal: '服务拒绝说明' }, finish_reason: 'stop' },
+    { message: { content: '未完成片段' }, finish_reason: 'content_filter' },
+  ])(
+    'handles declared non-streaming refusals as terminal failures with visible drafts',
+    async (choice) => {
+      const onText = vi.fn();
+      await expect(
+        readCompletion(Response.json({ choices: [choice] }), { onText }),
+      ).rejects.toMatchObject({
+        status: 422,
+        code: 'MODEL_REFUSAL',
+      });
+      expect(onText).toHaveBeenCalledWith(choice.message.content ?? choice.message.refusal);
+    },
+  );
+
+  it.each([
+    'data: {"choices":[{"delta":{"refusal":"拒绝说明"}}]}\n\ndata: [DONE]\n',
+    'data: {"choices":[{"delta":{"content":"拒绝说明"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\ndata: [DONE]\n',
+  ])(
+    'stops a declared streaming refusal without accepting DONE as a successful answer',
+    async (response) => {
+      const onText = vi.fn();
+      await expect(readCompletion(stream(response), { onText })).rejects.toMatchObject({
+        code: 'MODEL_REFUSAL',
+        status: 422,
+      });
+      expect(onText).toHaveBeenCalledTimes(1);
+      expect(onText).toHaveBeenCalledWith('拒绝说明');
+    },
+  );
+
+  it('checks plain narrative refusals separately from transport and preserves character dialogue', async () => {
+    const refusal = '我不能写这段。你描述的内容是一个请求。我可以提供替代版本。';
+    expect(() => assertNarration(refusal)).toThrow('模型服务拒绝生成');
+    expect(() =>
+      assertNarration("I'm sorry, I cannot write this. Your request cannot be completed."),
+    ).toThrow();
+    for (const narrative of [
+      '「我不能写这段。」她合上了笔记本。',
+      '我不能写这段。稿纸上的墨水已经干涸。',
+      '她说：“作为AI，我不能提供这个版本。”随后关闭终端。',
+      'I cannot help you cross the river, she said.',
+      '{"quote":"我不能写这段。你描述的内容并不可靠。"}',
+    ])
+      expect(() => assertNarration(narrative)).not.toThrow();
+    // Auxiliary responses remain data; only the narration boundary applies the
+    // fallback detector, so extraction cannot mistake a quoted refusal for one.
+    expect(await readCompletion(Response.json({ response: refusal }))).toBe(refusal);
+    expect(
+      await readCompletion(
+        Response.json({
+          choices: [{ message: { content: '正文', refusal: null }, finish_reason: 'stop' }],
+        }),
+      ),
+    ).toBe('正文');
+  });
   it('normalizes actual cache tokens and keeps missing or invalid cache counts unknown', () => {
     expect(
       promptCacheUsage({

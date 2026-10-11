@@ -14,7 +14,11 @@ import type { ChatMessage } from './model';
 import { ApiError } from './errors';
 import { searchLegalVectors } from './vectors';
 import { listEntities, type StoryEntity } from './entities';
-import { renderNarrativePreamble } from '../shared/narrative-preamble';
+import {
+  FICTION_RP_PREAMBLE,
+  HERMES_RP_PREAMBLE,
+  renderNarrativePreamble,
+} from '../shared/narrative-preamble';
 import { hermesCharacterProfile } from '../shared/hermes-rp';
 import { playerAgencyRule, playerProfileSchema } from '../shared/player';
 import { FREEFORM_NARRATION } from '../shared/world-policy';
@@ -206,7 +210,11 @@ export async function buildContext(
         `角色 ${c.data.name} 局部后置补充：${render(c.data.postHistoryInstructions, c.data.name)}`,
     );
   const preamble = renderNarrativePreamble(
-    settings.narrativePreamble ?? '',
+    // Replace only the inherited default in free narration. Explicitly empty
+    // and custom templates, guided worlds and frozen task artifacts keep theirs.
+    freeform && settings.narrativePreamble === HERMES_RP_PREAMBLE
+      ? FICTION_RP_PREAMBLE
+      : (settings.narrativePreamble ?? ''),
     characters.filter((c) => viewer === 'director' || c.id === viewer).map((c) => c.data.name),
     playerName,
   );

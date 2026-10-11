@@ -34,6 +34,7 @@ vi.mock('../src/server/model', async (importOriginal) => ({
 import { syncPersonaCapabilities } from '../src/server/persona';
 import { complete } from '../src/server/model';
 import { extractionSchema } from '../src/server/extraction';
+import { modelRefusal } from '../src/server/narration';
 import { dispatchOutbox, GenerationWorkflow, MemoryWorkflow } from '../src/server/workflows';
 
 let db: ReturnType<typeof createTestD1>, store: Store, branchId: string, sessionId: string;
@@ -290,6 +291,72 @@ function setJudge(
 }
 
 describe('durable task terminal states', () => {
+  it('checks a saved narration artifact before resuming extraction', async () => {
+    const params = await generation(),
+      guarded = strictBindings();
+    const text = '我不能写这段。你描述的内容是一个请求。';
+    guarded.onStep(async (name) => {
+      if (name === 'narration')
+        guarded.objects.set(
+          `tasks/${store.ownerId}/task/1/narration.json`,
+          JSON.stringify({ text }),
+        );
+    });
+    await expect(
+      new GenerationWorkflow({} as ExecutionContext, guarded.env).run(
+        { payload: params } as never,
+        guarded.step,
+      ),
+    ).rejects.toThrow('MODEL_REFUSAL');
+    expect(complete).not.toHaveBeenCalled();
+    expect(guarded.names).not.toContain('validate narrative');
+    expect((await store.getBranch(branchId)).headSeq).toBe(1);
+  });
+  it.each(['plain', 'declared'] as const)(
+    'preserves a %s refusal draft without extracting, committing or retrying the model',
+    async (kind) => {
+      const params = await generation(),
+        guarded = strictBindings(),
+        narrative = '我不能写这段。你描述的内容属于一个请求，我可以提供替代版本。';
+      await store.run(
+        'UPDATE tasks SET config_json=? WHERE id=?',
+        JSON.stringify(defaults('gateway')),
+        params.taskId,
+      );
+      vi.mocked(complete).mockImplementationOnce(async (_env, _settings, _messages, options) => {
+        await options?.onText?.(narrative.slice(0, 7));
+        await options?.onText?.(narrative.slice(7));
+        if (kind === 'declared') throw modelRefusal();
+        return narrative;
+      });
+      const before = await store.getEvents(branchId);
+      await expect(
+        new GenerationWorkflow({} as ExecutionContext, guarded.env).run(
+          { payload: params } as never,
+          guarded.step,
+        ),
+      ).rejects.toThrow('MODEL_REFUSAL');
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(await store.getEvents(branchId)).toEqual(before);
+      expect((await store.getBranch(branchId)).headSeq).toBe(1);
+      const task = await store.one<{ status: string; draft_text: string; error_json: string }>(
+        'SELECT status,draft_text,error_json FROM tasks WHERE id=?',
+        params.taskId,
+      );
+      expect(task).toMatchObject({ status: 'failed', draft_text: narrative });
+      expect(JSON.parse(task!.error_json).code).toBe('MODEL_REFUSAL');
+      expect(
+        [...guarded.objects.keys()].some((k) => /\/(narration|extraction)\.json$/.test(k)),
+      ).toBe(false);
+      expect(guarded.names).not.toContain('validate narrative');
+      expect(
+        await store.all("SELECT id FROM outbox WHERE kind='memory' AND status!='completed'"),
+      ).toHaveLength(0);
+      expect(await store.one("SELECT status FROM outbox WHERE id='generation-job'")).toEqual({
+        status: 'failed',
+      });
+    },
+  );
   it.each([
     [0.03, 'rejected'],
     [0.6, 'uncertain'],

@@ -1,6 +1,7 @@
 import type { Env } from './env';
 import type { ModelSettings } from './settings';
 import { ApiError } from './errors';
+import { modelRefusal } from './narration';
 export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 export interface PromptCacheUsage {
   inputTokens: number | null;
@@ -146,7 +147,7 @@ export async function readCompletion(
     const obj = JSON.parse(await boundedText(response)) as {
       usage?: Record<string, unknown>;
       response?: unknown;
-      choices?: { message?: { content?: string }; finish_reason?: string }[];
+      choices?: { message?: { content?: string; refusal?: string }; finish_reason?: string }[];
     };
     if (obj.usage) options.onUsage?.(obj.usage);
     const text =
@@ -156,6 +157,15 @@ export async function readCompletion(
         : typeof obj.response === 'string'
           ? obj.response
           : undefined);
+    const refusal = obj.choices?.[0]?.message?.refusal;
+    if (
+      (typeof refusal === 'string' && refusal.trim()) ||
+      obj.choices?.[0]?.finish_reason === 'content_filter'
+    ) {
+      const visible = typeof text === 'string' && text.trim() ? text : refusal;
+      if (typeof visible === 'string' && visible) await options.onText?.(visible);
+      throw modelRefusal();
+    }
     if (obj.choices?.[0]?.finish_reason === 'length') {
       // Only the visible answer may enter explicit diagnostic callbacks. Never
       // forward reasoning_content or accept a truncated JSON object as valid.
@@ -185,7 +195,7 @@ export async function readCompletion(
     const item = JSON.parse(data) as {
       usage?: Record<string, unknown>;
       error?: { message?: string };
-      choices?: { delta?: { content?: string }; finish_reason?: string | null }[];
+      choices?: { delta?: { content?: string; refusal?: string }; finish_reason?: string | null }[];
     };
     if (item.usage) options.onUsage?.(item.usage);
     if (item.error) throw new ApiError(502, '模型流返回错误', 'MODEL_STREAM_ERROR');
@@ -195,7 +205,13 @@ export async function readCompletion(
         result += part;
         await options.onText?.(part);
       }
+      const refusal = choice.delta?.refusal;
+      if (typeof refusal === 'string' && refusal.trim()) {
+        if (refusal !== part) await options.onText?.(refusal);
+        throw modelRefusal();
+      }
       if (choice.finish_reason) {
+        if (choice.finish_reason === 'content_filter') throw modelRefusal();
         if (choice.finish_reason === 'length') {
           options.onTruncatedText?.(result.slice(0, 8192));
           throw new ApiError(422, '输出达到上限，草稿已保留，请调高输出预算', 'OUTPUT_TRUNCATED');

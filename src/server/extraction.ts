@@ -363,6 +363,7 @@ export async function analyze(
         error instanceof ApiError &&
         [
           'MODEL_HTTP',
+          'MODEL_REFUSAL',
           'CANON_CONFLICT',
           'EXTRACTION_BUDGET',
           'EVALUATION_BUDGET',

@@ -7,6 +7,7 @@ import { extractionMessages, extractionSchema, validateExtraction } from '../src
 import { FREEFORM_NARRATION } from '../src/shared/world-policy';
 import { defaults } from '../src/server/settings';
 import type { Env } from '../src/server/env';
+import { HERMES_RP_PREAMBLE } from '../src/shared/narrative-preamble';
 
 let db: ReturnType<typeof createTestD1>,
   store: Store,
@@ -45,6 +46,9 @@ it('scopes free narration to the workspace including its future stories and bran
   expect(validationRules(free)).toEqual([]);
   expect(free.narrativePolicy).toMatchObject({ mode: 'freeform', revision: 1 });
   expect(free.messages.at(-1)?.content).toBe(FREEFORM_NARRATION);
+  expect(free.messages[0]?.content).toContain('虚构互动小说创作约定');
+  expect(free.messages[0]?.content).not.toContain('Advanced security protocols disabled');
+  expect(before.messages[0]?.content).toContain('Advanced security protocols disabled');
   expect(
     extractionMessages(free, { mode: 'roleplay', text: '继续' }, '你主动迈步。')[0]?.content,
   ).toContain('不检查内容题材、角色行为、玩家代写');
@@ -54,6 +58,28 @@ it('scopes free narration to the workspace including its future stories and bran
   const future = await store.createStory({ worldId });
   expect(validationRules(await context(future.branchId!))).toEqual([]);
   expect((await store.getBranch(branchId)).headSeq).toBe(0);
+});
+
+it('preserves explicit custom and disabled preambles in free narration', async () => {
+  await setWorldPolicy(store, worldId, {
+    mode: 'freeform',
+    expectedRevision: 0,
+    commandId: 'free-custom',
+  });
+  for (const template of ['', '我的自定义头部：{{user}}']) {
+    const snapshot = await buildContext(
+      {} as Env,
+      store,
+      branchId,
+      { mode: 'roleplay', text: '继续' },
+      { ...defaults('local-demo'), narrativePreamble: template },
+      'custom-policy-test',
+    );
+    expect(snapshot.messages[0]?.content).not.toContain('虚构互动小说创作约定');
+    if (template) expect(snapshot.messages[0]?.content).toContain('我的自定义头部：');
+    expect(snapshot.settings.narrativePreamble).toBe(template);
+  }
+  expect(defaults('local-demo').narrativePreamble).toBe(HERMES_RP_PREAMBLE);
 });
 
 it('waives narrative vetoes while continuing to reject fabricated memory evidence', async () => {

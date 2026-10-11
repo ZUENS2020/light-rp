@@ -8,6 +8,7 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import { Store, StoreError, now, uuid, digest } from './store';
 import type { Env } from './env';
 import { complete } from './model';
+import { assertNarration } from './narration';
 import { buildContext, type ContextSnapshot, type TurnInput } from './context';
 import {
   analyze,
@@ -441,7 +442,10 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env, JobParams> {
         await live(s, task);
         const saved = key(s.ownerId, task.id, task.attempt, 'narration');
         const previous = await this.env.BUCKET.get(saved);
-        if (previous) return saved;
+        if (previous) {
+          assertNarration((await previous.json<{ text: string }>()).text);
+          return saved;
+        }
         await s.run(
           "UPDATE tasks SET draft_text='' WHERE id=? AND attempt=? AND status='running'",
           task.id,
@@ -511,6 +515,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env, JobParams> {
             await flush(true);
           }
           await check();
+          if (context.settings.mode !== 'local-demo') assertNarration(text);
           await put(this.env, saved, { text });
           try {
             await writeFence(s, task, context.ownerEpoch);
@@ -521,8 +526,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           return saved;
         } catch (error) {
           await flush(true).catch(() => undefined);
-          if (error instanceof ApiError && [401, 403, 422].includes(error.status))
-            throw new NonRetryableError(error.message);
+          // durable() preserves the error code and makes 4xx failures terminal.
           throw error;
         } finally {
           if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -534,6 +538,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env, JobParams> {
         const context = await artifact<ContextSnapshot>(this.env, snapshotKey),
           narration = await artifact<{ text: string }>(this.env, narrationKey),
           input = JSON.parse(task.input_json) as TurnInput;
+        if (context.settings.mode !== 'local-demo') assertNarration(narration.text);
         let decisionAudit: ExtractionDecisionAudit | undefined;
         const controller = new AbortController();
         let heartbeat: Promise<void> | undefined;
@@ -664,7 +669,9 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env, JobParams> {
           await s.run(
             "UPDATE tasks SET status='failed',error_json=?,updated_at=? WHERE id=? AND owner_id=? AND attempt=? AND cancel_epoch=? AND status NOT IN ('completed','cancelled')",
             JSON.stringify({
-              code: 'GENERATION_FAILED',
+              code: errorMessage(error).includes('[MODEL_REFUSAL]')
+                ? 'MODEL_REFUSAL'
+                : 'GENERATION_FAILED',
               message: errorMessage(error).slice(0, 1200),
             }),
             now(),

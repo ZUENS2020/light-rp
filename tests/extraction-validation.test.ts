@@ -143,6 +143,20 @@ describe('bound-rule extraction and source semantics', () => {
     ).rejects.toMatchObject({ code: 'MODEL_HTTP' });
     expect(run).toHaveBeenCalledTimes(1);
   });
+  it('does not repair a declared provider refusal into extraction evidence', async () => {
+    const run = vi.fn(async () => ({
+      choices: [{ message: { content: null, refusal: '服务拒绝说明' }, finish_reason: 'stop' }],
+    }));
+    await expect(
+      analyze(
+        { AI: { run }, AI_GATEWAY_ID: 'mock-only' } as unknown as Env,
+        context(),
+        input,
+        narration,
+      ),
+    ).rejects.toMatchObject({ code: 'MODEL_REFUSAL' });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
   it('records a synthetic visible truncation preview without retrying or returning it as extraction', async () => {
     const events: unknown[] = [],
       run = vi.fn(async () => ({
