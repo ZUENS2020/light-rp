@@ -1,0 +1,138 @@
+{
+  "date": "2026-10-08",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "provider": "commandcode",
+  "transport": "direct",
+  "privacy": "No user text, identity, owner IDs, source evidence or credentials included.",
+  "diagnosis": {
+    "failedStage": "validate narrative",
+    "completedNarrative": true,
+    "narrativeChars": 672,
+    "originalOutputLimit": 16000,
+    "originalContextWindow": 32768,
+    "factCursor": 27,
+    "branchHead": 27
+  },
+  "settings": {
+    "narrativeMaxOutput": 16000,
+    "auxiliaryMaxOutput": 32768,
+    "contextWindow": 131072,
+    "providerModelContextLength": 1000000
+  },
+  "savedDraftValidation": {
+    "date": "2026-10-08T02:40:12.332Z",
+    "phase": "saved-draft-validation",
+    "maxOutput": 32768,
+    "contextWindow": 131072,
+    "attempts": [
+      {
+        "attempt": 1,
+        "phase": "start"
+      },
+      {
+        "attempt": 1,
+        "phase": "response",
+        "visibleChars": 3930
+      },
+      {
+        "attempt": 1,
+        "phase": "invalid",
+        "errorCode": "VALIDATION"
+      },
+      {
+        "attempt": 2,
+        "phase": "start"
+      },
+      {
+        "attempt": 2,
+        "phase": "response",
+        "visibleChars": 3864
+      }
+    ],
+    "usage": [
+      {
+        "attempt": 1,
+        "inputTokens": 7805,
+        "outputTokens": 11188,
+        "reasoningTokens": 9333
+      },
+      {
+        "attempt": 2,
+        "inputTokens": 9737,
+        "outputTokens": 3903,
+        "reasoningTokens": 2079
+      }
+    ],
+    "plotWrites": 0,
+    "status": "accepted",
+    "facts": 12,
+    "elapsedMs": 62220
+  },
+  "syntheticThinkingControl": {
+    "synthetic": true,
+    "results": [
+      {
+        "extra": {},
+        "status": 200,
+        "finishReason": "length",
+        "visibleChars": 0,
+        "reasoningTokens": 2048,
+        "outputTokens": 2048,
+        "validJson": false,
+        "elapsedMs": 18610
+      },
+      {
+        "extra": {
+          "thinking": {
+            "type": "disabled"
+          }
+        },
+        "status": 200,
+        "finishReason": "length",
+        "visibleChars": 0,
+        "reasoningTokens": 2048,
+        "outputTokens": 2048,
+        "validJson": false,
+        "elapsedMs": 16461
+      },
+      {
+        "extra": {
+          "reasoning_effort": "low"
+        },
+        "status": 200,
+        "finishReason": "length",
+        "visibleChars": 0,
+        "reasoningTokens": 2048,
+        "outputTokens": 2048,
+        "validJson": false,
+        "elapsedMs": 16130
+      }
+    ]
+  },
+  "validation": {
+    "unitTests": 326,
+    "browserTests": 12,
+    "typecheck": "passed",
+    "build": "passed",
+    "deterministicQuestions": 128,
+    "deterministicPassed": 128
+  },
+  "liveRetry": {
+    "attempt": 2,
+    "status": "completed",
+    "expectedHead": 27,
+    "branchHeadAfterCommit": 29,
+    "error": null,
+    "narrativeRegenerated": true,
+    "settingsFrozen": true,
+    "memoryJobStatus": "completed",
+    "factCursorAfter": 29,
+    "memoryError": null
+  },
+  "limitations": [
+    "Synthetic thinking controls all reached 2048 reasoning tokens without visible JSON; disabling thinking was not verified effective. reasoning_effort none returned400 in the separate small connection probe.",
+    "Larger limits are maximums, not fixed token consumption; truncation and evidence/authorization/transaction checks remain enforced.",
+    "The accepted saved-draft reproduction used two model calls and unchanged narrative; the full live retry followed the existing retry contract and regenerated narration. Neither establishes general extraction precision."
+  ],
+  "deployment": "44fe361a-5998-40da-909a-8df0d1cdc734"
+}

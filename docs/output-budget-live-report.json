@@ -1,0 +1,68 @@
+{
+  "date": "2026-10-08",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "provider": "commandcode",
+  "transport": "direct",
+  "deployment": "ed5b6d86-3719-4f9f-aeb9-d002699ea67e",
+  "diagnosis": {
+    "failedStep": "validate narrative",
+    "savedMaxOutput": 16000,
+    "originalAttemptMaxOutput": 8192,
+    "hiddenJsonLimit": 8192
+  },
+  "changes": [
+    "Explicit retry freezes current saved settings for the new attempt",
+    "Narrative and JSON requests honor maxOutput",
+    "Extraction input budget reserves actual maxOutput",
+    "Semantic repair returns multiple field diagnostics without changing evidence validation",
+    "Repair response shares remaining input budget rather than a hidden 2048-token cap"
+  ],
+  "validation": {
+    "unitTests": 317,
+    "browserTests": 10,
+    "typecheck": "passed",
+    "build": "passed",
+    "deterministicRecallQuestions": 128,
+    "deterministicRecallPassed": 128
+  },
+  "liveResults": [
+    {
+      "case": "first_16000_retry",
+      "status": "failed",
+      "outputTruncated": false,
+      "failure": "EXTRACTION_INVALID: unsupported scalar fact value"
+    },
+    {
+      "case": "saved_draft_reproduction_before_prompt_updates",
+      "status": "failed",
+      "modelCalls": 3,
+      "failure": "EXTRACTION_INVALID: unsupported scalar fact value"
+    },
+    {
+      "case": "saved_draft_reproduction_with_scalar_guidance",
+      "status": "failed",
+      "modelCalls": 3,
+      "failure": "EXTRACTION_INVALID: exact quote and knowledge proof failures"
+    },
+    {
+      "case": "saved_draft_reproduction_with_complete_diagnostics",
+      "status": "accepted",
+      "modelCalls": 1,
+      "facts": 11,
+      "latencyMs": 50911
+    },
+    {
+      "case": "full_retry_after_final_deployment",
+      "status": "failed",
+      "outputTruncated": false,
+      "failure": "CANON_CONFLICT: newly invented player speech",
+      "plotCommitted": false,
+      "draftPreserved": true
+    }
+  ],
+  "limits": [
+    "One accepted extraction is not a general precision measurement",
+    "Output-budget defect is fixed; this user turn remains uncommitted because narrative agency validation rejected the new draft",
+    "Reports omit user story text, identity, owner IDs, source IDs and credentials"
+  ]
+}

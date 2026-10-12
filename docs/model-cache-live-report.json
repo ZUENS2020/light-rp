@@ -1,0 +1,86 @@
+{
+  "generatedAt": "2026-10-08T00:40:24.645Z",
+  "synthetic": true,
+  "model": "deepseek/deepseek-v4.1-flash",
+  "note": "Three sequential changing-scene requests per layout; baseline reconstructs the previous scene-first core. Synthetic long card, not a production hit-rate guarantee. Prefix persistence and routing are provider controlled.",
+  "rows": [
+    {
+      "layout": "scene-first-baseline",
+      "request": 1,
+      "elapsedMs": 13373,
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 4157,
+        "cachedTokens": 0,
+        "uncachedTokens": 4157,
+        "cacheHitRate": 0,
+        "outputTokens": 1497
+      }
+    },
+    {
+      "layout": "scene-first-baseline",
+      "request": 2,
+      "elapsedMs": 6213,
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 4179,
+        "cachedTokens": 0,
+        "uncachedTokens": 4179,
+        "cacheHitRate": 0,
+        "outputTokens": 593
+      }
+    },
+    {
+      "layout": "scene-first-baseline",
+      "request": 3,
+      "elapsedMs": 3503,
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 4201,
+        "cachedTokens": 0,
+        "uncachedTokens": 4201,
+        "cacheHitRate": 0,
+        "outputTokens": 197
+      }
+    },
+    {
+      "layout": "stable-prefix",
+      "request": 1,
+      "elapsedMs": 7808,
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 4157,
+        "cachedTokens": 0,
+        "uncachedTokens": 4157,
+        "cacheHitRate": 0,
+        "outputTokens": 922
+      }
+    },
+    {
+      "layout": "stable-prefix",
+      "request": 2,
+      "elapsedMs": 3942,
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 4179,
+        "cachedTokens": 4096,
+        "uncachedTokens": 83,
+        "cacheHitRate": 0.9801387891840153,
+        "outputTokens": 340
+      }
+    },
+    {
+      "layout": "stable-prefix",
+      "request": 3,
+      "elapsedMs": 8967,
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 4201,
+        "cachedTokens": 4096,
+        "uncachedTokens": 105,
+        "cacheHitRate": 0.9750059509640562,
+        "outputTokens": 955
+      }
+    }
+  ]
+}

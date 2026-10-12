@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-08",
+  "environment": "independent-v3-preview",
+  "deploymentVersion": "3f937b44-6a64-4cad-8b96-9fdc5ae358f2",
+  "privacy": "No story text, player profile, private evidence, owner IDs or credentials are included.",
+  "incident": {
+    "generationError": "必要记忆整理未能完成，请查看后台任务后重试",
+    "backgroundFailureCode": "ENTITY_NAME_EVIDENCE",
+    "branchHeadAtRecovery": 21,
+    "factCursorBefore": 3,
+    "failedOrdinaryMemoryJobs": 7,
+    "cause": "Unsupported entity names in otherwise committed extraction artifacts caused the whole memory job to fail. Gaps in contiguous fact coverage exceeded the 16-event raw-tail window."
+  },
+  "repair": {
+    "unsupportedEntityCandidates": "Review drafts with exact evidence; excluded from recall, observation and knowledge grants.",
+    "affectedSourceFallback": "Director-only raw episodes with canonical source evidence; no inferred world facts or character grants.",
+    "evidenceIdentity": "Shared deterministic IDs for new identical spans; existing span IDs reused.",
+    "sourceAndDeletionFences": "Retained; invalid source, deletion epoch or database failures remain terminal.",
+    "normalAndRebuildPolicy": "Same quarantine policy; factual cursor advances only after an atomic evidence-and-event-application commit."
+  },
+  "liveRecovery": {
+    "recoveredOrdinaryMemoryJobs": 7,
+    "allOrdinaryMemoryJobsCompleted": 12,
+    "factCursorAfter": 21,
+    "reviewDraftHeads": 19,
+    "rawSourceEpisodeHeads": 10,
+    "completedStages": ["facts", "experiences", "observations", "semantic-index"],
+    "method": "Sequential retries with new stable Workflow identities and unchanged source/deletion fences; existing validated extraction artifacts reused.",
+    "administrativeDispatchRetry": "One REST dispatch attempt received a string payload and stopped before any application mutation (Invalid owner). A fresh identity with an object payload completed. The OpenAPI params schema differed from runtime behavior.",
+    "unrelatedHistoricalRebuild": "An older output-truncation rebuild failure remains visible; not needed for current fact coverage and not replayed.",
+    "latestBlockedGeneration": {
+      "method": "Retried once with saved current model configuration, unchanged input and expected branch head, new attempt, and transactional guards.",
+      "attempt": 2,
+      "status": "completed",
+      "error": null,
+      "branchHeadAfterCommit": 23,
+      "newMemoryJobStatus": "completed",
+      "factCursorAfterNewTurn": 23
+    }
+  },
+  "validation": {
+    "unitTests": {"passed": 325, "failed": 0, "files": 30},
+    "browserTests": {"passed": 11, "failed": 0},
+    "typecheckAndBuild": "passed",
+    "deterministicReplay": {"questionsPassed": 128, "questions": 128, "stories": 8, "events": 957, "singleBranchTurns": 500},
+    "limitations": "Deterministic replay and this recovery do not establish model extraction precision or general long-story quality. Local browser tests emitted known workerd SSE hang warnings but all assertions passed."
+  }
+}

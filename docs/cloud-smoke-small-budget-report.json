@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-10-05T10:07:52.244Z",
+  "mode": "real-gateway",
+  "model": "@preset/dsf0731-cheap",
+  "results": [
+    {
+      "task": "2bcfa8ba-f7c4-4b44-b640-36ac1a6ff4bb",
+      "status": "failed",
+      "error": {
+        "code": "GENERATION_FAILED",
+        "message": "模型服务返回 402"
+      }
+    },
+    {
+      "branchId": "1fb938b7-6439-4caa-8e35-1da195ce9190",
+      "head": 0,
+      "events": [],
+      "memories": 0
+    },
+    {
+      "jobs": [
+        {
+          "kind": "generation",
+          "status": "failed",
+          "error": "模型服务返回 402"
+        }
+      ]
+    },
+    {
+      "facts": [],
+      "recall": 0
+    }
+  ]
+}

@@ -1,0 +1,320 @@
+{
+  "format": "lightrp-embedding-pilot-v1",
+  "measuredAt": "2026-10-08T09:12:10.069Z",
+  "corpusDocuments": 48,
+  "questions": 20,
+  "realWorkersAI": true,
+  "productionIndexChanged": false,
+  "index": "exact-cosine-in-memory",
+  "limitation": "20 fixed synthetic questions; batch timings include API overhead; no large RP benchmark or p95 measurement",
+  "results": [
+    {
+      "model": "@cf/baai/bge-m3",
+      "dimensions": 1024,
+      "documentBatchMs": 622,
+      "queryBatchMs": 386,
+      "recallAt1": 0.95,
+      "recallAt5": 1,
+      "recallAt10": 1,
+      "mrr": 0.975,
+      "questions": [
+        {
+          "id": "permit",
+          "rank": 1,
+          "top5": ["permit", "background-permit", "ship-6", "ship-1", "ship-0"]
+        },
+        {
+          "id": "lighthouse",
+          "rank": 1,
+          "top5": [
+            "lighthouse",
+            "background-lighthouse",
+            "bell",
+            "background-bell",
+            "background-rope"
+          ]
+        },
+        {
+          "id": "archive",
+          "rank": 1,
+          "top5": ["archive", "background-archive", "background-garden", "background-key", "tunnel"]
+        },
+        {
+          "id": "ferry",
+          "rank": 1,
+          "top5": ["ferry", "background-ferry", "repair", "bridge", "background-repair"]
+        },
+        {
+          "id": "medicine",
+          "rank": 1,
+          "top5": ["medicine", "background-medicine", "compass", "seal", "background-seal"]
+        },
+        {
+          "id": "gate",
+          "rank": 1,
+          "top5": ["gate", "background-gate", "archive", "background-lighthouse", "background-inn"]
+        },
+        {
+          "id": "compass",
+          "rank": 2,
+          "top5": [
+            "background-compass",
+            "compass",
+            "background-map",
+            "background-permit",
+            "background-bell"
+          ]
+        },
+        {
+          "id": "key",
+          "rank": 1,
+          "top5": ["key", "background-key", "background-gate", "tunnel", "background-garden"]
+        },
+        {
+          "id": "teacher",
+          "rank": 1,
+          "top5": [
+            "teacher",
+            "background-teacher",
+            "background-rope",
+            "background-bell",
+            "background-key"
+          ]
+        },
+        {
+          "id": "inn",
+          "rank": 1,
+          "top5": ["inn", "background-inn", "ship-0", "ship-6", "ship-7"]
+        },
+        {
+          "id": "map",
+          "rank": 1,
+          "top5": ["map", "background-map", "background-permit", "ship-6", "ship-0"]
+        },
+        {
+          "id": "rope",
+          "rank": 1,
+          "top5": ["rope", "background-rope", "bell", "background-bell", "background-medicine"]
+        },
+        {
+          "id": "garden",
+          "rank": 1,
+          "top5": ["garden", "ship-1", "ship-6", "ship-2", "ship-4"]
+        },
+        {
+          "id": "bell",
+          "rank": 1,
+          "top5": ["bell", "background-bell", "lighthouse", "background-rope", "background-key"]
+        },
+        {
+          "id": "repair",
+          "rank": 1,
+          "top5": ["repair", "background-repair", "ferry", "ship-6", "ship-2"]
+        },
+        {
+          "id": "moon",
+          "rank": 1,
+          "top5": ["moon", "background-moon", "archive", "gate", "ship-7"]
+        },
+        {
+          "id": "bridge",
+          "rank": 1,
+          "top5": ["bridge", "background-bridge", "rope", "background-rope", "ship-0"]
+        },
+        {
+          "id": "seal",
+          "rank": 1,
+          "top5": ["seal", "background-seal", "compass", "background-bird", "background-tunnel"]
+        },
+        {
+          "id": "bird",
+          "rank": 1,
+          "top5": ["bird", "background-bird", "background-seal", "compass", "seal"]
+        },
+        {
+          "id": "tunnel",
+          "rank": 1,
+          "top5": [
+            "tunnel",
+            "background-tunnel",
+            "background-gate",
+            "background-garden",
+            "background-archive"
+          ]
+        }
+      ]
+    },
+    {
+      "model": "@cf/qwen/qwen3-embedding-0.6b",
+      "dimensions": 1024,
+      "documentBatchMs": 2977,
+      "queryBatchMs": 579,
+      "recallAt1": 0.9,
+      "recallAt5": 1,
+      "recallAt10": 1,
+      "mrr": 0.95,
+      "questions": [
+        {
+          "id": "permit",
+          "rank": 1,
+          "top5": ["permit", "background-permit", "ship-0", "ship-1", "ship-3"]
+        },
+        {
+          "id": "lighthouse",
+          "rank": 1,
+          "top5": ["lighthouse", "background-lighthouse", "background-map", "ship-2", "ship-3"]
+        },
+        {
+          "id": "archive",
+          "rank": 1,
+          "top5": [
+            "archive",
+            "background-archive",
+            "background-garden",
+            "background-seal",
+            "background-tunnel"
+          ]
+        },
+        {
+          "id": "ferry",
+          "rank": 1,
+          "top5": ["ferry", "background-ferry", "repair", "background-bridge", "background-repair"]
+        },
+        {
+          "id": "medicine",
+          "rank": 1,
+          "top5": ["medicine", "background-medicine", "background-rope", "key", "background-key"]
+        },
+        {
+          "id": "gate",
+          "rank": 1,
+          "top5": ["gate", "background-gate", "archive", "bridge", "background-lighthouse"]
+        },
+        {
+          "id": "compass",
+          "rank": 1,
+          "top5": [
+            "compass",
+            "background-compass",
+            "background-map",
+            "background-rope",
+            "background-repair"
+          ]
+        },
+        {
+          "id": "key",
+          "rank": 1,
+          "top5": ["key", "background-key", "background-tunnel", "tunnel", "background-gate"]
+        },
+        {
+          "id": "teacher",
+          "rank": 1,
+          "top5": [
+            "teacher",
+            "background-teacher",
+            "background-rope",
+            "background-compass",
+            "background-repair"
+          ]
+        },
+        {
+          "id": "inn",
+          "rank": 1,
+          "top5": ["inn", "background-inn", "ship-0", "ship-7", "ship-6"]
+        },
+        {
+          "id": "map",
+          "rank": 2,
+          "top5": [
+            "background-map",
+            "map",
+            "background-permit",
+            "background-rope",
+            "background-seal"
+          ]
+        },
+        {
+          "id": "rope",
+          "rank": 1,
+          "top5": [
+            "rope",
+            "background-rope",
+            "background-teacher",
+            "background-medicine",
+            "background-repair"
+          ]
+        },
+        {
+          "id": "garden",
+          "rank": 1,
+          "top5": [
+            "garden",
+            "background-garden",
+            "background-medicine",
+            "background-moon",
+            "ship-5"
+          ]
+        },
+        {
+          "id": "bell",
+          "rank": 2,
+          "top5": ["background-bell", "bell", "background-rope", "lighthouse", "tunnel"]
+        },
+        {
+          "id": "repair",
+          "rank": 1,
+          "top5": ["repair", "background-repair", "ferry", "ship-2", "ship-3"]
+        },
+        {
+          "id": "moon",
+          "rank": 1,
+          "top5": ["moon", "background-moon", "background-permit", "background-gate", "ship-6"]
+        },
+        {
+          "id": "bridge",
+          "rank": 1,
+          "top5": [
+            "bridge",
+            "background-bridge",
+            "background-ferry",
+            "background-rope",
+            "background-lighthouse"
+          ]
+        },
+        {
+          "id": "seal",
+          "rank": 1,
+          "top5": [
+            "seal",
+            "background-seal",
+            "background-rope",
+            "background-teacher",
+            "background-archive"
+          ]
+        },
+        {
+          "id": "bird",
+          "rank": 1,
+          "top5": [
+            "bird",
+            "background-bird",
+            "background-seal",
+            "background-garden",
+            "background-medicine"
+          ]
+        },
+        {
+          "id": "tunnel",
+          "rank": 1,
+          "top5": [
+            "tunnel",
+            "background-tunnel",
+            "background-seal",
+            "background-garden",
+            "background-gate"
+          ]
+        }
+      ]
+    }
+  ]
+}

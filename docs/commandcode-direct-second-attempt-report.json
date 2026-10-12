@@ -1,0 +1,26 @@
+{
+  "startedAt": "2026-10-07T15:25:24.668Z",
+  "versionId": "227593b0-f21c-4273-89d1-0e44759bbb50",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "decisionModel": "",
+  "synthetic": true,
+  "checks": [
+    {
+      "name": "request-idempotency",
+      "passed": true
+    }
+  ],
+  "costUSD": null,
+  "branchId": "e31a2770-5448-4f69-b1f1-58ba0f5764b2",
+  "taskId": "1a919341-b722-4b62-9ca6-7142dd4c4d5e",
+  "task": {
+    "status": "failed",
+    "error": {
+      "code": "GENERATION_FAILED",
+      "message": "NonRetryableError: 输出达到上限，草稿已保留，请调高输出预算"
+    }
+  },
+  "status": "failed",
+  "error": "AssertionError [ERR_ASSERTION]: {\"code\":\"GENERATION_FAILED\",\"message\":\"NonRetryableError: 输出达到上限，草稿已保留，请调高输出预算\"}\n+ actual - expected\n\n+ 'failed'\n- 'completed'\n",
+  "finishedAt": "2026-10-07T15:26:26.687Z"
+}

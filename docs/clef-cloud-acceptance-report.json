@@ -1,0 +1,100 @@
+{
+  "startedAt": "2026-10-07T09:47:01.458Z",
+  "versionId": "cce6fae6-fff0-40b9-85e4-c714a13870e3",
+  "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+  "decisionModel": "@cf/cloudflare/clef",
+  "synthetic": true,
+  "checks": [
+    {
+      "name": "request-idempotency",
+      "passed": true
+    },
+    {
+      "name": "real-Clef-before-commit",
+      "passed": true,
+      "requestAttempts": 1
+    },
+    {
+      "name": "real-generation-atomic-commit",
+      "passed": true,
+      "headSeq": 2,
+      "eventCount": 2
+    },
+    {
+      "name": "real-extraction-observation-index",
+      "passed": true,
+      "memoryKinds": [
+        "observation",
+        "canon"
+      ]
+    },
+    {
+      "name": "memory-recall",
+      "passed": true,
+      "resultCount": 2
+    },
+    {
+      "name": "durable-cancel-no-late-commit",
+      "passed": true,
+      "taskId": "cf195a9e-06a3-4d03-9148-3e646b21af9c"
+    }
+  ],
+  "costUSD": null,
+  "migration": {
+    "name": "0004_knowledge_channels.sql",
+    "grantBefore": {
+      "rows": 2094,
+      "maxRowid": 2094,
+      "sumRowid": 2193465
+    },
+    "grantAfter": {
+      "rows": 2094,
+      "maxRowid": 2094,
+      "sumRowid": 2193465
+    }
+  },
+  "branchId": "4f291cff-457d-44a5-a0f2-2d2ad923d4fa",
+  "taskId": "1c0ecb60-48c4-4ce6-92d9-5f05e555ff16",
+  "task": {
+    "status": "completed",
+    "error": null
+  },
+  "decisionAudit": {
+    "model": "@cf/cloudflare/clef",
+    "protocol": "system-one-noul-v1",
+    "thresholdVersion": "development-0.9-0.1-v1",
+    "status": "supported",
+    "requestAttempts": 1,
+    "candidates": [
+      {
+        "path": "facts.0",
+        "answers": {
+          "supported": {
+            "probability": 0.9761,
+            "verdict": "supported"
+          }
+        },
+        "usage": {
+          "input_tokens": 731,
+          "output_tokens": 0
+        },
+        "latencyMs": 748
+      }
+    ],
+    "failedCandidates": []
+  },
+  "jobs": [
+    {
+      "kind": "memory",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "kind": "generation",
+      "status": "completed",
+      "error": null
+    }
+  ],
+  "status": "completed",
+  "finishedAt": "2026-10-07T09:48:09.668Z"
+}

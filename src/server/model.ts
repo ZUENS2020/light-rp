@@ -1,0 +1,384 @@
+import type { Env } from './env';
+import type { ModelSettings } from './settings';
+import { ApiError } from './errors';
+import { modelRefusal } from './narration';
+export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+export interface PromptCacheUsage {
+  inputTokens: number | null;
+  cachedTokens: number | null;
+  uncachedTokens: number | null;
+  cacheHitRate: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+}
+/** Provider-reported counts only. Missing cache telemetry is unknown, not zero.
+ * Never log the raw usage object: custom providers may attach arbitrary data. */
+export function promptCacheUsage(usage: Record<string, unknown>): PromptCacheUsage {
+  const count = (value: unknown) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const details = usage.prompt_tokens_details;
+  const completionDetails = usage.completion_tokens_details;
+  const cached =
+    count(usage.prompt_cache_hit_tokens) ??
+    count(details && typeof details === 'object' ? Reflect.get(details, 'cached_tokens') : null);
+  const miss = count(usage.prompt_cache_miss_tokens);
+  const input =
+    count(usage.prompt_tokens) ?? (cached !== null && miss !== null ? cached + miss : null);
+  const valid =
+    cached !== null &&
+    input !== null &&
+    Number.isSafeInteger(input) &&
+    cached <= input &&
+    (miss === null || cached + miss === input);
+  return {
+    inputTokens: input,
+    cachedTokens: valid ? cached : null,
+    uncachedTokens: valid ? input - cached : null,
+    cacheHitRate: valid && input > 0 ? cached / input : null,
+    outputTokens: count(usage.completion_tokens),
+    reasoningTokens: count(
+      completionDetails && typeof completionDetails === 'object'
+        ? Reflect.get(completionDetails, 'reasoning_tokens')
+        : null,
+    ),
+  };
+}
+export type CompletionOptions = {
+  signal?: AbortSignal;
+  onText?: (text: string) => Promise<void>;
+  json?: boolean;
+  jsonSchema?: Record<string, unknown>;
+  schemaProtocol?: 'provider' | 'prompt';
+  auxiliary?: boolean;
+  onUsage?: (usage: Record<string, unknown>) => void;
+  onTruncatedText?: (visibleText: string) => void;
+};
+const qwenWorkersModel = '@cf/qwen/qwen3-30b-a3b-fp8';
+/** Protocol selection is explicit per request. The measured complex extraction
+ * schema failed before output; simple Qwen schemas have succeeded, so the
+ * default always preserves native schema enforcement without auto fallback.
+ * https://developers.cloudflare.com/workers-ai/features/json-mode/ */
+function responseFormat(settings: ModelSettings, model: string, options: CompletionOptions) {
+  if (!options.json) return undefined;
+  if (options.schemaProtocol === 'prompt') {
+    console.info(
+      JSON.stringify({
+        event: 'model_response_format',
+        model,
+        requested: options.jsonSchema ? 'json_schema' : 'json_object',
+        effective: 'prompt_only',
+        reason:
+          model === qwenWorkersModel
+            ? 'MEASURED_EXTRACTION_FORMAT_FAILURE'
+            : 'EXPLICIT_PROMPT_SCHEMA_PROTOCOL',
+        validation: 'server_schema_required',
+      }),
+    );
+    return undefined;
+  }
+  if (!options.jsonSchema) return { type: 'json_object' };
+  return {
+    type: 'json_schema',
+    json_schema:
+      settings.mode === 'gateway' && settings.provider === 'workers-ai'
+        ? options.jsonSchema
+        : { name: 'lightrp_extraction', schema: options.jsonSchema },
+  };
+}
+/** Binding/HTTP transport rejections are not malformed model JSON and must not
+ * cause repeated calls with the same unsupported protocol or expose secrets. */
+async function transport<T>(call: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason ?? error;
+    if (error instanceof ApiError) throw error;
+    const failure =
+      error && typeof error === 'object'
+        ? (error as { status?: unknown; statusCode?: unknown })
+        : {};
+    const status = typeof failure.status === 'number' ? failure.status : failure.statusCode;
+    const http =
+      typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599
+        ? status
+        : null;
+    throw new ApiError(
+      http && http < 500 && http !== 429 ? 422 : 502,
+      `模型服务调用失败${http ? `（HTTP ${http}）` : ''}，请检查模型能力、响应格式与网关配置`,
+      'MODEL_HTTP',
+    );
+  }
+}
+export async function boundedText(response: Response, limit = 2_000_000): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '',
+    bytes = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > limit) throw new ApiError(502, '模型输出超过限制', 'MODEL_TOO_LARGE');
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+export async function readCompletion(
+  response: Response,
+  options: CompletionOptions = {},
+): Promise<string> {
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new ApiError(
+      [401, 402, 403].includes(response.status) ? 422 : 502,
+      response.status === 402
+        ? '模型服务返回 402，请检查网关余额、限额或输出预算'
+        : `模型服务返回 ${response.status}`,
+      'MODEL_HTTP',
+    );
+  }
+  if (!response.headers.get('content-type')?.includes('text/event-stream')) {
+    const obj = JSON.parse(await boundedText(response)) as {
+      usage?: Record<string, unknown>;
+      response?: unknown;
+      choices?: { message?: { content?: string; refusal?: string }; finish_reason?: string }[];
+    };
+    if (obj.usage) options.onUsage?.(obj.usage);
+    const text =
+      obj.choices?.[0]?.message?.content ??
+      (options.jsonSchema && obj.response && typeof obj.response === 'object'
+        ? JSON.stringify(obj.response)
+        : typeof obj.response === 'string'
+          ? obj.response
+          : undefined);
+    const refusal = obj.choices?.[0]?.message?.refusal;
+    if (
+      (typeof refusal === 'string' && refusal.trim()) ||
+      obj.choices?.[0]?.finish_reason === 'content_filter'
+    ) {
+      const visible = typeof text === 'string' && text.trim() ? text : refusal;
+      if (typeof visible === 'string' && visible) await options.onText?.(visible);
+      throw modelRefusal();
+    }
+    if (obj.choices?.[0]?.finish_reason === 'length') {
+      // Only the visible answer may enter explicit diagnostic callbacks. Never
+      // forward reasoning_content or accept a truncated JSON object as valid.
+      options.onTruncatedText?.(typeof text === 'string' ? text.slice(0, 8192) : '');
+      throw new ApiError(422, '输出达到上限，草稿已保留，请调高输出预算', 'OUTPUT_TRUNCATED');
+    }
+    if (typeof text !== 'string' || !text.trim())
+      throw new ApiError(502, '模型没有返回正文', 'MODEL_EMPTY');
+    await options.onText?.(text);
+    return text;
+  }
+  if (!response.body) throw new ApiError(502, '模型没有返回流', 'MODEL_EMPTY');
+  const reader = response.body.getReader(),
+    decoder = new TextDecoder();
+  let buffer = '',
+    result = '',
+    received = 0,
+    finished = false;
+  const consume = async (line: string) => {
+    if (!line.startsWith('data:')) return;
+    const data = line.slice(5).trim();
+    if (data === '[DONE]') {
+      finished = true;
+      return;
+    }
+    if (!data) return;
+    const item = JSON.parse(data) as {
+      usage?: Record<string, unknown>;
+      error?: { message?: string };
+      choices?: { delta?: { content?: string; refusal?: string }; finish_reason?: string | null }[];
+    };
+    if (item.usage) options.onUsage?.(item.usage);
+    if (item.error) throw new ApiError(502, '模型流返回错误', 'MODEL_STREAM_ERROR');
+    for (const choice of item.choices ?? []) {
+      const part = choice.delta?.content;
+      if (typeof part === 'string') {
+        result += part;
+        await options.onText?.(part);
+      }
+      const refusal = choice.delta?.refusal;
+      if (typeof refusal === 'string' && refusal.trim()) {
+        if (refusal !== part) await options.onText?.(refusal);
+        throw modelRefusal();
+      }
+      if (choice.finish_reason) {
+        if (choice.finish_reason === 'content_filter') throw modelRefusal();
+        if (choice.finish_reason === 'length') {
+          options.onTruncatedText?.(result.slice(0, 8192));
+          throw new ApiError(422, '输出达到上限，草稿已保留，请调高输出预算', 'OUTPUT_TRUNCATED');
+        }
+        finished = true;
+      }
+    }
+  };
+  try {
+    while (true) {
+      if (options.signal?.aborted) throw options.signal.reason;
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      received += chunk.value.byteLength;
+      if (received > 2_000_000) throw new ApiError(502, '模型流超过限制', 'MODEL_TOO_LARGE');
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).replace(/\r$/, '');
+        buffer = buffer.slice(nl + 1);
+        await consume(line);
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) await consume(buffer.trim());
+    if (!finished || !result.trim())
+      throw new ApiError(502, '模型流中断，草稿尚未提交', 'MODEL_STREAM_INCOMPLETE');
+    return result;
+  } finally {
+    if (!finished) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+export async function complete(
+  env: Env,
+  settings: ModelSettings,
+  messages: ChatMessage[],
+  options: CompletionOptions = {},
+): Promise<string> {
+  if (settings.mode === 'local-demo')
+    throw new ApiError(422, '演示模式不调用远程模型', 'DEMO_MODE');
+  const model =
+    options.auxiliary && settings.auxiliaryModel ? settings.auxiliaryModel : settings.model;
+  // Workers AI's public Qwen schema does not expose a chat-template thinking
+  // toggle. Qwen's documented soft switch avoids spending the output budget on
+  // a reasoning channel that cannot become narrative or structured evidence.
+  const effectiveMessages =
+    settings.mode === 'gateway' && settings.provider === 'workers-ai' && model === qwenWorkersModel
+      ? [...messages, { role: 'system' as const, content: '/no_think' }]
+      : messages;
+  const format = responseFormat(settings, model, options);
+  const payload = {
+    model,
+    messages: effectiveMessages,
+    max_tokens:
+      options.auxiliary || options.json
+        ? settings.auxiliaryMaxOutput || settings.maxOutput
+        : settings.maxOutput,
+    stream: !!options.onText,
+    // Command Code's direct endpoint implements Chat Completions. Request the
+    // final usage chunk; keep unsupported Workers AI binding payloads unchanged.
+    ...(options.onText && settings.mode === 'openai' && settings.provider === 'commandcode'
+      ? { stream_options: { include_usage: true } }
+      : {}),
+    ...(format ? { response_format: format } : {}),
+  };
+  let response: Response;
+  if (settings.mode === 'gateway' && settings.provider === 'workers-ai') {
+    const result = await transport(
+      () =>
+        env.AI.run(
+          payload.model as keyof AiModels,
+          { ...payload, enable_thinking: false } as never,
+          {
+            signal: options.signal,
+            gateway: { id: env.AI_GATEWAY_ID, skipCache: true, collectLog: false },
+          },
+        ),
+      options.signal,
+    );
+    response =
+      result instanceof Response
+        ? result
+        : result instanceof ReadableStream
+          ? new Response(result, { headers: { 'Content-Type': 'text/event-stream' } })
+          : Response.json(result);
+  } else if (settings.mode === 'gateway')
+    response = await transport(
+      () =>
+        env.AI.gateway(env.AI_GATEWAY_ID).run(
+          {
+            provider: settings.provider,
+            endpoint: 'chat/completions',
+            headers: { 'Content-Type': 'application/json' },
+            query: payload,
+          },
+          {
+            signal: options.signal,
+            gateway: {
+              id: env.AI_GATEWAY_ID,
+              skipCache: true,
+              collectLog: false,
+              retries: { maxAttempts: 1 },
+            },
+          },
+        ),
+      options.signal,
+    );
+  else {
+    const url = new URL(settings.baseUrl);
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      /^(localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|0\.|\[)|\.local$/i.test(
+        url.hostname,
+      )
+    )
+      throw new ApiError(422, '模型地址必须是公开 HTTPS 地址', 'MODEL_URL');
+    if (!env.MODEL_API_KEY)
+      throw new ApiError(422, '请配置服务端 MODEL_API_KEY secret', 'MODEL_KEY_MISSING');
+    response = await transport(
+      () =>
+        fetch(`${url.toString().replace(/\/$/, '')}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${env.MODEL_API_KEY}`,
+          },
+          body: JSON.stringify(payload),
+          signal: options.signal,
+          // workerd supports follow/manual only. Never forward the credential
+          // to a redirect destination; readCompletion rejects non-2xx responses.
+          redirect: 'manual',
+        }),
+      options.signal,
+    );
+  }
+  const started = Date.now();
+  let usage: PromptCacheUsage | undefined;
+  try {
+    return await readCompletion(response, {
+      ...options,
+      onUsage: (raw) => {
+        usage = promptCacheUsage(raw);
+        options.onUsage?.(raw);
+      },
+    });
+  } finally {
+    console.info(
+      JSON.stringify({
+        event: 'model_prompt_cache',
+        model,
+        phase: options.json ? 'structured' : options.auxiliary ? 'auxiliary' : 'narrative',
+        outputLimit: payload.max_tokens,
+        ...promptCacheUsage({}),
+        ...usage,
+        responseReadMs: Date.now() - started,
+      }),
+    );
+  }
+}
+export function parseJson(text: string): unknown {
+  return JSON.parse(
+    text
+      .trim()
+      .replace(/^```(?:json)?\s*/, '')
+      .replace(/\s*```$/, ''),
+  );
+}

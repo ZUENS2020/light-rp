@@ -1,0 +1,26 @@
+{
+  "startedAt": "2026-10-07T15:22:36.881Z",
+  "versionId": "227593b0-f21c-4273-89d1-0e44759bbb50",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "decisionModel": "",
+  "synthetic": true,
+  "checks": [
+    {
+      "name": "request-idempotency",
+      "passed": true
+    }
+  ],
+  "costUSD": null,
+  "branchId": "cbb516e8-c2fb-4045-baca-f9af0f776915",
+  "taskId": "94fbc345-b09c-4090-86ce-16a5bc3aac58",
+  "task": {
+    "status": "failed",
+    "error": {
+      "code": "GENERATION_FAILED",
+      "message": "NonRetryableError: 剧情校验失败，草稿已保留：知情证据无效：缺少角色实际获取信息的明确原句"
+    }
+  },
+  "status": "failed",
+  "error": "AssertionError [ERR_ASSERTION]: {\"code\":\"GENERATION_FAILED\",\"message\":\"NonRetryableError: 剧情校验失败，草稿已保留：知情证据无效：缺少角色实际获取信息的明确原句\"}\n+ actual - expected\n\n+ 'failed'\n- 'completed'\n",
+  "finishedAt": "2026-10-07T15:23:22.806Z"
+}

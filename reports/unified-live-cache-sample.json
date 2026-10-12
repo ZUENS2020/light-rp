@@ -1,0 +1,141 @@
+{
+  "format": "lightrp-unified-live-cache-sample",
+  "capturedAt": "2026-10-08T11:05:51.932Z",
+  "sample": 14,
+  "weightedInputCacheHitRate": 0.6100449311480182,
+  "inputTokens": 109946,
+  "cachedTokens": 67072,
+  "limitations": [
+    "Limited telemetry sample including failed repairs and an explicitly stopped backfill execution; not a successful-turn cache benchmark.",
+    "Workflow logs can appear after invocation completion; ongoing calls are not assumed missing or zero.",
+    "Does not measure provider total response latency, narrative quality, or model extraction precision."
+  ],
+  "events": [
+    {
+      "timestamp": 1791457046280,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 13206,
+      "cachedTokens": 9088,
+      "outputTokens": 7780,
+      "reasoningTokens": 3987,
+      "version": "5d890b27-2f93-4e6e-85d8-55cc61324c9c"
+    },
+    {
+      "timestamp": 1791457000938,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 14114,
+      "cachedTokens": 9088,
+      "outputTokens": 13636,
+      "reasoningTokens": 9766,
+      "version": "5d890b27-2f93-4e6e-85d8-55cc61324c9c"
+    },
+    {
+      "timestamp": 1791456905156,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 9124,
+      "cachedTokens": 0,
+      "outputTokens": 16579,
+      "reasoningTokens": 12639,
+      "version": "5d890b27-2f93-4e6e-85d8-55cc61324c9c"
+    },
+    {
+      "timestamp": 1791456750678,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 8823,
+      "cachedTokens": 6784,
+      "outputTokens": 2764,
+      "reasoningTokens": 898,
+      "version": "5d890b27-2f93-4e6e-85d8-55cc61324c9c"
+    },
+    {
+      "timestamp": 1791456733452,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 6788,
+      "cachedTokens": 6784,
+      "outputTokens": 6810,
+      "reasoningTokens": 4958,
+      "version": "5d890b27-2f93-4e6e-85d8-55cc61324c9c"
+    },
+    {
+      "timestamp": 1791453358331,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 9032,
+      "cachedTokens": 6784,
+      "outputTokens": 8748,
+      "reasoningTokens": 6477,
+      "version": "73e8320f-8017-4386-913a-c61262e2c40d"
+    },
+    {
+      "timestamp": 1791453292846,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 9105,
+      "cachedTokens": 6784,
+      "outputTokens": 4593,
+      "reasoningTokens": 2369,
+      "version": "73e8320f-8017-4386-913a-c61262e2c40d"
+    },
+    {
+      "timestamp": 1791453260380,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 6788,
+      "cachedTokens": 0,
+      "outputTokens": 13897,
+      "reasoningTokens": 11597,
+      "version": "73e8320f-8017-4386-913a-c61262e2c40d"
+    },
+    {
+      "timestamp": 1791452790798,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 5565,
+      "cachedTokens": 5504,
+      "outputTokens": 10575,
+      "reasoningTokens": 7183,
+      "version": "ec78d2ea-6fa4-49e3-bc9a-04a4da3f1dd3"
+    },
+    {
+      "timestamp": 1791452716876,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 5575,
+      "cachedTokens": 5504,
+      "outputTokens": 6851,
+      "reasoningTokens": 4738,
+      "version": "ec78d2ea-6fa4-49e3-bc9a-04a4da3f1dd3"
+    },
+    {
+      "timestamp": 1791452665996,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 5540,
+      "cachedTokens": 0,
+      "outputTokens": 11140,
+      "reasoningTokens": 8429,
+      "version": "ec78d2ea-6fa4-49e3-bc9a-04a4da3f1dd3"
+    },
+    {
+      "timestamp": 1791452373303,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 5450,
+      "cachedTokens": 5376,
+      "outputTokens": 7338,
+      "reasoningTokens": 4984,
+      "version": "82cf2575-57d5-404b-a2a1-309ad6d73f29"
+    },
+    {
+      "timestamp": 1791452318327,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 5421,
+      "cachedTokens": 5376,
+      "outputTokens": 9325,
+      "reasoningTokens": 6514,
+      "version": "82cf2575-57d5-404b-a2a1-309ad6d73f29"
+    },
+    {
+      "timestamp": 1791452247251,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputTokens": 5415,
+      "cachedTokens": 0,
+      "outputTokens": 10768,
+      "reasoningTokens": 8500,
+      "version": "82cf2575-57d5-404b-a2a1-309ad6d73f29"
+    }
+  ]
+}

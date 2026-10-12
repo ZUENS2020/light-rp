@@ -1,0 +1,1540 @@
+{
+  "formatVersion": 1,
+  "generatedAt": "2026-10-07T08:45:17.862Z",
+  "source": "Actual Cloudflare Workers AI REST API; one independent Chinese scenario per request, one noul question; fixed gold omitted from payload.",
+  "thresholds": {
+    "classification": 0.5,
+    "supported": 0.9,
+    "rejected": 0.1,
+    "calibrated": false
+  },
+  "models": {
+    "clef": {
+      "attempted": 20,
+      "classifiedCorrect": 20,
+      "classificationAccuracy": 1,
+      "decisive": 20,
+      "uncertain": 0,
+      "falseAccepts": 0,
+      "falseRejects": 0,
+      "inputTokens": 4165,
+      "outputTokens": 0,
+      "requestLatencyMs": {
+        "p50": 508,
+        "p95": 1098
+      },
+      "results": [
+        {
+          "id": "truth",
+          "expected": true,
+          "probability": 0.9575,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 635,
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "lie",
+          "expected": false,
+          "probability": 0.0156,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 399,
+          "usage": {
+            "input_tokens": 202,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "belief",
+          "expected": true,
+          "probability": 0.9887,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 480,
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "not-heard",
+          "expected": false,
+          "probability": 0.0117,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 710,
+          "usage": {
+            "input_tokens": 213,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "told",
+          "expected": true,
+          "probability": 0.9867,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 288,
+          "usage": {
+            "input_tokens": 210,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "inner",
+          "expected": false,
+          "probability": 0.0076,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 451,
+          "usage": {
+            "input_tokens": 212,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "planned",
+          "expected": false,
+          "probability": 0.0071,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 379,
+          "usage": {
+            "input_tokens": 198,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "boasted",
+          "expected": false,
+          "probability": 0.0096,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 895,
+          "usage": {
+            "input_tokens": 203,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "success",
+          "expected": true,
+          "probability": 0.9888,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 283,
+          "usage": {
+            "input_tokens": 206,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "learned",
+          "expected": true,
+          "probability": 0.9896,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 508,
+          "usage": {
+            "input_tokens": 207,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "read-only",
+          "expected": false,
+          "probability": 0.0066,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 484,
+          "usage": {
+            "input_tokens": 200,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "precondition",
+          "expected": false,
+          "probability": 0.0093,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 949,
+          "usage": {
+            "input_tokens": 211,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "stochastic",
+          "expected": false,
+          "probability": 0.0129,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 1018,
+          "usage": {
+            "input_tokens": 215,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "correction",
+          "expected": false,
+          "probability": 0.0086,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 1050,
+          "usage": {
+            "input_tokens": 204,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "time",
+          "expected": true,
+          "probability": 0.9907,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 325,
+          "usage": {
+            "input_tokens": 209,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "homonyms",
+          "expected": false,
+          "probability": 0.0074,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 351,
+          "usage": {
+            "input_tokens": 218,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "same-attempt",
+          "expected": false,
+          "probability": 0.0106,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 1098,
+          "usage": {
+            "input_tokens": 210,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "two-independent",
+          "expected": true,
+          "probability": 0.9356,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 982,
+          "usage": {
+            "input_tokens": 230,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "quoted-instruction",
+          "expected": false,
+          "probability": 0.0083,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 1123,
+          "usage": {
+            "input_tokens": 214,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "unsupported-preference",
+          "expected": false,
+          "probability": 0.008,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 603,
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        }
+      ]
+    },
+    "clef-flash": {
+      "attempted": 20,
+      "classifiedCorrect": 20,
+      "classificationAccuracy": 1,
+      "decisive": 19,
+      "uncertain": 1,
+      "falseAccepts": 0,
+      "falseRejects": 0,
+      "inputTokens": 4165,
+      "outputTokens": 0,
+      "requestLatencyMs": {
+        "p50": 267,
+        "p95": 969
+      },
+      "results": [
+        {
+          "id": "lie",
+          "expected": false,
+          "probability": 0.0266,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 229,
+          "usage": {
+            "input_tokens": 202,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "truth",
+          "expected": true,
+          "probability": 0.9598,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 1095,
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "belief",
+          "expected": true,
+          "probability": 0.9515,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 429,
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "not-heard",
+          "expected": false,
+          "probability": 0.0202,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 969,
+          "usage": {
+            "input_tokens": 213,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "told",
+          "expected": true,
+          "probability": 0.9549,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 267,
+          "usage": {
+            "input_tokens": 210,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "inner",
+          "expected": false,
+          "probability": 0.0178,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 534,
+          "usage": {
+            "input_tokens": 212,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "planned",
+          "expected": false,
+          "probability": 0.0217,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 255,
+          "usage": {
+            "input_tokens": 198,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "boasted",
+          "expected": false,
+          "probability": 0.0318,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 206,
+          "usage": {
+            "input_tokens": 203,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "success",
+          "expected": true,
+          "probability": 0.9539,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 288,
+          "usage": {
+            "input_tokens": 206,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "learned",
+          "expected": true,
+          "probability": 0.952,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 404,
+          "usage": {
+            "input_tokens": 207,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "read-only",
+          "expected": false,
+          "probability": 0.014,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 236,
+          "usage": {
+            "input_tokens": 200,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "precondition",
+          "expected": false,
+          "probability": 0.0364,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 195,
+          "usage": {
+            "input_tokens": 211,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "stochastic",
+          "expected": false,
+          "probability": 0.2199,
+          "correct": true,
+          "verdict": "uncertain",
+          "requestLatencyMs": 287,
+          "usage": {
+            "input_tokens": 215,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "correction",
+          "expected": false,
+          "probability": 0.0201,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 243,
+          "usage": {
+            "input_tokens": 204,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "time",
+          "expected": true,
+          "probability": 0.9574,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 297,
+          "usage": {
+            "input_tokens": 209,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "homonyms",
+          "expected": false,
+          "probability": 0.0231,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 516,
+          "usage": {
+            "input_tokens": 218,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "same-attempt",
+          "expected": false,
+          "probability": 0.0256,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 457,
+          "usage": {
+            "input_tokens": 210,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "two-independent",
+          "expected": true,
+          "probability": 0.9592,
+          "correct": true,
+          "verdict": "supported",
+          "requestLatencyMs": 216,
+          "usage": {
+            "input_tokens": 230,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "quoted-instruction",
+          "expected": false,
+          "probability": 0.0303,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 223,
+          "usage": {
+            "input_tokens": 214,
+            "output_tokens": 0
+          }
+        },
+        {
+          "id": "unsupported-preference",
+          "expected": false,
+          "probability": 0.0377,
+          "correct": true,
+          "verdict": "rejected",
+          "requestLatencyMs": 232,
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        }
+      ]
+    }
+  },
+  "rawResults": [
+    {
+      "id": "lie",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0266
+            }
+          },
+          "usage": {
+            "input_tokens": 202,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 229
+    },
+    {
+      "id": "truth",
+      "model": "clef-flash",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9598
+            }
+          },
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 1095
+    },
+    {
+      "id": "truth",
+      "model": "clef",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9575
+            }
+          },
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 635
+    },
+    {
+      "id": "lie",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0156
+            }
+          },
+          "usage": {
+            "input_tokens": 202,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 399
+    },
+    {
+      "id": "belief",
+      "model": "clef",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9887
+            }
+          },
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 480
+    },
+    {
+      "id": "belief",
+      "model": "clef-flash",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9515
+            }
+          },
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 429
+    },
+    {
+      "id": "not-heard",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0117
+            }
+          },
+          "usage": {
+            "input_tokens": 213,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 710
+    },
+    {
+      "id": "not-heard",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0202
+            }
+          },
+          "usage": {
+            "input_tokens": 213,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 969
+    },
+    {
+      "id": "told",
+      "model": "clef",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9867
+            }
+          },
+          "usage": {
+            "input_tokens": 210,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 288
+    },
+    {
+      "id": "told",
+      "model": "clef-flash",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9549
+            }
+          },
+          "usage": {
+            "input_tokens": 210,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 267
+    },
+    {
+      "id": "inner",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0076
+            }
+          },
+          "usage": {
+            "input_tokens": 212,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 451
+    },
+    {
+      "id": "inner",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0178
+            }
+          },
+          "usage": {
+            "input_tokens": 212,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 534
+    },
+    {
+      "id": "planned",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0071
+            }
+          },
+          "usage": {
+            "input_tokens": 198,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 379
+    },
+    {
+      "id": "planned",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0217
+            }
+          },
+          "usage": {
+            "input_tokens": 198,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 255
+    },
+    {
+      "id": "boasted",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0096
+            }
+          },
+          "usage": {
+            "input_tokens": 203,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 895
+    },
+    {
+      "id": "boasted",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0318
+            }
+          },
+          "usage": {
+            "input_tokens": 203,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 206
+    },
+    {
+      "id": "success",
+      "model": "clef",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9888
+            }
+          },
+          "usage": {
+            "input_tokens": 206,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 283
+    },
+    {
+      "id": "success",
+      "model": "clef-flash",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9539
+            }
+          },
+          "usage": {
+            "input_tokens": 206,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 288
+    },
+    {
+      "id": "learned",
+      "model": "clef",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9896
+            }
+          },
+          "usage": {
+            "input_tokens": 207,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 508
+    },
+    {
+      "id": "learned",
+      "model": "clef-flash",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.952
+            }
+          },
+          "usage": {
+            "input_tokens": 207,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 404
+    },
+    {
+      "id": "read-only",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0066
+            }
+          },
+          "usage": {
+            "input_tokens": 200,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 484
+    },
+    {
+      "id": "read-only",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.014
+            }
+          },
+          "usage": {
+            "input_tokens": 200,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 236
+    },
+    {
+      "id": "precondition",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0093
+            }
+          },
+          "usage": {
+            "input_tokens": 211,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 949
+    },
+    {
+      "id": "precondition",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0364
+            }
+          },
+          "usage": {
+            "input_tokens": 211,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 195
+    },
+    {
+      "id": "stochastic",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0129
+            }
+          },
+          "usage": {
+            "input_tokens": 215,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 1018
+    },
+    {
+      "id": "stochastic",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.2199
+            }
+          },
+          "usage": {
+            "input_tokens": 215,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 287
+    },
+    {
+      "id": "correction",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0086
+            }
+          },
+          "usage": {
+            "input_tokens": 204,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 1050
+    },
+    {
+      "id": "correction",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0201
+            }
+          },
+          "usage": {
+            "input_tokens": 204,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 243
+    },
+    {
+      "id": "time",
+      "model": "clef",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9907
+            }
+          },
+          "usage": {
+            "input_tokens": 209,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 325
+    },
+    {
+      "id": "time",
+      "model": "clef-flash",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9574
+            }
+          },
+          "usage": {
+            "input_tokens": 209,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 297
+    },
+    {
+      "id": "homonyms",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0074
+            }
+          },
+          "usage": {
+            "input_tokens": 218,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 351
+    },
+    {
+      "id": "homonyms",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0231
+            }
+          },
+          "usage": {
+            "input_tokens": 218,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 516
+    },
+    {
+      "id": "same-attempt",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0106
+            }
+          },
+          "usage": {
+            "input_tokens": 210,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 1098
+    },
+    {
+      "id": "same-attempt",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0256
+            }
+          },
+          "usage": {
+            "input_tokens": 210,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 457
+    },
+    {
+      "id": "two-independent",
+      "model": "clef",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9356
+            }
+          },
+          "usage": {
+            "input_tokens": 230,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 982
+    },
+    {
+      "id": "quoted-instruction",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0083
+            }
+          },
+          "usage": {
+            "input_tokens": 214,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 1123
+    },
+    {
+      "id": "two-independent",
+      "model": "clef-flash",
+      "expected": true,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.9592
+            }
+          },
+          "usage": {
+            "input_tokens": 230,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 216
+    },
+    {
+      "id": "quoted-instruction",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0303
+            }
+          },
+          "usage": {
+            "input_tokens": 214,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 223
+    },
+    {
+      "id": "unsupported-preference",
+      "model": "clef",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.008
+            }
+          },
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 603
+    },
+    {
+      "id": "unsupported-preference",
+      "model": "clef-flash",
+      "expected": false,
+      "response": {
+        "result": {
+          "model": "clef-flash",
+          "answers": {
+            "supported": {
+              "type": "noul",
+              "noul": 0.0377
+            }
+          },
+          "usage": {
+            "input_tokens": 201,
+            "output_tokens": 0
+          }
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "requestLatencyMs": 232
+    }
+  ],
+  "limitations": [
+    "20 hand-authored cases are a small regression set, not a general accuracy or probability-calibration benchmark.",
+    "Request latency includes API mediation and network, not model kernel latency.",
+    "The model is a supplementary semantic validator, never a source of identity, knowledge permissions, evidence counts, or database commit authority."
+  ],
+  "actualBillUsd": null,
+  "sources": [
+    "https://blog.cloudflare.com/clef-decision-models/",
+    "https://developers.cloudflare.com/workers-ai/models/clef/",
+    "https://developers.cloudflare.com/workers-ai/models/clef-flash/"
+  ]
+}

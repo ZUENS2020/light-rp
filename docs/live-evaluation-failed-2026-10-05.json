@@ -1,0 +1,339 @@
+{
+  "format": "lightrp-live-memory-evaluation",
+  "version": 1,
+  "timestamp": "2026-10-05T10:23:50.705Z",
+  "runId": "5037ed52-75de-49b9-8eff-91c49ca15016",
+  "status": "failed",
+  "plan": {
+    "stories": 8,
+    "authoredGoldQuestions": 128,
+    "selectedQuestions": 128,
+    "replayTurns": 520,
+    "strategies": ["recent", "summary", "hybrid"],
+    "concurrency": 2,
+    "expectedModelCallsWithSummaryReuse": 433,
+    "worstModelCallsWithoutReuse": 513,
+    "maxModelCalls": 513,
+    "costUSD": null,
+    "realModelRun": true,
+    "note": "默认只显示计划。--run才调用真实模型；--full --max-model-calls=513覆盖128×3。人工gold只测召回与回答，抽取质量/真实Vectorize/语义判分不测。"
+  },
+  "baseUrl": "https://lightrp-preview.zuens2020.work/api/v3",
+  "model": {
+    "mode": "gateway",
+    "provider": "workers-ai",
+    "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+    "auxiliaryModel": null
+  },
+  "dataset": {
+    "stories": 8,
+    "authoredGoldQuestions": 128,
+    "replayedTurns": 520,
+    "events": 520,
+    "memoryVersions": 184,
+    "synthetic": true,
+    "extraction": "authored-gold"
+  },
+  "probe": {
+    "ok": true,
+    "mode": "gateway",
+    "rawAnswer": "\n\n连接成功。",
+    "elapsedMs": 2955.447708,
+    "modelCalls": 1,
+    "usage": null,
+    "costUSD": null
+  },
+  "summaries": [],
+  "results": [
+    {
+      "id": "harbor/early-fact",
+      "question": "经历长会话后，银月罗盘的正确标识是什么？",
+      "category": "long-context",
+      "strategy": "recent",
+      "answer": {
+        "answer": "未知，当前资料中未提及银月罗盘的相关信息",
+        "facts": [],
+        "unknown": true,
+        "citations": []
+      },
+      "rawAnswer": "{\"answer\":\"未知，当前资料中未提及银月罗盘的相关信息\",\"facts\":[],\"unknown\":true,\"citations\":[]}",
+      "schemaValid": true,
+      "metrics": {
+        "strictClaimPass": false,
+        "matchedClaims": [],
+        "missingClaims": ["背面实际刻着四道波纹"],
+        "leakedClaims": [],
+        "unknownPass": null,
+        "evaluated": true,
+        "citationViolations": [],
+        "correctionPass": false,
+        "leakage": false
+      },
+      "retrieval": {
+        "returned": [],
+        "expected": ["951ffb38-ae50-4d7a-8362-cc8bac6297aa"],
+        "forbidden": ["5037ed52-75de-49b9-8eff-91c49ca15016:harbor:anchor"],
+        "forbiddenResults": [],
+        "rank": null,
+        "tokens": null,
+        "degraded": [],
+        "sourceIds": [
+          "d5145d8c-dfe6-4177-82d6-da1c6bf5468d",
+          "d0adaa67-f56b-4ce6-9c32-3651d5c7e76c",
+          "e505a53a-789b-44e7-900c-bab8a29b258d",
+          "640812c2-1334-4771-a76c-8833a35cf11f",
+          "6404f516-1b51-469d-984b-4f26f888caa9",
+          "c9051027-7e0a-4cc2-9bad-b9fdde84e496",
+          "9c3809a7-c01a-43dd-9735-806201cfe213",
+          "a8d1edb2-2be1-4c25-9844-0d0129e4e571",
+          "7a85cfe1-a4b5-4eb1-a7a4-180d224882c8",
+          "6c21f53f-e065-4775-ae74-80b2d3c9ebd4",
+          "57347cd2-e57c-4927-be8f-1375dfbe5434",
+          "4490f634-7202-45d6-92b7-6fb17c66ada1",
+          "0d713216-75af-4029-9d97-16d2ffa6ca20",
+          "bd2aff56-1ee7-4ee7-a7c6-040fe8f3ebdb",
+          "380ac87f-df10-440b-8ed5-80c43a699f5f",
+          "be5338a9-9236-4bfe-82ef-bba078cafb01"
+        ],
+        "actualVectorize": null,
+        "staleVectorIds": []
+      },
+      "contextTokensEstimate": 1461,
+      "latencyMs": {
+        "retrievalAndAssembly": 6537,
+        "model": 3471,
+        "total": 10008
+      },
+      "modelCalls": 1,
+      "usage": {
+        "prompt_tokens": 1632,
+        "completion_tokens": 294,
+        "total_tokens": 1926,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "neurons": 16.506898880004883
+      },
+      "costUSD": null,
+      "model": {
+        "mode": "gateway",
+        "provider": "workers-ai",
+        "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+        "auxiliaryModel": null
+      },
+      "scope": "0fd815948a795851db51e86d8f1f416551283f06922fa811dc36d4b55af8cb0d",
+      "requestElapsedMs": 10662.43079100002
+    },
+    {
+      "id": "harbor/relationship",
+      "question": "晴岚与阿澈有什么约定？",
+      "category": "relationship",
+      "strategy": "recent",
+      "answer": {
+        "answer": "资料中未提及晴岚与阿澈有任何约定，仅提到他们共同核对航行记录。",
+        "facts": ["第49至64回合多次提到晴岚与阿澈核对天气、灯光与行程记录"],
+        "unknown": false,
+        "citations": [
+          "d5145d8c-dfe6-4177-82d6-da1c6bf5468d",
+          "e505a53a-789b-44e7-900c-bab8a29b258d",
+          "640812c2-1334-4771-a76c-8833a35cf11f",
+          "6404f516-1b51-469d-984b-4f26f888caa9",
+          "c9051027-7e0a-4cc2-9bad-b9fdde84e496",
+          "9c3809a7-c01a-43dd-9735-806201cfe213",
+          "a8d1edb2-2be1-4c25-9844-0d0129e4e571",
+          "7a85cfe1-a4b5-4eb1-a7a4-180d224882c8",
+          "6c21f53f-e065-4775-ae74-80b2d3c9ebd4",
+          "57347cd2-e57c-4927-be8f-1375dfbe5434",
+          "4490f634-7202-45d6-92b7-6fb17c66ada1",
+          "0d713216-75af-4029-9d97-16d2ffa6ca20",
+          "bd2aff56-1ee7-4ee7-a7c6-040fe8f3ebdb",
+          "380ac87f-df10-440b-8ed5-80c43a699f5f",
+          "be5338a9-9236-4bfe-82ef-bba078cafb01"
+        ]
+      },
+      "rawAnswer": "{\"answer\":\"资料中未提及晴岚与阿澈有任何约定，仅提到他们共同核对航行记录。\",\"facts\":[\"第49至64回合多次提到晴岚与阿澈核对天气、灯光与行程记录\"],\"unknown\":false,\"citations\":[\"d5145d8c-dfe6-4177-82d6-da1c6bf5468d\",\"e505a53a-789b-44e7-900c-bab8a29b258d\",\"640812c2-1334-4771-a76c-8833a35cf11f\",\"6404f516-1b51-469d-984b-4f26f888caa9\",\"c9051027-7e0a-4cc2-9bad-b9fdde84e496\",\"9c3809a7-c01a-43dd-9735-806201cfe213\",\"a8d1edb2-2be1-4c25-9844-0d0129e4e571\",\"7a85cfe1-a4b5-4eb1-a7a4-180d224882c8\",\"6c21f53f-e065-4775-ae74-80b2d3c9ebd4\",\"57347cd2-e57c-4927-be8f-1375dfbe5434\",\"4490f634-7202-45d6-92b7-6fb17c66ada1\",\"0d713216-75af-4029-9d97-16d2ffa6ca20\",\"bd2aff56-1ee7-4ee7-a7c6-040fe8f3ebdb\",\"380ac87f-df10-440b-8ed5-80c43a699f5f\",\"be5338a9-9236-4bfe-82ef-bba078cafb01\"]}",
+      "schemaValid": true,
+      "metrics": {
+        "strictClaimPass": false,
+        "matchedClaims": [],
+        "missingClaims": ["互相保护"],
+        "leakedClaims": [],
+        "unknownPass": null,
+        "evaluated": true,
+        "citationViolations": [],
+        "correctionPass": null,
+        "leakage": null
+      },
+      "retrieval": {
+        "returned": [],
+        "expected": ["5037ed52-75de-49b9-8eff-91c49ca15016:harbor:relation"],
+        "forbidden": [],
+        "forbiddenResults": [],
+        "rank": null,
+        "tokens": null,
+        "degraded": [],
+        "sourceIds": [
+          "d5145d8c-dfe6-4177-82d6-da1c6bf5468d",
+          "d0adaa67-f56b-4ce6-9c32-3651d5c7e76c",
+          "e505a53a-789b-44e7-900c-bab8a29b258d",
+          "640812c2-1334-4771-a76c-8833a35cf11f",
+          "6404f516-1b51-469d-984b-4f26f888caa9",
+          "c9051027-7e0a-4cc2-9bad-b9fdde84e496",
+          "9c3809a7-c01a-43dd-9735-806201cfe213",
+          "a8d1edb2-2be1-4c25-9844-0d0129e4e571",
+          "7a85cfe1-a4b5-4eb1-a7a4-180d224882c8",
+          "6c21f53f-e065-4775-ae74-80b2d3c9ebd4",
+          "57347cd2-e57c-4927-be8f-1375dfbe5434",
+          "4490f634-7202-45d6-92b7-6fb17c66ada1",
+          "0d713216-75af-4029-9d97-16d2ffa6ca20",
+          "bd2aff56-1ee7-4ee7-a7c6-040fe8f3ebdb",
+          "380ac87f-df10-440b-8ed5-80c43a699f5f",
+          "be5338a9-9236-4bfe-82ef-bba078cafb01"
+        ],
+        "actualVectorize": null,
+        "staleVectorIds": []
+      },
+      "contextTokensEstimate": 1452,
+      "latencyMs": {
+        "retrievalAndAssembly": 5549,
+        "model": 7325,
+        "total": 12874
+      },
+      "modelCalls": 1,
+      "usage": {
+        "prompt_tokens": 1625,
+        "completion_tokens": 823,
+        "total_tokens": 2448,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "neurons": 32.595680236816406
+      },
+      "costUSD": null,
+      "model": {
+        "mode": "gateway",
+        "provider": "workers-ai",
+        "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+        "auxiliaryModel": null
+      },
+      "scope": "0fd815948a795851db51e86d8f1f416551283f06922fa811dc36d4b55af8cb0d",
+      "requestElapsedMs": 14198.771457999945
+    },
+    {
+      "id": "harbor/early-fact",
+      "strategy": "summary",
+      "error": "评测接口/evaluate/summary返回HTTP 422；认证与模型凭据不写入错误输出",
+      "usage": null,
+      "costUSD": null
+    },
+    {
+      "id": "harbor/relationship",
+      "strategy": "summary",
+      "error": "评测接口/evaluate/summary返回HTTP 422；认证与模型凭据不写入错误输出",
+      "usage": null,
+      "costUSD": null
+    }
+  ],
+  "modelCallAttempts": 4,
+  "measured": {
+    "recent": {
+      "questions": 2,
+      "failedRequests": 0,
+      "validJsonResponses": 2,
+      "strictGoldClaimPassRate": 0,
+      "exactFactMatchRate": 0,
+      "leakageRate": 0,
+      "correctionPassRate": 0,
+      "recallAt5": null,
+      "mrrAt5": null,
+      "forbiddenMemoryResults": null,
+      "citationViolations": 0,
+      "latencyMs": {
+        "p50": 10662.43079100002,
+        "p95": 14198.771457999945,
+        "max": 14198.771457999945
+      },
+      "modelLatencyMs": {
+        "p50": 3471,
+        "p95": 7325
+      },
+      "actualVectorizeRecall": null,
+      "semanticAnswerAccuracy": null,
+      "extractionPrecision": null,
+      "extractionRecall": null,
+      "actualCostUSD": null
+    },
+    "summary": {
+      "questions": 0,
+      "failedRequests": 2,
+      "validJsonResponses": 0,
+      "strictGoldClaimPassRate": null,
+      "exactFactMatchRate": null,
+      "leakageRate": null,
+      "correctionPassRate": null,
+      "recallAt5": null,
+      "mrrAt5": null,
+      "forbiddenMemoryResults": null,
+      "citationViolations": null,
+      "latencyMs": {
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "modelLatencyMs": {
+        "p50": null,
+        "p95": null
+      },
+      "actualVectorizeRecall": null,
+      "semanticAnswerAccuracy": null,
+      "extractionPrecision": null,
+      "extractionRecall": null,
+      "actualCostUSD": null
+    },
+    "hybrid": {
+      "questions": 0,
+      "failedRequests": 0,
+      "validJsonResponses": 0,
+      "strictGoldClaimPassRate": null,
+      "exactFactMatchRate": null,
+      "leakageRate": null,
+      "correctionPassRate": null,
+      "recallAt5": null,
+      "mrrAt5": null,
+      "forbiddenMemoryResults": 0,
+      "citationViolations": null,
+      "latencyMs": {
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "modelLatencyMs": {
+        "p50": null,
+        "p95": null
+      },
+      "actualVectorizeRecall": null,
+      "semanticAnswerAccuracy": null,
+      "extractionPrecision": null,
+      "extractionRecall": null,
+      "actualCostUSD": null
+    }
+  },
+  "extractionPrecision": null,
+  "extractionRecall": null,
+  "actualVectorizeRecall": null,
+  "semanticAnswerAccuracy": null,
+  "actualCostUSD": null,
+  "methodology": {
+    "baseline": {
+      "recent": "最近16条经过分支/时点/知情/遗忘/删源过滤的原文",
+      "summary": "真实模型对同一有效原文集压缩，仅在相同来源fence与视角内复用",
+      "hybrid": "近期原文+实际Store词法/关系图/时间召回；人工旧向量ID只测试权限过滤"
+    },
+    "claims": "中文NFKC及标点空白归一后的严格gold片段匹配；不代表模型语义judge",
+    "synthetic": true,
+    "goldExtraction": "authored",
+    "unmeasured": "抽取precision/recall、实际Vectorize召回、语义回答准确率和真实成本均为null；usage仅记录服务商实际返回值"
+  },
+  "error": "评测接口/evaluate/summary返回HTTP 422；认证与模型凭据不写入错误输出",
+  "finishedAt": "2026-10-05T10:36:20.056Z"
+}

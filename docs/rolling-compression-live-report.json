@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-08",
+  "environment": "independent-v3-preview",
+  "implementationCommit": "61b983db14d7f2737eb6a02d76b68738ffcb3b01",
+  "deploymentVersion": "cad18a9f-2cd4-4415-8970-cebbf5623043",
+  "privacy": "Metadata only; no private story text, player identity, evidence quotations, owner IDs or credentials.",
+  "implementation": {
+    "version": "rolling-v1",
+    "bucketOrder": ["narrative", "rules", "facts", "interpretations"],
+    "scope": "Director and independently authorized character views",
+    "pageTokenLimit": 1800,
+    "reflectionTargetTokens": 1000,
+    "observationHardTokenLimit": 1800,
+    "tokenAccounting": "Local text estimates; these are not provider-billed token measurements.",
+    "semanticRepairAttempts": 2,
+    "invalidOutputPolicy": "OBSERVATION_INVALID_OUTPUT is terminal for automatic Workflow retries; prior successful pages and raw sources remain available.",
+    "workflowArtifacts": "R2 buffers; Workflow step outputs contain keys rather than story text.",
+    "backfill": "Compression-only jobs process committed sources and the event-application ledger; they do not generate new plot. Evaluation fixtures are excluded."
+  },
+  "liveRecovery": {
+    "status": "completed",
+    "completionVerifiedAt": "2026-10-08T06:30:16.797Z",
+    "targetEventSeq": 55,
+    "factCursorBeforeGapRecovery": 47,
+    "factCursorAfterGapRecovery": 55,
+    "finalNarrativePrefix": 55,
+    "semanticIndex": "completed",
+    "indexedNonemptyObservationVectors": 3,
+    "allEightObserverWatermarks": 55,
+    "branchHeadAfterRecovery": 55,
+    "completedRecoveryJobs": 2,
+    "supersededGapJob": {
+      "status": "completed",
+      "completedAt": "2026-10-08T06:33:16.129Z",
+      "method": "A guarded compression-only retry reused completed facts, experiences, summaries and embeddings. Owner/source fences and Workflow retry identity were retained; no task was manually marked complete."
+    },
+    "completedScopes": 8,
+    "directorViews": [
+      {"bucket": "narrative", "throughSeq": 55, "observedUnits": 64, "reflections": 11, "estimatedOutputTokens": 1729},
+      {"bucket": "rules", "throughSeq": 55, "observedUnits": 0, "reflections": 0, "estimatedOutputTokens": 0},
+      {"bucket": "facts", "throughSeq": 55, "observedUnits": 30, "reflections": 1, "estimatedOutputTokens": 1121},
+      {"bucket": "interpretations", "throughSeq": 55, "observedUnits": 270, "reflections": 19, "estimatedOutputTokens": 1704}
+    ],
+    "unitDefinition": "Observed units include Unicode fragments of long events or structured records; they are not unique-event counts.",
+    "characterViews": {
+      "viewers": 1,
+      "completedBuckets": 4,
+      "throughSeq": 55,
+      "authorizedObservedUnits": 0,
+      "note": "This operational case had no qualifying source fragments for the selected character view. Its summaries stayed empty; positive grants and knowledge cases are covered by deterministic tests."
+    },
+    "rawSources": {"committedEvents": 55, "retainedSources": 55, "retainedCharacters": 18901},
+    "newPlotGeneratedByRecovery": false,
+    "productionSwitched": false,
+    "failuresAndRepairs": [
+      "A historical factual gap and concurrent projection commits prevented contiguous coverage. Replayed validated artifacts, retained source fences and added bounded re-preparation after atomic CAS rollback.",
+      "Empty buckets repeatedly scanned unrelated memory history. Bucket/status and requested-key filters now run in SQL before expansion.",
+      "Publishing only after all pages left completed narrative prefixes unavailable. Each successful page now publishes its complete-event prefix; partial events do not advance it.",
+      "A strict 1000-token target rejected valid summaries and nested retries repeated the same repair group. The target is now soft, the 1800-token safety limit remains enforced, and exhausted semantic repair is non-retryable."
+    ]
+  },
+  "validation": {
+    "unitTests": {"passed": 346, "failed": 0, "files": 31},
+    "rollingObservationTests": {"passed": 18, "failed": 0},
+    "browserTests": {"passed": 12, "failed": 0, "environment": "Local Worker and installed Chrome"},
+    "browserTiming": "The complete browser suite passed before the final budget-only adjustment; the final full check, including budget regression, passed afterward.",
+    "typecheckAndBuild": "passed",
+    "deterministicReplay": {"stories": 8, "committedEvents": 957, "questionsPassed": 128, "questions": 128, "singleBranchTurns": 500, "forbiddenResults": 0, "tokenBudgetViolations": 0, "sourceSpanFailures": 0},
+    "implementationCI": "Both push and pull-request CI passed for 61b983db14d7f2737eb6a02d76b68738ffcb3b01.",
+    "limits": "Unit reflectors and deterministic replay validate lifecycle, provenance, isolation and budgets. This live operational recovery is not a gold-labeled semantic compression or extraction precision evaluation; model quality and monetary cost are not measured."
+  }
+}

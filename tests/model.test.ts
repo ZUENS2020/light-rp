@@ -1,0 +1,396 @@
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import {
+  readCompletion,
+  boundedText,
+  complete,
+  promptCacheUsage,
+  type ChatMessage,
+} from '../src/server/model';
+import { defaults } from '../src/server/settings';
+import type { Env } from '../src/server/env';
+import { assertNarration } from '../src/server/narration';
+afterEach(() => vi.restoreAllMocks());
+function stream(text: string, split = 3) {
+  const encoded = new TextEncoder().encode(text);
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        for (let i = 0; i < encoded.length; i += split) c.enqueue(encoded.slice(i, i + split));
+        c.close();
+      },
+    }),
+    { headers: { 'Content-Type': 'text/event-stream' } },
+  );
+}
+describe('model responses and durable draft boundaries', () => {
+  it.each([
+    { message: { content: null, refusal: '服务拒绝说明' }, finish_reason: 'stop' },
+    { message: { content: '未完成片段' }, finish_reason: 'content_filter' },
+  ])(
+    'handles declared non-streaming refusals as terminal failures with visible drafts',
+    async (choice) => {
+      const onText = vi.fn();
+      await expect(
+        readCompletion(Response.json({ choices: [choice] }), { onText }),
+      ).rejects.toMatchObject({
+        status: 422,
+        code: 'MODEL_REFUSAL',
+      });
+      expect(onText).toHaveBeenCalledWith(choice.message.content ?? choice.message.refusal);
+    },
+  );
+
+  it.each([
+    'data: {"choices":[{"delta":{"refusal":"拒绝说明"}}]}\n\ndata: [DONE]\n',
+    'data: {"choices":[{"delta":{"content":"拒绝说明"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\ndata: [DONE]\n',
+  ])(
+    'stops a declared streaming refusal without accepting DONE as a successful answer',
+    async (response) => {
+      const onText = vi.fn();
+      await expect(readCompletion(stream(response), { onText })).rejects.toMatchObject({
+        code: 'MODEL_REFUSAL',
+        status: 422,
+      });
+      expect(onText).toHaveBeenCalledTimes(1);
+      expect(onText).toHaveBeenCalledWith('拒绝说明');
+    },
+  );
+
+  it('checks plain narrative refusals separately from transport and preserves character dialogue', async () => {
+    const refusal = '我不能写这段。你描述的内容是一个请求。我可以提供替代版本。';
+    expect(() => assertNarration(refusal)).toThrow('模型服务拒绝生成');
+    expect(() =>
+      assertNarration("I'm sorry, I cannot write this. Your request cannot be completed."),
+    ).toThrow();
+    for (const narrative of [
+      '「我不能写这段。」她合上了笔记本。',
+      '我不能写这段。稿纸上的墨水已经干涸。',
+      '她说：“作为AI，我不能提供这个版本。”随后关闭终端。',
+      'I cannot help you cross the river, she said.',
+      '{"quote":"我不能写这段。你描述的内容并不可靠。"}',
+    ])
+      expect(() => assertNarration(narrative)).not.toThrow();
+    // Auxiliary responses remain data; only the narration boundary applies the
+    // fallback detector, so extraction cannot mistake a quoted refusal for one.
+    expect(await readCompletion(Response.json({ response: refusal }))).toBe(refusal);
+    expect(
+      await readCompletion(
+        Response.json({
+          choices: [{ message: { content: '正文', refusal: null }, finish_reason: 'stop' }],
+        }),
+      ),
+    ).toBe('正文');
+  });
+  it('normalizes actual cache tokens and keeps missing or invalid cache counts unknown', () => {
+    expect(
+      promptCacheUsage({
+        prompt_tokens: 1000,
+        prompt_cache_hit_tokens: 900,
+        prompt_cache_miss_tokens: 100,
+      }),
+    ).toMatchObject({ cachedTokens: 900, uncachedTokens: 100, cacheHitRate: 0.9 });
+    expect(
+      promptCacheUsage({ prompt_tokens: 2000, prompt_tokens_details: { cached_tokens: 1024 } }),
+    ).toMatchObject({ cachedTokens: 1024, cacheHitRate: 0.512 });
+    expect(promptCacheUsage({ prompt_tokens: 1000 })).toMatchObject({
+      cachedTokens: null,
+      cacheHitRate: null,
+      reasoningTokens: null,
+    });
+    expect(
+      promptCacheUsage({ completion_tokens_details: { reasoning_tokens: 1200 } }),
+    ).toMatchObject({ reasoningTokens: 1200 });
+    expect(
+      promptCacheUsage({ completion_tokens_details: { reasoning_tokens: '1200' } }),
+    ).toMatchObject({ reasoningTokens: null });
+    for (const hit of [-1, 1001, '900', NaN, 2.5])
+      expect(
+        promptCacheUsage({ prompt_tokens: 1000, prompt_cache_hit_tokens: hit }).cacheHitRate,
+      ).toBeNull();
+    expect(
+      promptCacheUsage({
+        prompt_tokens: 1000,
+        prompt_cache_hit_tokens: 900,
+        prompt_cache_miss_tokens: 101,
+      }).cacheHitRate,
+    ).toBeNull();
+    expect(
+      promptCacheUsage({ prompt_tokens: 0, prompt_cache_hit_tokens: 0 }).cacheHitRate,
+    ).toBeNull();
+  });
+  it('requests streaming usage and records cache telemetry without prompt or provider extras', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const fetcher = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () =>
+        stream(
+          'data: {"choices":[{"delta":{"content":"新正文"},"finish_reason":"stop"}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":1000,"prompt_tokens_details":{"cached_tokens":768},"private_extra":"不应进入日志"}}\n\ndata: [DONE]\n',
+        ),
+      );
+    const onUsage = vi.fn();
+    await complete(
+      { MODEL_API_KEY: 'test-only' } as Env,
+      {
+        ...defaults('openai'),
+        provider: 'commandcode',
+        baseUrl: 'https://api.commandcode.ai/provider/v1',
+        model: 'deepseek/deepseek-v4.1-flash',
+      },
+      [{ role: 'user', content: '私有提示词' }],
+      { onText: async () => undefined, onUsage },
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]!.body))).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+    expect(onUsage).toHaveBeenCalledTimes(1);
+    const log = JSON.parse(String(info.mock.calls[0]![0]));
+    expect(log).toMatchObject({
+      event: 'model_prompt_cache',
+      cachedTokens: 768,
+      cacheHitRate: 0.768,
+      phase: 'narrative',
+    });
+    expect(JSON.stringify(log)).not.toMatch(/私有提示词|private_extra|不应进入日志|test-only/);
+  });
+  it('calls Command Code directly for narrative and extraction without forwarding credentials across redirects', async () => {
+    const fetcher = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () =>
+        Response.json({ choices: [{ message: { content: '连接成功。' }, finish_reason: 'stop' }] }),
+      );
+    const gateway = vi.fn();
+    const config = {
+      ...defaults('openai'),
+      provider: 'commandcode',
+      baseUrl: 'https://api.commandcode.ai/provider/v1/',
+      model: 'deepseek/deepseek-v4.1-flash',
+      maxOutput: 16000,
+    };
+    const env = { MODEL_API_KEY: 'test-only', AI: { gateway } } as unknown as Env;
+    expect(await complete(env, config, [{ role: 'user', content: '连接测试' }])).toBe('连接成功。');
+    const [url, request] = fetcher.mock.calls[0]!;
+    expect(url).toBe('https://api.commandcode.ai/provider/v1/chat/completions');
+    expect(request).toMatchObject({
+      method: 'POST',
+      headers: { Authorization: 'Bearer test-only' },
+      redirect: 'manual',
+    });
+    await complete(env, config, [{ role: 'user', content: '抽取JSON' }], {
+      auxiliary: true,
+      json: true,
+      jsonSchema: { type: 'object' },
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]!.body))).toMatchObject({
+      model: config.model,
+      max_tokens: 16000,
+      response_format: { type: 'json_schema', json_schema: { schema: { type: 'object' } } },
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]!.body)).max_tokens).toBe(16000);
+    expect(gateway).not.toHaveBeenCalled();
+    fetcher.mockResolvedValue(
+      new Response(null, { status: 307, headers: { Location: 'https://other.example' } }),
+    );
+    await expect(complete(env, config, [])).rejects.toMatchObject({ code: 'MODEL_HTTP' });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+  it('uses the independent auxiliary budget for structured/observation calls, preserving narrative and legacy limits', async () => {
+    const fetcher = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () =>
+        Response.json({ choices: [{ message: { content: '{}', finish_reason: 'stop' } }] }),
+      );
+    const config = {
+      ...defaults('openai'),
+      maxOutput: 16000,
+      auxiliaryMaxOutput: 32768,
+      contextWindow: 131072,
+    };
+    const env = { MODEL_API_KEY: 'test-only' } as Env;
+    await complete(env, config, []);
+    await complete(env, config, [], { auxiliary: true });
+    await complete(env, config, [], { json: true });
+    await complete(env, { ...config, auxiliaryMaxOutput: 0 }, [], { json: true });
+    expect(fetcher.mock.calls.map((call) => JSON.parse(String(call[1]!.body)).max_tokens)).toEqual([
+      16000, 32768, 32768, 16000,
+    ]);
+  });
+  it('uses explicit extraction prompt protocol while keeping native schema for simple Qwen and other models', async () => {
+    const jsonSchema = {
+      type: 'object',
+      properties: { value: { type: 'number' } },
+      required: ['value'],
+    };
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const run = vi.fn(async (_model: unknown, _input: { response_format?: unknown }) => ({
+      response: '{"value":1}',
+    }));
+    const env = { AI: { run }, AI_GATEWAY_ID: 'mock-only' } as unknown as Env;
+    await complete(env, defaults('gateway'), [{ role: 'user', content: 'JSON' }], {
+      json: true,
+      jsonSchema,
+      schemaProtocol: 'prompt',
+    });
+    expect(run.mock.calls[0]![1]).not.toHaveProperty('response_format');
+    expect(JSON.parse(String(info.mock.calls[0]![0]))).toEqual({
+      event: 'model_response_format',
+      model: '@cf/qwen/qwen3-30b-a3b-fp8',
+      requested: 'json_schema',
+      effective: 'prompt_only',
+      reason: 'MEASURED_EXTRACTION_FORMAT_FAILURE',
+      validation: 'server_schema_required',
+    });
+    await complete(
+      env,
+      { ...defaults('gateway'), model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' },
+      [{ role: 'user', content: 'JSON' }],
+      { json: true, jsonSchema },
+    );
+    expect(run.mock.calls[1]![1].response_format).toEqual({
+      type: 'json_schema',
+      json_schema: jsonSchema,
+    });
+    expect(
+      info.mock.calls.filter(
+        ([line]) => JSON.parse(String(line)).event === 'model_response_format',
+      ),
+    ).toHaveLength(1);
+    await complete(env, defaults('gateway'), [{ role: 'user', content: 'JSON' }], {
+      json: true,
+      jsonSchema,
+    });
+    expect(run.mock.calls[2]![1].response_format).toEqual({
+      type: 'json_schema',
+      json_schema: jsonSchema,
+    });
+    expect(
+      info.mock.calls.filter(
+        ([line]) => JSON.parse(String(line)).event === 'model_response_format',
+      ),
+    ).toHaveLength(1);
+  });
+  it('turns binding rejection into a safe transport error without repeating or exposing private provider details', async () => {
+    const run = vi.fn(async () => {
+      throw Object.assign(new Error('private-provider-key and request-body'), { status: 400 });
+    });
+    const env = { AI: { run }, AI_GATEWAY_ID: 'mock-only' } as unknown as Env;
+    await expect(
+      complete(env, defaults('gateway'), [{ role: 'user', content: 'JSON' }], { json: true }),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: 'MODEL_HTTP',
+      message: expect.stringContaining('HTTP 400'),
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    try {
+      await complete(env, defaults('gateway'), [], { json: true });
+    } catch (error) {
+      expect(String(error)).not.toContain('private-provider-key');
+      expect(String(error)).not.toContain('request-body');
+    }
+  });
+  it('returns only bounded visible truncated text to an explicit audit callback and still fails', async () => {
+    const preview = vi.fn(),
+      usage = vi.fn();
+    await expect(
+      readCompletion(
+        Response.json({
+          usage: { completion_tokens: 4096 },
+          choices: [
+            {
+              message: {
+                content: '{"facts":[' + 'x'.repeat(9000),
+                reasoning_content: 'PRIVATE REASONING',
+              },
+              finish_reason: 'length',
+            },
+          ],
+        }),
+        { json: true, onTruncatedText: preview, onUsage: usage },
+      ),
+    ).rejects.toMatchObject({ code: 'OUTPUT_TRUNCATED' });
+    expect(preview).toHaveBeenCalledTimes(1);
+    expect(preview.mock.calls[0]![0]).toHaveLength(8192);
+    expect(preview.mock.calls[0]![0]).not.toContain('PRIVATE REASONING');
+    expect(usage).toHaveBeenCalledWith({ completion_tokens: 4096 });
+    const empty = vi.fn();
+    await expect(
+      readCompletion(
+        Response.json({
+          choices: [
+            {
+              message: { content: '', reasoning_content: 'PRIVATE REASONING' },
+              finish_reason: 'length',
+            },
+          ],
+        }),
+        { onTruncatedText: empty },
+      ),
+    ).rejects.toMatchObject({ code: 'OUTPUT_TRUNCATED' });
+    expect(empty).toHaveBeenCalledWith('');
+  });
+  it('uses the documented Qwen soft switch without mutating persisted context or other model requests', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: '讲述门后的故事' }],
+      calls: Record<string, unknown>[] = [];
+    const env = {
+      AI: {
+        run: async (_model: string, payload: Record<string, unknown>) => {
+          calls.push(payload);
+          return { choices: [{ message: { content: '门缓缓打开。' }, finish_reason: 'stop' }] };
+        },
+      },
+      AI_GATEWAY_ID: 'test',
+    } as unknown as Env;
+    await complete(env, defaults('gateway'), messages);
+    expect(calls[0].messages).toEqual([...messages, { role: 'system', content: '/no_think' }]);
+    expect(messages).toEqual([{ role: 'user', content: '讲述门后的故事' }]);
+    await complete(env, { ...defaults('gateway'), model: '@cf/other/model' }, messages);
+    expect(calls[1].messages).toEqual(messages);
+  });
+  it('handles split UTF-8 / CRLF and never commits reasoning as story text', async () => {
+    const chunks: string[] = [];
+    const response = stream(
+      'data: {"choices":[{"delta":{"reasoning_content":"机密思考","content":"你"}}]}\r\n\r\ndata: {"choices":[{"delta":{"content":"好😀"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      1,
+    );
+    expect(
+      await readCompletion(response, {
+        onText: async (t) => {
+          chunks.push(t);
+        },
+      }),
+    ).toBe('你好😀');
+    expect(chunks.join('')).toBe('你好😀');
+  });
+  it('preserves partial drafts but refuses a prematurely disconnected stream', async () => {
+    const chunks: string[] = [];
+    await expect(
+      readCompletion(stream('data: {"choices":[{"delta":{"content":"半段正文"}}]}\n\n'), {
+        onText: async (t) => {
+          chunks.push(t);
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'MODEL_STREAM_INCOMPLETE' });
+    expect(chunks.join('')).toBe('半段正文');
+  });
+  it('refuses a length stop even when DONE follows', async () => {
+    await expect(
+      readCompletion(
+        stream(
+          'data: {"choices":[{"delta":{"content":"片段"},"finish_reason":"length"}]}\n\ndata: [DONE]\n',
+        ),
+      ),
+    ).rejects.toMatchObject({ code: 'OUTPUT_TRUNCATED' });
+  });
+  it('rejects empty body, auth error and bounded overflow without leaking provider details', async () => {
+    await expect(
+      readCompletion(Response.json({ choices: [{ message: { content: '' } }] })),
+    ).rejects.toMatchObject({ code: 'MODEL_EMPTY' });
+    await expect(
+      readCompletion(new Response('private provider key', { status: 401 })),
+    ).rejects.toMatchObject({ status: 422, message: '模型服务返回 401' });
+    await expect(boundedText(new Response('012345'), 3)).rejects.toMatchObject({
+      code: 'MODEL_TOO_LARGE',
+    });
+  });
+});

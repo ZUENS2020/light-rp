@@ -1,0 +1,52 @@
+{
+  "startedAt": "2026-10-07T08:04:28.363Z",
+  "versionId": "7ea93b18-795e-41a2-8e73-c42a893d9b84",
+  "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+  "synthetic": true,
+  "checks": [
+    {
+      "name": "request-idempotency",
+      "passed": true,
+      "taskId": "8cd9f862-b74c-4f12-b3bc-9cdf2d23b480"
+    },
+    {
+      "name": "real-generation-atomic-commit",
+      "passed": true,
+      "headSeq": 2,
+      "eventCount": 2
+    },
+    {
+      "name": "real-extraction-observation-index",
+      "passed": true,
+      "memoryKinds": ["observation", "observation", "canon"]
+    },
+    {
+      "name": "memory-recall",
+      "passed": true,
+      "resultCount": 3
+    },
+    {
+      "name": "durable-cancel-no-late-commit",
+      "passed": true,
+      "taskId": "df30ee5a-cd23-48d3-8fdb-68fb615cf34f"
+    }
+  ],
+  "costUSD": null,
+  "branchId": "432918d0-c306-40af-89b0-9af67df8bf15",
+  "jobs": [
+    {
+      "kind": "memory",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "kind": "generation",
+      "status": "completed",
+      "error": null
+    }
+  ],
+  "status": "completed",
+  "finishedAt": "2026-10-07T08:10:37.344Z",
+  "resumedAt": "2026-10-07T08:10:24.828Z",
+  "priorAssertion": "初次检查看字面“蓝钥匙”，实际正确抽取为“蓝色钥匙”；本次校验明确接受这两个同义表达，未重新生成。"
+}

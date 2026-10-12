@@ -1,0 +1,111 @@
+{
+  "format": "lightrp-clef-decision-probe",
+  "timestamp": "2026-10-07",
+  "synthetic": true,
+  "request": {
+    "state": {
+      "source_text": "钥匙实际仍在工坊。甲对乙撒谎说：“钥匙在仓库。”乙听清了这句话，并相信钥匙在仓库。丙在远处没有听到。甲计划明天用铜钥匙开锁，现在还没有开始，也没有结果。"
+    },
+    "questions": {
+      "truth": {
+        "type": "noul",
+        "instructions": "Does the narrator's objective account establish that the key is in the workshop (工坊)? Exclude characters' statements as world truth."
+      },
+      "lie": {
+        "type": "noul",
+        "instructions": "Does the evidence establish as objective world truth that the key is in the warehouse (仓库), rather than only a lie/belief?"
+      },
+      "belief": {
+        "type": "noul",
+        "instructions": "Does the evidence explicitly establish that 乙 believes the key is in the warehouse (仓库), even if that belief is false?"
+      },
+      "c_knows": {
+        "type": "noul",
+        "instructions": "Does the evidence explicitly establish that 丙 heard or learned the content of 甲's statement? Being nearby does not count."
+      },
+      "success": {
+        "type": "noul",
+        "instructions": "Does the evidence confirm an actually performed successful lock opening, rather than just a future plan?"
+      }
+    }
+  },
+  "expected": {
+    "truth": true,
+    "lie": false,
+    "belief": true,
+    "c_knows": false,
+    "success": false
+  },
+  "models": [
+    {
+      "model": "clef",
+      "answers": {
+        "truth": {
+          "type": "noul",
+          "noul": 0.9736
+        },
+        "lie": {
+          "type": "noul",
+          "noul": 0.031
+        },
+        "belief": {
+          "type": "noul",
+          "noul": 0.9687
+        },
+        "c_knows": {
+          "type": "noul",
+          "noul": 0.0297
+        },
+        "success": {
+          "type": "noul",
+          "noul": 0.0221
+        }
+      },
+      "usage": {
+        "input_tokens": 610,
+        "output_tokens": 0
+      },
+      "status": 200
+    },
+    {
+      "model": "clef-flash",
+      "answers": {
+        "truth": {
+          "type": "noul",
+          "noul": 0.9053
+        },
+        "lie": {
+          "type": "noul",
+          "noul": 0.0132
+        },
+        "belief": {
+          "type": "noul",
+          "noul": 0.9521
+        },
+        "c_knows": {
+          "type": "noul",
+          "noul": 0.0149
+        },
+        "success": {
+          "type": "noul",
+          "noul": 0.009
+        }
+      },
+      "usage": {
+        "input_tokens": 610,
+        "output_tokens": 0
+      },
+      "status": 200
+    }
+  ],
+  "limitations": [
+    "单个中文场景、5个二元问题，不构成概率校准或总体质量验收。",
+    "通过Cloudflare管理API真实调用；未测应用Worker端到端延迟。",
+    "概率只能辅助语义判断，不能替代数据库权限、来源状态、事务或技能证据计数。"
+  ],
+  "sources": [
+    "https://developers.cloudflare.com/workers-ai/models/clef/",
+    "https://developers.cloudflare.com/workers-ai/models/clef-flash/",
+    "https://blog.cloudflare.com/clef-decision-models/"
+  ]
+}

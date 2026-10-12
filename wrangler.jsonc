@@ -1,79 +1,47 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "lightrp-v2",
-  "account_id": "c02febc38a3cfcb6b91c8832a9724370",
-  "main": "./src/server/index.ts",
-  "compatibility_date": "2026-08-30",
+  "name": "lightrp-v3",
+  "main": "src/server/index.ts",
+  "compatibility_date": "2026-10-05",
   "compatibility_flags": ["nodejs_compat"],
-  // Workers Paid/Standard: max CPU 300000ms (5 min). Covers Queue consumer long GLM
-  // turns — cpu_ms is compute time only, not I/O wait.
-  "limits": {
-    "cpu_ms": 300000,
-  },
-  // Cron every minute: never-started pending (lost Queue after outbox publish) must
-  // republish within ~30–60s via PENDING_NEVER_STARTED_GRACE_MS; lease-expiry recovery
-  // uses DELIVERY_GRACE_MS=180s; stale-running (no updated_at heartbeat) uses
-  // STALE_RUNNING_GRACE_MS=120s even if lease_expires_at is still in the future.
-  // Quiet ticks perform zero D1 writes when nothing matches.
-  "triggers": { "crons": ["*/1 * * * *"] },
-  "workers_dev": false,
+  "dev": { "ip": "127.0.0.1", "host": "127.0.0.1", "port": 8787 },
+  "workers_dev": true,
   "preview_urls": false,
-  "observability": {
-    "enabled": true,
-    "head_sampling_rate": 1,
-  },
-  "ai": {
-    "binding": "AI",
-    "remote": true,
-  },
-  "vars": {
-    "AI_GATEWAY_ID": "sillytavern",
-  },
-  "r2_buckets": [
-    {
-      "binding": "BUCKET",
-      "bucket_name": "lightrp",
-      "remote": true,
-    },
-  ],
+  "routes": [{ "pattern": "lightrp-preview.zuens2020.work", "custom_domain": true }],
   "assets": {
+    "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/v2/*"],
+    "run_worker_first": ["/api/*"],
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "vars": {
+    "AUTH_MODE": "access",
+    "ACCESS_TEAM_DOMAIN": "zuens2020.cloudflareaccess.com",
+    "ACCESS_AUD": "120b4e71926c0cde96cb2ba921cd1c4e8e57233e3b065b7dc1ded7cdc2beed2e",
+    "AI_GATEWAY_ID": "sillytavern",
+    "MODEL_MODE": "gateway",
   },
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "lightrp-v2",
-      "database_id": "68e1f897-e8ed-4a87-8086-9c5f65b824d0",
-      "remote": true,
+      "database_name": "lightrp-v3",
+      "database_id": "a2f4f14d-d5ee-41c4-92d8-81c2fee37272",
       "migrations_dir": "migrations",
     },
   ],
-  "queues": {
-    "producers": [{ "binding": "GENERATE_QUEUE", "queue": "lightrp-v2-generate" }],
-    "consumers": [
-      {
-        "queue": "lightrp-v2-generate",
-        "max_batch_size": 1,
-        "max_retries": 3,
-        "dead_letter_queue": "lightrp-v2-generate-dlq",
-      },
-    ],
-  },
-
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "SESSION_RUNTIME",
-        "class_name": "SessionRuntime",
-      },
-    ],
-  },
-  "migrations": [
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "lightrp-v3" }],
+  "vectorize": [{ "binding": "VECTORS", "index_name": "lightrp-v3-bge-m3" }],
+  "ai": { "binding": "AI" },
+  "durable_objects": { "bindings": [{ "name": "BRANCH_RUNTIME", "class_name": "BranchRuntime" }] },
+  "migrations": [{ "tag": "v3-branch-runtime", "new_sqlite_classes": ["BranchRuntime"] }],
+  "workflows": [
     {
-      "tag": "v1-session-runtime",
-      "new_sqlite_classes": ["SessionRuntime"],
+      "name": "lightrp-v3-generation",
+      "binding": "GENERATION",
+      "class_name": "GenerationWorkflow",
     },
+    { "name": "lightrp-v3-memory", "binding": "MEMORY", "class_name": "MemoryWorkflow" },
   ],
+  "triggers": { "crons": ["*/1 * * * *"] },
 }

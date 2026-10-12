@@ -1,0 +1,17 @@
+{
+  "verifiedAt": "2026-10-07T06:50:48.092Z",
+  "target": "independent-v3-preview",
+  "database": "lightrp-v3",
+  "ownerVerification": "Cloudflare Access exact configured owner email; immutable sub",
+  "characters": 9,
+  "worldbooks": 1,
+  "assetsVerified": 10,
+  "backupFingerprintsMatched": 10,
+  "revisionCopiesMatched": 10,
+  "verification": "D1 read-only SQL compares current raw JSON against immutable revision; all fingerprints verified",
+  "conversationsImported": 0,
+  "oldMemoryImported": 0,
+  "conversationFilesArchived": 14,
+  "originalPngMissing": 9,
+  "productionChanged": false
+}
