@@ -378,6 +378,7 @@ export async function buildContext(
     viewer,
     maxTokens: Math.floor(memoryBudget * directorShare),
     maxCandidates: 120,
+    ranking: settings.recallRanking,
     ...(unified
       ? {}
       : { excludeRecordTypes: ['narrative-unit', 'narrative-segment', 'plot-thread'] }),
@@ -464,6 +465,7 @@ export async function buildContext(
         viewer: c.id,
         maxTokens: Math.floor((memoryBudget * 0.3) / Math.max(1, [...focus].length)),
         maxCandidates: 40,
+        ranking: settings.recallRanking,
         graphHops: 1,
       });
       known.items = known.items.filter(
