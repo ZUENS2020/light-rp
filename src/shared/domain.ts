@@ -163,6 +163,8 @@ export interface MemoryOptions {
   beforeVersion?: number;
 }
 export interface RecallOptions extends MemoryOptions {
+  /** 'hybrid-v2': separate BM25 and entity arms, weighted RRF, query-coverage rerank, observation quota. */
+  ranking?: 'v1' | 'hybrid-v2';
   maxCandidates?: number;
   maxTokens?: number;
   graphSeeds?: number;
