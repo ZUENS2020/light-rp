@@ -70,6 +70,8 @@ export const settingsSchema = z
     narrativePreamble: z.string().max(20000).default(''),
     baseUrl: z.string().default('https://api.openai.com/v1'),
     contextWindow: z.number().int().min(4096).max(2000000).default(32768),
+    /** Memory recall ranking. 'hybrid-v2' keeps BM25 separate from entity lookup (see MemoryEngine.recall). */
+    recallRanking: z.enum(['v1', 'hybrid-v2']).default('v1'),
     maxOutput: z.number().int().min(128).max(65536).default(4096),
     auxiliaryMaxOutput: z
       .number()

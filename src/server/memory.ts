@@ -19,6 +19,17 @@ import { digest, json, now, stableJson, StoreError, uuid } from './store';
 import type { Store } from './store';
 
 type Row = Record<string, unknown>;
+const RECALL_STOPWORDS = new Set(
+  'a an the and or but of to in on at for with by from is are was were be been being do does did what when where who whom which why how that this these those it its he she they them his her their our your you i me my we us has have had will would can could should about into than then there here as if so not no yes'.split(
+    ' ',
+  ),
+);
+/** Query terms for ranking: drop function words that make every memory match. */
+export function queryTerms(text: string): string[] {
+  return searchTokens(text).filter(
+    (t) => !RECALL_STOPWORDS.has(t) && !(t.length < 2 && /[a-z0-9]/.test(t)),
+  );
+}
 /** Space-separated Han unigrams/bigrams plus latin words make unicode61 useful for Chinese. */
 export function searchTokens(text: string, preserveFrequency = false): string[] {
   const words =
@@ -39,12 +50,16 @@ export function searchTokens(text: string, preserveFrequency = false): string[] 
   }
   return (preserveFrequency ? tokens : [...new Set(tokens)]).slice(0, 16384);
 }
-export function rrf(lists: string[][], k = 60): Map<string, { score: number; arms: number[] }> {
+export function rrf(
+  lists: string[][],
+  k = 60,
+  weights?: number[],
+): Map<string, { score: number; arms: number[] }> {
   const scores = new Map<string, { score: number; arms: number[] }>();
   lists.forEach((list, arm) => {
     [...new Set(list)].forEach((id, i) => {
       const v = scores.get(id) ?? { score: 0, arms: [] };
-      v.score += 1 / (k + i + 1);
+      v.score += (weights?.[arm] ?? 1) / (k + i + 1);
       v.arms.push(arm);
       scores.set(id, v);
     });
@@ -1981,7 +1996,8 @@ export class MemoryEngine {
   ): Promise<RecallResult> {
     const cap = Math.max(1, Math.min(options.maxCandidates ?? 120, 500));
     // Bigram/full proper-name terms precede single Han characters; don't spend the query on noise.
-    const tokens = searchTokens(query)
+    const v2 = options.ranking === 'hybrid-v2';
+    const tokens = (v2 ? queryTerms(query) : searchTokens(query))
       .sort((a, b) => Array.from(b).length - Array.from(a).length)
       .slice(0, 64);
     const degraded: string[] = [],
@@ -2067,10 +2083,9 @@ export class MemoryEngine {
       .filter((v) => legalIds.has(v.id))
       .map((v) => v.id)
       .slice(0, 40);
-    const seedIds = [...new Set([...exact, ...lexical, ...vector])].slice(
-      0,
-      Math.min(options.graphSeeds ?? 8, 20),
-    );
+    const seedIds = [
+      ...new Set(v2 ? [...lexical, ...vector, ...exact] : [...exact, ...lexical, ...vector]),
+    ].slice(0, Math.min(options.graphSeeds ?? 8, 20));
     const graph: string[] = [],
       visited = new Set(seedIds),
       start = performance.now();
@@ -2112,20 +2127,42 @@ export class MemoryEngine {
         ? await take('1=1', [], 'COALESCE(m.valid_from,-1e99) DESC,m.version_order DESC')
         : [];
     // Exact entity lookup belongs to the lexical arm, not a second vote for the same term.
-    const arms = [[...new Set([...exact, ...lexical])].slice(0, 40), vector, graph, temporal];
-    const scores = rrf(arms),
-      names = ['lexical', 'vector', 'graph', 'temporal'],
+    // v1: entity lookup and BM25 share one arm, so for a named query every
+    // memory about that person (ordered by recency) outranks BM25 hits.
+    // v2: BM25 is its own arm; entity/graph/temporal arms are weak priors.
+    const arms = v2
+      ? [lexical, vector, graph, temporal, exact.slice(0, 40)]
+      : [[...new Set([...exact, ...lexical])].slice(0, 40), vector, graph, temporal];
+    const terms = v2 ? [...new Set(queryTerms(query))] : [];
+    const coverage = (m: Memory) => {
+      if (!terms.length) return 0;
+      const hay = searchTokens(
+        `${m.subject} ${m.predicate} ${typeof m.value === 'string' ? m.value : ''} ${m.text}`,
+      );
+      const set = new Set(hay);
+      return terms.filter((t) => set.has(t)).length / terms.length;
+    };
+    const scores = rrf(arms, 60, v2 ? [1, 1, 0.4, 0.4, 0.4] : undefined),
+      names = ['lexical', 'vector', 'graph', 'temporal', 'entity'],
       rankedScore = (entry: [string, { score: number; arms: number[] }]) => {
         const m = map.get(entry[0])!;
         return (
           (entry[1].score *
-            (1 + (query.includes(m.predicate) ? 1 : 0) + Math.min(100, m.authority ?? 0) / 1000)) /
+            (1 + (query.includes(m.predicate) ? 1 : 0) + Math.min(100, m.authority ?? 0) / 1000) *
+            (v2 ? 1 + 4 * coverage(m) : 1)) /
           (1 + estimateTokens(m.text) / 10000)
         );
       },
-      sorted = [...scores]
-        .sort((a, b) => rankedScore(b) - rankedScore(a) || a[0].localeCompare(b[0]))
-        .slice(0, cap),
+      ranked = [...scores].sort(
+        (a, b) => rankedScore(b) - rankedScore(a) || a[0].localeCompare(b[0]),
+      );
+    // v2 per-type quota: chapter/segment observations are long summaries; keep at most 4.
+    let observations = 0;
+    const sorted = (
+        v2
+          ? ranked.filter(([id]) => map.get(id)!.kind !== 'observation' || ++observations <= 4)
+          : ranked
+      ).slice(0, cap),
       items: RecallResult['items'] = [];
     let used = 0,
       truncated = scores.size > cap;

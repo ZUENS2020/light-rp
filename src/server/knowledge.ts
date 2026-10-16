@@ -91,6 +91,15 @@ function narrativeClauses(
   for (let at = 0; at < source.length; at++) {
     const c = source[at]!,
       close = ({ '“': '”', '「': '」', '『': '』', '‘': '’' } as Record<string, string>)[c];
+    // English apostrophes (it's, I've, students') are not quotation marks.
+    const apostrophe =
+      c === "'" &&
+      /[\p{L}\p{N}]/u.test(source[at - 1] ?? '') &&
+      (stack.at(-1) !== "'" || /[\p{L}\p{N}]/u.test(source[at + 1] ?? ''));
+    if (apostrophe) {
+      objective += stack.length ? ' ' : c;
+      continue;
+    }
     if (stack.at(-1) === c && (!['"', "'"].includes(c) || source[at - 1] !== '\\')) {
       stack.pop();
       objective += ' ';
